@@ -1,0 +1,57 @@
+fragment FreshFields on PullRequest {
+  mergeable
+  mergeStateStatus
+  reviewDecision
+  latestReviews(first: 20) {
+    nodes {
+      author { login }
+      state
+      commit { oid }
+      submittedAt
+    }
+  }
+  timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 20) {
+    nodes {
+      __typename
+      ... on ReviewRequestedEvent {
+        createdAt
+        requestedReviewer {
+          ... on User { login }
+          ... on Team { slug organization { login } }
+        }
+      }
+    }
+  }
+  baseRef {
+    branchProtectionRule {
+      requiredStatusCheckContexts
+    }
+  }
+  commits(last: 1) {
+    nodes {
+      commit {
+        oid
+        committedDate
+        statusCheckRollup {
+          state
+          contexts(first: 100) {
+            totalCount
+            checkRunCountsByState {
+              state
+              count
+            }
+            statusContextCountsByState {
+              state
+              count
+            }
+            nodes {
+              __typename
+              ... on CheckRun { name status conclusion }
+              ... on StatusContext { context state }
+            }
+          }
+        }
+      }
+    }
+  }
+}

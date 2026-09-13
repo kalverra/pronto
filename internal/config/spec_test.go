@@ -1,0 +1,115 @@
+package config_test
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/kalverra/pronto/internal/config"
+	"github.com/kalverra/pronto/internal/events"
+	"github.com/kalverra/pronto/internal/notify"
+)
+
+func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
+	t.Parallel()
+
+	require.NotEmpty(t, config.Specs)
+
+	got := map[string]config.KeySpec{}
+	for _, spec := range config.Specs {
+		assert.NotEmpty(t, spec.Key)
+		assert.NotEmpty(t, spec.Type, "%s needs a type", spec.Key)
+		assert.NotEmpty(t, spec.Doc, "%s needs doc text", spec.Key)
+		got[spec.Key] = spec
+	}
+
+	// Every key LoadFile binds, with its env override.
+	wantEnv := map[string]string{
+		"pr_view":                    "PRONTO_PR_VIEW",
+		"pr_view_command":            "PRONTO_PR_VIEW_COMMAND",
+		"pr_diff":                    "PRONTO_PR_DIFF",
+		"pr_diff_command":            "PRONTO_PR_DIFF_COMMAND",
+		"notifications.popups":       "PRONTO_NOTIFICATIONS_POPUPS",
+		"notifications.sound":        "PRONTO_NOTIFICATIONS_SOUND",
+		"server.poll_interval":       "PRONTO_POLL_INTERVAL",
+		"server.pprof_addr":          "PRONTO_PPROF_ADDR",
+		"server.leak_check_interval": "PRONTO_LEAK_CHECK_INTERVAL",
+	}
+	for key, env := range wantEnv {
+		spec, ok := got[key]
+		if assert.True(t, ok, "spec missing for key %s", key) {
+			assert.Equal(t, env, spec.Env, "%s env override", key)
+		}
+	}
+
+	// Keys without env overrides still need specs.
+	for _, key := range []string{"notifications.sounds", "notifications.images"} {
+		assert.Contains(t, got, key, "spec missing for key %s", key)
+	}
+
+	// Defaults must match LoadFile behavior.
+	assert.Equal(t, config.ViewCondensed, got["pr_view"].Default)
+	assert.Equal(t, config.DiffDifftastic, got["pr_diff"].Default)
+	assert.Equal(t, true, got["notifications.popups"].Default)
+	assert.Equal(t, false, got["notifications.sound"].Default)
+	assert.Empty(t, got["pr_view_command"].Default)
+	assert.Empty(t, got["pr_diff_command"].Default)
+	assert.Empty(t, got["server.pprof_addr"].Default)
+	assert.Equal(t, "1h", got["server.leak_check_interval"].Default)
+
+	// Allowed values.
+	assert.ElementsMatch(t,
+		[]string{
+			config.ViewCondensed, config.ViewTerminal, config.ViewVSCode,
+			config.ViewWeb, config.ViewCustom,
+		},
+		got["pr_view"].Valid,
+	)
+	assert.ElementsMatch(t,
+		[]string{
+			config.DiffDifftastic, config.DiffZed, config.DiffVSCode,
+			config.DiffTerminal, config.DiffCustom, config.DiffWeb,
+		},
+		got["pr_diff"].Valid,
+	)
+}
+
+func TestSpecs_TriggerValuesMatchNotifyVocabulary(t *testing.T) {
+	t.Parallel()
+
+	byKey := map[string]config.KeySpec{}
+	for _, spec := range config.Specs {
+		byKey[spec.Key] = spec
+	}
+
+	notifyTriggers := []string{
+		string(notify.TriggerCIPassed),
+		string(notify.TriggerCIFailed),
+		string(notify.TriggerConflict),
+		string(notify.TriggerReviewReceived),
+		string(notify.TriggerPRMerged),
+	}
+	for _, key := range []string{"notifications.sounds", "notifications.images"} {
+		spec, ok := byKey[key]
+		require.True(t, ok, "missing spec for %s", key)
+		assert.ElementsMatch(t, notifyTriggers, spec.Valid,
+			"%s trigger values must match the notify vocabulary", key)
+	}
+
+	// Trigger names also mirror the trigger-named event types.
+	for _, trigger := range notifyTriggers {
+		assert.True(t, events.ValidTypes[events.Type(trigger)],
+			"trigger %q should be a valid event type", trigger)
+	}
+}
+
+func TestLoad_PRDiffEnvOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("PRONTO_CONFIG_DIR", tmpDir)
+	t.Setenv("PRONTO_PR_DIFF", "zed")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, config.DiffZed, cfg.PRDiff)
+}

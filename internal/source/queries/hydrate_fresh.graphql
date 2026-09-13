@@ -1,0 +1,13 @@
+query HydrateFresh($ids: [ID!]!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    resetAt
+  }
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      ...FreshFields
+    }
+  }
+}

@@ -1,0 +1,27 @@
+fragment DiscoveryFields on PullRequest {
+  id
+  isInMergeQueue
+  number
+  title
+  url
+  isDraft
+  updatedAt
+  headRefName
+  headRefOid
+  baseRefName
+  author {
+    __typename
+    login
+  }
+  repository { nameWithOwner }
+  stack {
+    id
+    number
+    size
+    baseRefName
+  }
+  stackEntry {
+    id
+    position
+  }
+}

@@ -1,0 +1,4 @@
+pr_view = "terminal"
+
+[notifications.sounds]
+unknown_trigger = "/path/to/sound.wav"

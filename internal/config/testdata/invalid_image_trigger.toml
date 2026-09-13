@@ -1,0 +1,4 @@
+pr_view = "terminal"
+
+[notifications.images]
+bad_trigger = "/path/to/image.png"

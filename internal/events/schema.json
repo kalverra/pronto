@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kalverra.com/pronto/socket-api.schema.json",
+  "title": "pronto socket API",
+  "description": "NDJSON wire protocol for the pronto daemon. Requests and responses are newline-delimited JSON over a Unix domain socket. Subscription connections stay open after the acknowledgement and receive pushed event lines.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/pushedEvent" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["id", "method"],
+      "properties": {
+        "id": { "type": "string", "description": "Caller-chosen correlation id echoed in the response." },
+        "method": {
+          "type": "string",
+          "enum": ["ping", "queue.snapshot", "queue.refresh", "pr.get", "events.subscribe"],
+          "description": "Unsupported methods return an unsupported_method error."
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "ref": { "type": "string" },
+            "subscriptions": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/subscription" }
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["id"],
+      "oneOf": [
+        { "required": ["result"] },
+        { "required": ["error"] }
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "result": { "type": "object" },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "invalid_request",
+            "invalid_params",
+            "unsupported_method",
+            "not_found"
+          ]
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "pushedEvent": {
+      "type": "object",
+      "description": "Emitted on subscription connections after the acknowledgement.",
+      "allOf": [{ "$ref": "#/$defs/event" }]
+    },
+    "event": {
+      "type": "object",
+      "required": ["seq", "type", "ts"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1, "description": "Monotonic per server lifetime." },
+        "type": {
+          "type": "string",
+          "enum": [
+            "ci_passed",
+            "ci_failed",
+            "conflict",
+            "review_received",
+            "pr_merged",
+            "pr_added",
+            "pr_removed",
+            "queue_refreshed"
+          ]
+        },
+        "ts": { "type": "string", "format": "date-time" },
+        "repo": { "type": "string", "description": "owner/name; present on PR-scoped events." },
+        "pr": { "type": "integer", "description": "PR number; present on PR-scoped events." },
+        "title": { "type": "string", "description": "PR title; present on PR-scoped events." },
+        "payload": {
+          "type": "object",
+          "description": "Type-specific details (review author/state, refresh outcome)."
+        }
+      }
+    },
+    "subscription": {
+      "type": "object",
+      "description": "Filters the event stream. Empty fields match anything; set fields must all match.",
+      "properties": {
+        "types": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event/properties/type" }
+        },
+        "repo": { "type": "string" },
+        "pr": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "description": "Result of the queue.snapshot and queue.refresh methods.",
+      "required": ["queue", "fetched_at", "age_seconds", "refreshing", "dropped_events"],
+      "properties": {
+        "queue": { "type": "object", "description": "Current PR review queue." },
+        "fetched_at": { "type": "string", "format": "date-time", "description": "Timestamp of the last completed fetch." },
+        "age_seconds": { "type": "number", "minimum": 0, "description": "Seconds since the last completed fetch." },
+        "refreshing": { "type": "boolean", "description": "True when a fetch is in progress." },
+        "last_error": { "type": "string", "description": "Error message from the last failed fetch attempt, if any." },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total events dropped by the event bus due to slow or saturated subscribers."
+        }
+      }
+    }
+  }
+}

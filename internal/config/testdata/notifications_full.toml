@@ -1,0 +1,13 @@
+pr_view = "terminal"
+
+[notifications]
+popups = false
+sound = true
+
+[notifications.sounds]
+ci_passed = "~/sounds/passed.wav"
+ci_failed = "/System/Library/Sounds/Basso.aiff"
+
+[notifications.images]
+ci_passed = "/icons/pass.png"
+ci_failed = "/icons/fail.png"

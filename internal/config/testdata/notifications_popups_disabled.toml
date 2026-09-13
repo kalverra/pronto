@@ -1,0 +1,5 @@
+pr_view = "terminal"
+
+[notifications]
+popups = false
+sound = false

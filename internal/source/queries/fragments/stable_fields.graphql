@@ -1,0 +1,7 @@
+fragment StableFields on PullRequest {
+  createdAt
+  additions
+  deletions
+  changedFiles
+  files(first: 100) { nodes { path } }
+}

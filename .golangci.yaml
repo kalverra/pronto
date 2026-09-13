@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+
+version: "2"
+run:
+  timeout: 5m
+  allow-parallel-runners: true
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - decorder
+    - gocritic
+    - gocyclo
+    - gosec
+    - zerologlint
+    - copyloopvar
+    - godox
+    - revive
+    - depguard
+    # Bug prevention & Error handling
+    - errorlint
+    - nilerr
+    - bodyclose
+    - durationcheck
+    - makezero
+    - gocheckcompilerdirectives
+    # Modern Go & Standard library idioms
+    - intrange
+    - exptostd
+    - usestdlibvars
+    - usetesting
+    - noctx
+    - fatcontext
+    - modernize
+    # Performance & Clean code
+    - perfsprint
+    - unconvert
+    - unparam
+    - predeclared
+    - reassign
+    - recvcheck
+    - canonicalheader
+    - nosprintfhostport
+    - mirror
+    - dupword
+    - misspell
+    - tagalign
+    - whitespace
+    - nolintlint
+    # Testing best practices
+    - thelper
+    - tparallel
+    - testifylint
+    - paralleltest
+  settings:
+    godox:
+      keywords:
+        - "DEBUG"
+        - "TODO"
+    gosec:
+      confidence: medium
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          deny:
+            - pkg: github.com/test-go/testify
+              desc: "Use github.com/stretchr/testify instead"
+            - pkg: github.com/testify/testify
+              desc: "Use github.com/stretchr/testify instead"
+            - pkg: gotest.tools/v3/assert
+              desc: "Use github.com/stretchr/testify/assert instead"
+    nolintlint:
+      require-explanation: false
+      require-specific: true
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kalverra/pronto
+    golines:
+      max-len: 120
+    gofumpt:
+      extra:
+        group-params: true

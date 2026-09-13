@@ -1,0 +1,1316 @@
+{
+  "viewer": {
+    "login": "kalverra"
+  },
+  "authored": [
+    {
+      "number": 23499,
+      "title": "Lint Roller 7: core/services",
+      "url": "https://github.com/smartcontractkit/chainlink/pull/23499",
+      "isDraft": false,
+      "createdAt": "2026-08-23T18:15:32Z",
+      "updatedAt": "2026-09-11T21:46:22Z",
+      "headRefOid": "c0bbf72b5c331c87dc37a448f96cb3af4c9a28b5",
+      "additions": 1232,
+      "deletions": 1214,
+      "changedFiles": 163,
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "BLOCKED",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "author": {
+        "__typename": "User",
+        "login": "kalverra"
+      },
+      "repository": {
+        "nameWithOwner": "smartcontractkit/chainlink"
+      },
+      "files": {
+        "nodes": [
+          {
+            "path": "_typos.toml"
+          },
+          {
+            "path": "core/scripts/vrfv2/genvrfnum/main.go"
+          },
+          {
+            "path": "core/scripts/vrfv2/testnet/main.go"
+          },
+          {
+            "path": "core/scripts/vrfv2plus/testnet/main.go"
+          },
+          {
+            "path": "core/scripts/vrfv2plus/testnet/proofs.go"
+          },
+          {
+            "path": "core/scripts/vrfv2plus/testnet/v2plusscripts/super_scripts.go"
+          },
+          {
+            "path": "core/services/arbiter/arbiter.go"
+          },
+          {
+            "path": "core/services/arbiter/grpc_server.go"
+          },
+          {
+            "path": "core/services/arbiter/shardconfig.go"
+          },
+          {
+            "path": "core/services/beholder/config_recorder.go"
+          },
+          {
+            "path": "core/services/blockhashstore/bhs.go"
+          },
+          {
+            "path": "core/services/blockhashstore/common.go"
+          },
+          {
+            "path": "core/services/blockhashstore/delegate.go"
+          },
+          {
+            "path": "core/services/blockhashstore/delegate_test.go"
+          },
+          {
+            "path": "core/services/blockhashstore/feeder.go"
+          },
+          {
+            "path": "core/services/blockhashstore/feeder_test.go"
+          },
+          {
+            "path": "core/services/blockhashstore/test_util.go"
+          },
+          {
+            "path": "core/services/blockheaderfeeder/block_header.go"
+          },
+          {
+            "path": "core/services/blockheaderfeeder/block_header_feeder.go"
+          },
+          {
+            "path": "core/services/blockheaderfeeder/delegate.go"
+          },
+          {
+            "path": "core/services/ccv/ccvcommitteeverifier/delegate.go"
+          },
+          {
+            "path": "core/services/ccv/ccvcommon/common.go"
+          },
+          {
+            "path": "core/services/ccv/ccvcommon/missingchains.go"
+          },
+          {
+            "path": "core/services/ccv/ccvexecutor/delegate.go"
+          },
+          {
+            "path": "core/services/chainlink/application.go"
+          },
+          {
+            "path": "core/services/chainlink/config.go"
+          },
+          {
+            "path": "core/services/chainlink/config_audit_logger.go"
+          },
+          {
+            "path": "core/services/chainlink/config_audit_logger_test.go"
+          },
+          {
+            "path": "core/services/chainlink/config_general.go"
+          },
+          {
+            "path": "core/services/chainlink/config_general_dev_test.go"
+          },
+          {
+            "path": "core/services/chainlink/config_general_test.go"
+          },
+          {
+            "path": "core/services/chainlink/config_job_pipeline.go"
+          },
+          {
+            "path": "core/services/chainlink/config_ocr2.go"
+          },
+          {
+            "path": "core/services/chainlink/config_telemetry_ingress.go"
+          },
+          {
+            "path": "core/services/chainlink/config_test.go"
+          },
+          {
+            "path": "core/services/chainlink/config_tracing_test.go"
+          },
+          {
+            "path": "core/services/chainlink/config_web_server.go"
+          },
+          {
+            "path": "core/services/chainlink/heartbeat.go"
+          },
+          {
+            "path": "core/services/chainlink/mocks/relayer_chain_interoperators.go"
+          },
+          {
+            "path": "core/services/chainlink/node_platform.go"
+          },
+          {
+            "path": "core/services/chainlink/relayer_chain_interoperators.go"
+          },
+          {
+            "path": "core/services/chainlink/relayer_chain_interoperators_test.go"
+          },
+          {
+            "path": "core/services/cron/cron.go"
+          },
+          {
+            "path": "core/services/cron/delegate.go"
+          },
+          {
+            "path": "core/services/feeds/connection_manager.go"
+          },
+          {
+            "path": "core/services/feeds/models.go"
+          },
+          {
+            "path": "core/services/feeds/orm.go"
+          },
+          {
+            "path": "core/services/feeds/orm_test.go"
+          },
+          {
+            "path": "core/services/feeds/rpc_handlers.go"
+          },
+          {
+            "path": "core/services/feeds/service.go"
+          },
+          {
+            "path": "core/services/feeds/service_test.go"
+          },
+          {
+            "path": "core/services/headreporter/head_reporter.go"
+          },
+          {
+            "path": "core/services/headreporter/metrics_reporter.go"
+          },
+          {
+            "path": "core/services/headreporter/telemetry_reporter.go"
+          },
+          {
+            "path": "core/services/headreporter/telemetry_reporter_test.go"
+          },
+          {
+            "path": "core/services/health.go"
+          },
+          {
+            "path": "core/services/health_test.go"
+          },
+          {
+            "path": "core/services/llo/cleanup_test.go"
+          },
+          {
+            "path": "core/services/llo/delegate.go"
+          },
+          {
+            "path": "core/services/llo/keyring.go"
+          },
+          {
+            "path": "core/services/llo/keyring_test.go"
+          },
+          {
+            "path": "core/services/llo/observation/data_source_test.go"
+          },
+          {
+            "path": "core/services/llo/observation/observation_context_test.go"
+          },
+          {
+            "path": "core/services/llo/telem/sampling_test.go"
+          },
+          {
+            "path": "core/services/nodestatusreporter/bridgestatus/bridge_status_reporter.go"
+          },
+          {
+            "path": "core/services/nodestatusreporter/bridgestatus/bridge_status_reporter_test.go"
+          },
+          {
+            "path": "core/services/nodestatusreporter/jobspec/job_spec_reporter.go"
+          },
+          {
+            "path": "core/services/nurse.go"
+          },
+          {
+            "path": "core/services/ocr/config_overrider.go"
+          },
+          {
+            "path": "core/services/ocr/contract_config_subscription.go"
+          },
+          {
+            "path": "core/services/ocr/contract_tracker.go"
+          },
+          {
+            "path": "core/services/ocr/contract_tracker_test.go"
+          },
+          {
+            "path": "core/services/ocr/contract_transmitter.go"
+          },
+          {
+            "path": "core/services/ocr/database.go"
+          },
+          {
+            "path": "core/services/ocr/delegate.go"
+          },
+          {
+            "path": "core/services/ocr/mocks/ocr_contract_tracker_db.go"
+          },
+          {
+            "path": "core/services/ocr/validate.go"
+          },
+          {
+            "path": "core/services/ocr2/database.go"
+          },
+          {
+            "path": "core/services/ocr2/database_test.go"
+          },
+          {
+            "path": "core/services/ocr2/delegate.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/generic/oraclefactory.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/generic/oraclefactorydb.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/generic/pipeline_runner_adapter.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/generic/relayerset_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/llo/bench/harness_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/median/services.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/kvstore_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/plugin.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/plugin_helpers_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/plugin_share_label_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/plugin_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/plugin_throughput_test.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/plugin_utils.go"
+          },
+          {
+            "path": "core/services/ocr2/plugins/vault/transmitter.go"
+          },
+          {
+            "path": "core/services/ocr2/validate/validate.go"
+          },
+          {
+            "path": "core/services/ocrbootstrap/database.go"
+          },
+          {
+            "path": "core/services/ocrbootstrap/delegate.go"
+          },
+          {
+            "path": "core/services/ocrcommon/adapters.go"
+          },
+          {
+            "path": "core/services/ocrcommon/adapters_test.go"
+          },
+          {
+            "path": "core/services/ocrcommon/data_source.go"
+          }
+        ]
+      },
+      "latestReviews": {
+        "nodes": [
+          {
+            "author": {
+              "login": "jmank88"
+            },
+            "state": "COMMENTED",
+            "commit": {
+              "oid": "ffd11ac874e68818f41845f8a60f097b57984847"
+            },
+            "submittedAt": "2026-08-24T15:40:04Z"
+          },
+          {
+            "author": {
+              "login": "copilot-pull-request-reviewer"
+            },
+            "state": "COMMENTED",
+            "commit": {
+              "oid": "a1b7c084dbb6f1150174d23f5be67ee912958760"
+            },
+            "submittedAt": "2026-09-11T20:32:39Z"
+          }
+        ]
+      },
+      "timelineItems": {
+        "nodes": [
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-23T18:15:55Z",
+            "requestedReviewer": {
+              "login": "engnke"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-23T18:15:55Z",
+            "requestedReviewer": {
+              "login": "fouadkada"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-23T18:15:55Z",
+            "requestedReviewer": {
+              "login": "kirqz23"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-23T18:15:55Z",
+            "requestedReviewer": {
+              "login": "pkcll"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-23T18:15:55Z",
+            "requestedReviewer": {
+              "login": "skippaDaBitFlippa"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-23T18:15:55Z",
+            "requestedReviewer": {
+              "login": "thomaska"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:01Z",
+            "requestedReviewer": {
+              "slug": "privacy",
+              "organization": {
+                "login": "smartcontractkit"
+              }
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:01Z",
+            "requestedReviewer": {
+              "slug": "bix-framework",
+              "organization": {
+                "login": "smartcontractkit"
+              }
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:01Z",
+            "requestedReviewer": {
+              "slug": "bix-build",
+              "organization": {
+                "login": "smartcontractkit"
+              }
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:01Z",
+            "requestedReviewer": {
+              "slug": "ccip-offchain",
+              "organization": {
+                "login": "smartcontractkit"
+              }
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:01Z",
+            "requestedReviewer": {
+              "slug": "capabilities-team",
+              "organization": {
+                "login": "smartcontractkit"
+              }
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:02Z",
+            "requestedReviewer": {
+              "login": "carte7000"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:02Z",
+            "requestedReviewer": {
+              "login": "matYang"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:03Z",
+            "requestedReviewer": {
+              "login": "makramkd"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:03Z",
+            "requestedReviewer": {
+              "login": "AmrMohamedRezk"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:03Z",
+            "requestedReviewer": {
+              "login": "agusaldasoro"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:03Z",
+            "requestedReviewer": {
+              "login": "ogtownsend"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:03Z",
+            "requestedReviewer": {
+              "login": "tt-cll"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-08-25T17:45:11Z",
+            "requestedReviewer": {
+              "login": "silaslenihan"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-09-11T20:22:09Z",
+            "requestedReviewer": {}
+          }
+        ]
+      },
+      "baseRef": {
+        "branchProtectionRule": null
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "oid": "c0bbf72b5c331c87dc37a448f96cb3af4c9a28b5",
+              "committedDate": "2026-09-11T21:12:20Z",
+              "statusCheckRollup": {
+                "state": "FAILURE",
+                "contexts": {
+                  "totalCount": 218,
+                  "checkRunCountsByState": [
+                    {
+                      "state": "ACTION_REQUIRED",
+                      "count": 0
+                    },
+                    {
+                      "state": "CANCELLED",
+                      "count": 0
+                    },
+                    {
+                      "state": "COMPLETED",
+                      "count": 0
+                    },
+                    {
+                      "state": "FAILURE",
+                      "count": 61
+                    },
+                    {
+                      "state": "IN_PROGRESS",
+                      "count": 0
+                    },
+                    {
+                      "state": "NEUTRAL",
+                      "count": 0
+                    },
+                    {
+                      "state": "PENDING",
+                      "count": 0
+                    },
+                    {
+                      "state": "QUEUED",
+                      "count": 0
+                    },
+                    {
+                      "state": "SKIPPED",
+                      "count": 14
+                    },
+                    {
+                      "state": "STALE",
+                      "count": 0
+                    },
+                    {
+                      "state": "STARTUP_FAILURE",
+                      "count": 0
+                    },
+                    {
+                      "state": "SUCCESS",
+                      "count": 142
+                    },
+                    {
+                      "state": "TIMED_OUT",
+                      "count": 0
+                    },
+                    {
+                      "state": "WAITING",
+                      "count": 0
+                    }
+                  ],
+                  "statusContextCountsByState": [
+                    {
+                      "state": "EXPECTED",
+                      "count": 0
+                    },
+                    {
+                      "state": "ERROR",
+                      "count": 0
+                    },
+                    {
+                      "state": "FAILURE",
+                      "count": 0
+                    },
+                    {
+                      "state": "PENDING",
+                      "count": 1
+                    },
+                    {
+                      "state": "SUCCESS",
+                      "count": 0
+                    }
+                  ],
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "workflow-don-benchmark",
+                      "status": "COMPLETED",
+                      "conclusion": "SKIPPED"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "detect changes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Detect Changes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "buf-breaking",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "changes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Changeset checker",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Enforce",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Runner Config",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "cora / codeowners-review-analysis",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Vulnerabilities",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Detect Changes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "detect-conflicts",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "init",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Validate Workflow Changes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Detect Go module changes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Check Paths That Require Tests To Run",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Enforce CTF Version",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Breaking Changes GQL Check",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "PR Draft Nudge",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "sigscanner-check",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Validate go.mod dependencies",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "test-cli",
+                      "status": "COMPLETED",
+                      "conclusion": "SKIPPED"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "docker-core",
+                      "status": "COMPLETED",
+                      "conclusion": "SKIPPED"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Go Cache ${{ matrix.suffix }}",
+                      "status": "COMPLETED",
+                      "conclusion": "SKIPPED"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ShellCheck Lint",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Run frequency",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Analyze (actions)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 1/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Define Test Matrix",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Check Paths That Require Tests To Run",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Analyze (go)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 2/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Analyze (javascript-typescript)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 3/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Analyze (python)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 4/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 5/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 6/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Deployment Tests (go_deployment_tests shard 7/7)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Notify about local env startup failure",
+                      "status": "COMPLETED",
+                      "conclusion": "SKIPPED"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Misc",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Core Tests (go_core_deployment_tests)",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Compile In-Memory Test Binaries",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Get PR labels and set runner labels",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "test-scripts",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_fees_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Run Core CRE E2E Tests Setup",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPMessaging_EVM2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPMessaging_EVM2Solana",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPMessaging_Solana2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_message_limitations_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_MaxBatchSizeEVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_MultiSource",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_MultiSource_MultiRoot",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_MultiSource_MultiPrice",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_SingleSource",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_SingleSource_MultiRoot",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPBatching_SingleSource_MultiPrice",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_add_chain_e2e_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_reader_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_lane_rmn_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_usdc_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_lbtc_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_ooo_execution_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_token_transfer_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_cs_update_rmn_config_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurse",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseUncurseAptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseMCMS",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseBypass",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseIdempotent",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNUncurseIdempotent",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNUncurse",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNUncurseMCMS",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNUncurseBypass",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseConfigValidate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseNoConnectedLanes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseOneConnectedLanes",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseOneConnectedLanesSolana",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseOneConnectedLanesGlobalOnly",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNCurseOneConnectedLanesLaneOnlyOnSource",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "TestRMNUncurseForceOption",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_disable_lane_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPTopologies_EVM2EVM_RoleDON_AllSupportSource_SomeSupportDest",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIPTopologies_EVM2EVM_RoleDON_AllSupportDest_SomeSupportSource",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_Messaging_EVM2Aptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_Messaging_Aptos2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_Aptos2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_EVM2Aptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_BnM_Aptos2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_BnM_EVM2Aptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_LnR_Aptos2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_LnR_EVM2Aptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_LnR_without_TransferRef_EVM2Aptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_TokenTransfer_LnR_without_TransferRef_Aptos2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "ccip_aptos_msghasher_test.go",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_RegulatedTokenTransfer_EVM2Aptos",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_RegulatedTokenTransfer_Aptos2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Test_CCIP_Upgrade_Sui2EVM",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "reviewRequested": [
+    {
+      "number": 23695,
+      "title": "Add bridge-cache fallback for UseConnectionManager bridge tasks",
+      "url": "https://github.com/smartcontractkit/chainlink/pull/23695",
+      "isDraft": false,
+      "createdAt": "2026-09-09T23:00:39Z",
+      "updatedAt": "2026-09-10T00:02:08Z",
+      "headRefOid": "5c33a9345302e683f5f9fbc3ccf8091ace76a627",
+      "additions": 96,
+      "deletions": 9,
+      "changedFiles": 3,
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "BLOCKED",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "author": {
+        "login": "denis-chernov-smartcontract"
+      },
+      "repository": {
+        "nameWithOwner": "smartcontractkit/chainlink"
+      },
+      "files": {
+        "nodes": [
+          {
+            "path": ".changeset/sharp-garlics-cry.md"
+          },
+          {
+            "path": "core/services/pipeline/task.bridge.go"
+          },
+          {
+            "path": "core/services/pipeline/task.bridge_test.go"
+          }
+        ]
+      },
+      "latestReviews": {
+        "nodes": []
+      },
+      "timelineItems": {
+        "nodes": [
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-09-09T23:00:40Z",
+            "requestedReviewer": {
+              "slug": "core"
+            }
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-09-09T23:00:51Z",
+            "requestedReviewer": {
+              "login": "kalverra"
+            }
+          },
+          {
+            "__typename": "PullRequestCommit",
+            "commit": {
+              "oid": "5c33a9345302e683f5f9fbc3ccf8091ace76a627",
+              "committedDate": "2026-09-09T23:36:25Z"
+            }
+          }
+        ]
+      },
+      "baseRef": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE",
+                "contexts": {
+                  "totalCount": 157,
+                  "checkRunCountsByState": [
+                    {
+                      "count": 1,
+                      "state": "FAILURE"
+                    },
+                    {
+                      "count": 138,
+                      "state": "SUCCESS"
+                    },
+                    {
+                      "count": 17,
+                      "state": "SKIPPED"
+                    }
+                  ],
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "changes",
+                      "status": "COMPLETED",
+                      "conclusion": "FAILURE"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

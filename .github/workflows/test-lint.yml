@@ -1,0 +1,56 @@
+name: Test and Lint
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: "go.mod"
+          cache: true
+      - name: Test
+        run: gotestsum --format github-actions -- ./... -coverprofile=coverage.out
+
+  race:
+    name: Race Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: "go.mod"
+          cache: true
+      - name: Test
+        run: gotestsum --format github-actions -- ./... -race

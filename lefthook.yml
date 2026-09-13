@@ -1,0 +1,46 @@
+output:
+  - summary
+  - success
+  - failure
+
+pre-commit:
+  parallel: true
+  commands:
+    betterleaks:
+      tags: security
+      run: betterleaks git . --pre-commit --staged
+
+    # Use global typos config if no local config is found
+    typos:
+      tags: lint
+      glob: "!go.mod,!go.sum,!*.lock,!package-lock.json,!yarn.lock,!pnpm-lock.yaml"
+      run: typos {staged_files}
+
+    golangci-lint:
+      tags: lint
+      run: golangci-lint run ./... --fix
+      stage_fixed: true
+
+    mod:
+      tags: lint
+      run: go mod tidy
+      stage_fixed: true
+
+    actionlint:
+      tags: lint
+      glob: ".github/**"
+      run: actionlint
+
+    generate:
+      tags: generate
+      glob:
+        - "*.go"
+      run: go generate ./...
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
+    test:
+      tags: test
+      run: go test -short ./...

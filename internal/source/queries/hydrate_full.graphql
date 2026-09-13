@@ -1,0 +1,14 @@
+query HydrateFull($ids: [ID!]!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    resetAt
+  }
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      ...StableFields
+      ...FreshFields
+    }
+  }
+}

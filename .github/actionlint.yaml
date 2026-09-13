@@ -1,0 +1,4 @@
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'runtime "node20" is deprecated in GitHub Actions'
