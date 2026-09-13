@@ -1,6 +1,5 @@
 [tools]
 go = "latest"
-"go:gotest.tools/gotestsum" = "latest"
 "go:actionlint.kjanat.dev/cmd/actionlint" = "latest"
 golangci-lint = "latest"
 
@@ -24,11 +23,11 @@ run = "go test ./... -timeout 30s -cover"
 
 [tasks.test_pretty]
 description = "Run all tests with pretty output"
-run = "gotestsum -- ./... -timeout 30s -cover"
+run = "go tool gotestsum -- ./... -timeout 30s -cover"
 
 [tasks.test_find_slow]
 description = "Find slow tests"
-run = "go test -json -count=1 ./... | gotestsum tool slowest --threshold 200ms"
+run = "go test -json -count=1 ./... | go tool gotestsum tool slowest --threshold 200ms"
 
 [tasks.test_thorough]
 description = "Run all tests many times to look for flakes"
@@ -36,7 +35,7 @@ run = "go test -count=100 -timeout 3m ./..."
 
 [tasks.test_thorough_pretty]
 description = "Run all tests many times to look for flakes"
-run = "gotestsum -- ./... -count=100 -timeout 3m"
+run = "go tool gotestsum -- ./... -count=100 -timeout 3m"
 
 [tasks.race]
 description = "Run all tests with -race"
@@ -48,7 +47,7 @@ run = "go test -count=50 -timeout 2m -race ./..."
 
 [tasks.race_thorough_pretty]
 description = "Run all tests with -race many times"
-run = "gotestsum -- ./... -count=50 -timeout 2m -race"
+run = "go tool gotestsum -- ./... -count=50 -timeout 2m -race"
 
 [tasks.lint]
 description = "Run full golangci-lint"

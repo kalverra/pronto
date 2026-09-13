@@ -10,6 +10,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -39,7 +42,7 @@ jobs:
           go-version-file: "go.mod"
           cache: true
       - name: Test
-        run: gotestsum --format github-actions -- ./... -coverprofile=coverage.out
+        run: go tool gotestsum --format github-actions -- ./... -coverprofile=coverage.out
 
   race:
     name: Race Tests
@@ -53,4 +56,4 @@ jobs:
           go-version-file: "go.mod"
           cache: true
       - name: Test
-        run: gotestsum --format github-actions -- ./... -race
+        run: go tool gotestsum --format github-actions -- ./... -race
