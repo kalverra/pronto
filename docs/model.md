@@ -132,6 +132,7 @@ PullRequest represents a pull request in the review queue.
 | `Assigned` | `assigned` | `bool` |  | — |
 | `Starred` | `starred` | `bool` |  | — |
 | `IsInMergeQueue` | `is_in_merge_queue` | `bool` | yes | — |
+| `Partial` | `partial` | `bool` | yes | Partial marks a PR built from discovery data only (hydration skipped, e.g. due to a rate limit): merge status, checks, and diff size are unknown until a later poll completes them. |
 | `MergeStatus` | `merge_status` | `MergeStatus` |  | — |
 | `Checks` | `checks` | `ChecksSummary` |  | — |
 | `Stack` | `stack` | `*PRStack` | yes | — |

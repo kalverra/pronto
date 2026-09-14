@@ -39,6 +39,10 @@ const (
 	hydrateBatchSize          = 10
 	discoveryLimit            = 3
 	defaultHydrateConcurrency = 4
+	// primaryRateLimitFallback bounds the backoff when a primary rate limit
+	// rejection arrives before any successful response has reported the
+	// window's resetAt: one retry per minute until the deadline is learned.
+	primaryRateLimitFallback = time.Minute
 )
 
 // GraphQLClient represents a client capable of executing GraphQL queries against GitHub.
@@ -126,6 +130,16 @@ func WithStaleActivityAfter(d time.Duration) GraphQLSourceOption {
 	}
 }
 
+// WithClock overrides how the source reads the current time. Intended for
+// tests; the default is time.Now.
+func WithClock(now func() time.Time) GraphQLSourceOption {
+	return func(s *GraphQLSource) {
+		if now != nil {
+			s.nowFn = now
+		}
+	}
+}
+
 // GraphQLSource retrieves pull request queues via GitHub GraphQL API using a
 // two-phase fetch: light discovery searches, then batched hydration of the
 // deduplicated results.
@@ -141,6 +155,14 @@ type GraphQLSource struct {
 	maxReuseAge        time.Duration
 	staleActivityAfter time.Duration
 	pruneOnce          sync.Once
+
+	// nowFn overrides the clock (tests); guarded by immutability after
+	// construction.
+	nowFn func() time.Time
+	// rlMu guards the primary rate limit backoff state below.
+	rlMu      sync.Mutex
+	rlResetAt time.Time // last resetAt observed on a successful response
+	rlUntil   time.Time // backoff deadline armed on a primary limit rejection
 }
 
 // NewGraphQLSource constructs a GraphQLSource.
@@ -154,6 +176,7 @@ func NewGraphQLSource(client GraphQLClient, opts ...GraphQLSourceOption) *GraphQ
 		cacheRetention:     defaultCacheRetention,
 		maxReuseAge:        defaultMaxReuseAge,
 		staleActivityAfter: defaultStaleActivityAfter,
+		nowFn:              time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -214,12 +237,63 @@ func (d discoveredPR) key() model.PRKey {
 	return model.PRKey{Repo: d.ident.Repository.NameWithOwner, Number: d.ident.Number}
 }
 
+// now reads the current time, honoring the WithClock override.
+func (s *GraphQLSource) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
+
+// observeRateLimit records the reset time reported by a successful response,
+// for use as the backoff deadline if a later request hits the primary limit.
+func (s *GraphQLSource) observeRateLimit(rl rawRateLimit) {
+	if rl.ResetAt.IsZero() {
+		return
+	}
+	s.rlMu.Lock()
+	s.rlResetAt = rl.ResetAt
+	s.rlMu.Unlock()
+}
+
+// notePrimaryRateLimit arms the backoff after a primary rate limit rejection:
+// until the observed resetAt when one is known, otherwise for the fallback
+// window so the deadline can be learned on a later attempt.
+func (s *GraphQLSource) notePrimaryRateLimit() {
+	now := s.now()
+	s.rlMu.Lock()
+	until := s.rlResetAt
+	if !until.After(now) {
+		until = now.Add(primaryRateLimitFallback)
+	}
+	s.rlUntil = until
+	s.rlMu.Unlock()
+	s.logger.Warn().Time("until", until).Msg("primary rate limit hit; backing off")
+}
+
+// rateLimitedUntil reports the active primary rate limit backoff deadline.
+func (s *GraphQLSource) rateLimitedUntil() (time.Time, bool) {
+	s.rlMu.Lock()
+	defer s.rlMu.Unlock()
+	if s.rlUntil.After(s.now()) {
+		return s.rlUntil, true
+	}
+	return time.Time{}, false
+}
+
 // Fetch retrieves the authored and inbox pull request queue from GitHub.
 // A caller-imposed context deadline governs the fetch; the configured
 // timeout (see WithFetchTimeout) is the default for callers, like the TUI
 // refresh tick, that do not set one — so a cold-start caller can pass a
 // longer budget without being capped at the tick default.
 func (s *GraphQLSource) Fetch(ctx context.Context) (model.Queue, error) {
+	if until, limited := s.rateLimitedUntil(); limited {
+		return model.Queue{}, fmt.Errorf(
+			"%w: waiting until %s",
+			ErrPrimaryRateLimit,
+			until.UTC().Format(time.RFC3339),
+		)
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline && s.fetchTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.fetchTimeout)
@@ -454,8 +528,13 @@ func (s *GraphQLSource) discoverTask(ctx context.Context, task searchTask) ([]di
 			} `json:"search"`
 		}
 		if err := s.client.DoWithContext(ctx, discoveryQuery, vars, &resp); err != nil {
+			if isPrimaryRateLimitErr(err) {
+				s.notePrimaryRateLimit()
+				return nil, fmt.Errorf("%w: %w", ErrPrimaryRateLimit, err)
+			}
 			return nil, err
 		}
+		s.observeRateLimit(resp.RateLimit)
 
 		if resp.Search.IssueCount >= 1000 {
 			return nil, fmt.Errorf("%w: %s", ErrSearchOverflow, task.Query)
@@ -761,11 +840,13 @@ func (s *GraphQLSource) assembleHydrated(
 		} else if pr, ok := hydratedMap[d.key()]; ok {
 			finalPRs = append(finalPRs, pr)
 		} else if isSecondary {
+			pr := convertPR(d.ident, stableFields{}, rawFresh{}, d.assigned, convertOpts{
+				staleActivityAfter: s.staleActivityAfter,
+			})
+			pr.Partial = true
 			finalPRs = append(finalPRs, flaggedPR{
-				PullRequest: convertPR(d.ident, stableFields{}, rawFresh{}, d.assigned, convertOpts{
-					staleActivityAfter: s.staleActivityAfter,
-				}),
-				authored: d.authored,
+				PullRequest: pr,
+				authored:    d.authored,
 			})
 		}
 	}
@@ -790,6 +871,12 @@ func (s *GraphQLSource) hydrateBatchBisect(
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		// A primary rate limit is account-global: bisecting only burns more
+		// of a budget that is already exhausted. Abort the whole fetch.
+		if errors.Is(err, ErrPrimaryRateLimit) {
+			s.logger.Error().Err(err).Msg("primary rate limit hit; aborting fetch")
+			return nil, err
 		}
 		// A secondary rate limit is account-global: bisecting only multiplies
 		// requests made while limited, which GitHub's docs warn risks a ban.
@@ -819,6 +906,10 @@ func (s *GraphQLSource) hydrateBatchBisect(
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if errors.Is(err, ErrPrimaryRateLimit) {
+			s.logger.Error().Err(err).Msg("primary rate limit hit; aborting fetch")
+			return nil, err
 		}
 		if isSecondaryRateLimitErr(err) {
 			s.logger.Error().Err(err).Msg("secondary rate limit hit; aborting fetch")
@@ -858,8 +949,13 @@ func (s *GraphQLSource) executeHydrateQuery(
 	var resp hydrateResponse
 	startHydrate := time.Now()
 	if err := s.client.DoWithContext(ctx, query, vars, &resp); err != nil {
+		if isPrimaryRateLimitErr(err) {
+			s.notePrimaryRateLimit()
+			return nil, fmt.Errorf("%w: %w", ErrPrimaryRateLimit, err)
+		}
 		return nil, fmt.Errorf("hydrate PR batch: %w", err)
 	}
+	s.observeRateLimit(resp.RateLimit)
 	elapsedMs := time.Since(startHydrate).Milliseconds()
 
 	s.logger.Info().

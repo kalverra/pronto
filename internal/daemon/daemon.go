@@ -28,6 +28,10 @@ import (
 // unset.
 const DefaultInterval = 60 * time.Second
 
+// MinInterval is the lowest poll interval the serve command accepts. Below
+// roughly 10s a poller exhausts GitHub's 5,000 points/hour GraphQL budget.
+const MinInterval = 10 * time.Second
+
 // DefaultLeakCheckInterval is the goroutine leak check cadence when
 // Options.LeakCheckInterval is unset. Zero disables leak checks entirely.
 const DefaultLeakCheckInterval = time.Hour

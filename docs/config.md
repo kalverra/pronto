@@ -21,7 +21,7 @@ environment variables override file values.
 | `notifications.sound` | `PRONTO_NOTIFICATIONS_SOUND` | bool | false | `—` | Whether notification sounds are enabled. |
 | `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Audio file paths per notification trigger. |
 | `notifications.images` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Static image paths per notification trigger. |
-| `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Daemon poll interval as a Go duration string, e.g. "30s"; default 60s. |
+| `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Daemon poll interval as a Go duration string, e.g. "30s"; default 60s; minimum 10s. |
 | `server.pprof_addr` | `PRONTO_PPROF_ADDR` | string | `""` | `—` | Loopback address for the net/http/pprof endpoint in `pronto serve`, e.g. "localhost:6060"; empty disables it. |
 | `server.leak_check_interval` | `PRONTO_LEAK_CHECK_INTERVAL` | duration | `"1h"` | `—` | Interval between goroutine leak profile checks in `pronto serve` as a Go duration string; "0" disables. |
 

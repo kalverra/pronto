@@ -151,6 +151,27 @@ func (c *retryingGraphQLClient) DoWithContext(
 	}
 }
 
+// ErrPrimaryRateLimit reports an exhausted GitHub GraphQL primary rate limit
+// (the hourly points budget). The limit is account-global: no further
+// requests should be issued until the observed reset time passes.
+var ErrPrimaryRateLimit = errors.New("github primary rate limit exceeded")
+
+// isPrimaryRateLimitErr reports whether err is a GitHub primary rate limit
+// response: a 403/429 whose message names a rate limit but not the secondary
+// one. These responses carry no useful Retry-After, so the backoff window
+// comes from the rateLimit block observed on earlier successful responses.
+func isPrimaryRateLimitErr(err error) bool {
+	var httpErr *api.HTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	if httpErr.StatusCode != http.StatusForbidden && httpErr.StatusCode != http.StatusTooManyRequests {
+		return false
+	}
+	msg := strings.ToLower(httpErr.Message)
+	return strings.Contains(msg, "rate limit") && !strings.Contains(msg, "secondary rate limit")
+}
+
 // ErrSecondaryRateLimit reports a GitHub secondary rate limit response. The
 // limit is account-global, so no further requests should be issued for this
 // fetch; GitHub's docs direct waiting at least one minute before retrying and
@@ -200,6 +221,11 @@ func isRetryableHTTPErr(err error) bool {
 // Context cancellation and deadlines are never retryable.
 func isRetryableErr(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// A primary rate limit is exhausted until the hourly window resets:
+	// retrying within the fetch cannot succeed, whatever headers say.
+	if isPrimaryRateLimitErr(err) {
 		return false
 	}
 	if isRetryableHTTPErr(err) {

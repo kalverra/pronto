@@ -246,25 +246,37 @@ type fakeGitHub struct {
 	hydrateFailSecondaryAfter atomic.Int32
 	hydrateFailAboveAliases   atomic.Int32
 	hydrateFailForPR          map[string]bool
-	loginCalls                atomic.Int32
-	teamsCalls                atomic.Int32
-	hydrateCalls              atomic.Int32
-	discoveryCalls            atomic.Int32
-	discoveryDelay            time.Duration
-	discoveryInFlight         atomic.Int32
-	maxDiscoveryInFlight      atomic.Int32
-	hydrateDelay              time.Duration
-	hydrateInFlight           atomic.Int32
-	maxHydrateInFlight        atomic.Int32
-	orgsHasNextPage           bool
-	teamsHasNextPage          map[string]bool
-	inFlight                  atomic.Int32
-	maxInFlight               atomic.Int32
-	mu                        sync.Mutex
-	hydrateQueries            []string
-	hydrateVars               []map[string]any
-	discoveryQuery            string
-	discoveryVars             []map[string]any
+
+	// discoveryFailPrimaryLimit fails every discovery query with GitHub's
+	// primary rate limit 403 body.
+	discoveryFailPrimaryLimit atomic.Bool
+	// hydrateFailPrimaryLimit swaps the injected hydrate failure body for
+	// GitHub's primary rate limit 403 message.
+	hydrateFailPrimaryLimit atomic.Bool
+	// rateLimitRemaining and rateLimitResetAt override the rateLimit block
+	// served on discovery and hydrate responses; zero values keep defaults.
+	rateLimitRemaining int
+	rateLimitResetAt   string
+
+	loginCalls           atomic.Int32
+	teamsCalls           atomic.Int32
+	hydrateCalls         atomic.Int32
+	discoveryCalls       atomic.Int32
+	discoveryDelay       time.Duration
+	discoveryInFlight    atomic.Int32
+	maxDiscoveryInFlight atomic.Int32
+	hydrateDelay         time.Duration
+	hydrateInFlight      atomic.Int32
+	maxHydrateInFlight   atomic.Int32
+	orgsHasNextPage      bool
+	teamsHasNextPage     map[string]bool
+	inFlight             atomic.Int32
+	maxInFlight          atomic.Int32
+	mu                   sync.Mutex
+	hydrateQueries       []string
+	hydrateVars          []map[string]any
+	discoveryQuery       string
+	discoveryVars        []map[string]any
 }
 
 func (f *fakeGitHub) handler() http.Handler {
@@ -371,10 +383,21 @@ func (f *fakeGitHub) handleDiscovery(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
+	if f.discoveryFailPrimaryLimit.Load() {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"message":"API rate limit already exceeded for user ID 10038988."}`)
+		return
+	}
+
 	pages := matchSearch(f.searches, qVar)
 	rateLimitJSON := ""
 	if strings.Contains(query, "rateLimit") {
-		rateLimitJSON = `,"rateLimit":{"cost":1,"limit":5000,"remaining":4999,"resetAt":"2026-09-09T23:00:00Z"}`
+		remaining, resetAt := f.rateLimit()
+		rateLimitJSON = fmt.Sprintf(
+			`,"rateLimit":{"cost":1,"limit":5000,"remaining":%d,"resetAt":%q}`,
+			remaining,
+			resetAt,
+		)
 	}
 	if pages == nil {
 		_, _ = fmt.Fprintf(
@@ -480,6 +503,9 @@ func (f *fakeGitHub) handleHydrate(ctx context.Context, w http.ResponseWriter, q
 		if f.hydrateFailSecondary.Load() {
 			msg = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
 		}
+		if f.hydrateFailPrimaryLimit.Load() {
+			msg = "API rate limit already exceeded for user ID 10038988."
+		}
 		w.WriteHeader(status)
 		_, _ = fmt.Fprintf(w, `{"message": %q}`, msg)
 		return
@@ -507,14 +533,28 @@ func (f *fakeGitHub) handleHydrate(ctx context.Context, w http.ResponseWriter, q
 		"nodes": nodes,
 	}
 	if strings.Contains(query, "rateLimit") {
+		remaining, resetAt := f.rateLimit()
 		resp["rateLimit"] = map[string]any{
 			"cost":      1,
 			"limit":     5000,
-			"remaining": 4999,
-			"resetAt":   "2026-09-09T23:00:00Z",
+			"remaining": remaining,
+			"resetAt":   resetAt,
 		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": resp})
+}
+
+// rateLimit returns the remaining/resetAt pair served on rateLimit-bearing
+// responses, honoring test overrides.
+func (f *fakeGitHub) rateLimit() (int, string) {
+	remaining, resetAt := 4999, "2026-09-09T23:00:00Z"
+	if f.rateLimitRemaining > 0 {
+		remaining = f.rateLimitRemaining
+	}
+	if f.rateLimitResetAt != "" {
+		resetAt = f.rateLimitResetAt
+	}
+	return remaining, resetAt
 }
 
 func (f *fakeGitHub) prForID(id string) (string, bool) {

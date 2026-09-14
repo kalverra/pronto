@@ -537,6 +537,13 @@ func (m Model) View() string {
 			statusBadge := renderStatusBadge(item.PR)
 			sizeText := renderDiffSize(item.PR.Additions, item.PR.Deletions)
 			ciBadge := m.renderCIBadge(item.PR.Checks)
+			if item.PR.Partial {
+				// Discovery-only PR: unknown status/CI/diff, so render a
+				// loading indicator instead of misleading zero values.
+				statusBadge = ciRunningStyle.Render(m.spinnerChar() + " LOADING")
+				sizeText = faintStyle.Render("…")
+				ciBadge = ""
+			}
 
 			var updatedText string
 			if !item.PR.UpdatedAt.IsZero() {

@@ -266,6 +266,22 @@ func (m Model) hasRunningCI() bool {
 	return false
 }
 
+// hasPartialPRs reports whether any visible PR is discovery-only data waiting
+// for hydration, whose loading spinner must animate.
+func (m Model) hasPartialPRs() bool {
+	for _, it := range m.inboxItems {
+		if it.PR.Partial {
+			return true
+		}
+	}
+	for _, it := range m.mineItems {
+		if it.PR.Partial {
+			return true
+		}
+	}
+	return false
+}
+
 // WithPRViewer sets a custom viewer for interactive PR details inspection.
 func WithPRViewer(viewer ViewPRFunc) Option {
 	return func(m *Model) {
@@ -537,7 +553,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SpinnerTickMsg:
-		if !m.hasRunningCI() {
+		if !m.hasRunningCI() && !m.hasPartialPRs() {
 			return m, nil
 		}
 		m.spinnerFrame++

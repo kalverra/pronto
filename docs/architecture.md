@@ -223,9 +223,16 @@ IO-blocked goroutines the runtime profiler cannot see) and the runtime
 ### Lifecycle
 
 `pronto serve` warm-starts from cache, starts the socket listener, fetches
-once, then polls on `server.poll_interval` (`--interval`, default 60s). A poll
-is synchronous within the loop, so a slow fetch delays the next tick rather
-than overlapping it.
+once, then polls on `server.poll_interval` (`--interval`, default 60s, floor
+10s — enforced as an error in `serve`, clamped with a warning for the embedded
+TUI daemon). A poll is synchronous within the loop, so a slow fetch delays the
+next tick rather than overlapping it.
+
+When GitHub rejects a request because the hourly GraphQL points budget is
+exhausted (primary rate limit), the source arms a backoff: until the `resetAt`
+observed on the last successful response, or one minute when no reset time is
+known. While backed off, `Fetch` fails fast without touching the network, so
+an exhausted poller neither burns requests nor risks a secondary-limit ban.
 
 On startup, `prepareSocket` probe-dials the socket path: if something answers,
 the daemon refuses to start; if nothing does, a leftover socket file is treated

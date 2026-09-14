@@ -89,7 +89,7 @@ var Specs = []KeySpec{
 		Key:  "server.poll_interval",
 		Env:  "PRONTO_POLL_INTERVAL",
 		Type: "duration",
-		Doc:  "Daemon poll interval as a Go duration string, e.g. \"30s\"; default 60s.",
+		Doc:  "Daemon poll interval as a Go duration string, e.g. \"30s\"; default 60s; minimum 10s.",
 	},
 	{
 		Key:     "server.pprof_addr",

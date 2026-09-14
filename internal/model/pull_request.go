@@ -68,6 +68,10 @@ type PullRequest struct {
 	Assigned          bool      `json:"assigned"`
 	Starred           bool      `json:"starred"`
 	IsInMergeQueue    bool      `json:"is_in_merge_queue,omitempty"`
+	// Partial marks a PR built from discovery data only (hydration skipped,
+	// e.g. due to a rate limit): merge status, checks, and diff size are
+	// unknown until a later poll completes them.
+	Partial bool `json:"partial,omitempty"`
 
 	MergeStatus MergeStatus   `json:"merge_status"`
 	Checks      ChecksSummary `json:"checks"`
