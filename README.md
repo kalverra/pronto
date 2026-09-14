@@ -7,13 +7,13 @@ PR triage dashboard and review queue. Get in the flow of reviewing PRs quickly: 
 ### Homebrew
 
 ```sh
-brew install kalverra/tap/pronto
+brew install --cask kalverra/tap/pronto
 ```
 
 ### mise
 
 ```sh
-mise use -g ubi:kalverra/pronto
+mise use -g github:kalverra/pronto@latest
 ```
 
 ### Go
