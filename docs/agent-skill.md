@@ -16,12 +16,12 @@ All CLI wrappers fail fast with a clear error when the daemon is down.
 
 ## Layers
 
-| Layer                      | Use for                            |
-| -------------------------- | ---------------------------------- |
-| `pronto agent`             | Agent self-bootstrap instructions  |
-| CLI wrappers               | One-shot waits, scripted checks    |
-| `pronto api schema`        | Machine-readable protocol contract |
-| Raw socket (NDJSON)        | Long-lived event streams           |
+| Layer               | Use for                            |
+| ------------------- | ---------------------------------- |
+| `pronto agent`      | Agent self-bootstrap instructions  |
+| CLI wrappers        | One-shot waits, scripted checks    |
+| `pronto api schema` | Machine-readable protocol contract |
+| Raw socket (NDJSON) | Long-lived event streams           |
 
 ## Commands
 
@@ -94,3 +94,14 @@ Full contract: `pronto api schema`.
    code 2 means timeout, anything else means the event fired.
 4. Continuous: open `events.subscribe` on a dedicated connection and act on
    pushed lines.
+
+## Troubleshooting & reporting issues
+
+If pronto fails, crashes, or returns unexpected errors:
+
+- Check daemon logs: `~/.local/state/pronto/pronto.log`.
+- Report issues via GitHub CLI:
+
+  ```sh
+  gh issue create --repo kalverra/pronto --template bug_report.md
+  ```
