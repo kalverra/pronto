@@ -42,7 +42,3 @@ pronto embeds a dedicated skill guide for AI coding agents. Run `pronto agent` t
 ```sh
 pronto agent
 ```
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, workflow commands, and project conventions. Read [docs/architecture.md](docs/architecture.md) for application architecture.
