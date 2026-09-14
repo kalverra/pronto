@@ -20,6 +20,7 @@ import (
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/server"
+	"github.com/kalverra/pronto/internal/source"
 )
 
 // scriptedSource returns queued fetch results in order, then repeats the
@@ -216,6 +217,35 @@ func runDaemon(t *testing.T, opts daemon.Options) *events.Bus {
 	d := daemon.New(opts)
 	go func() { _ = d.Run(ctx) }()
 	return bus
+}
+
+// progressSource reports fetch progress through the context callback, then
+// returns a fixed queue.
+type progressSource struct {
+	queue model.Queue
+}
+
+func (s *progressSource) Fetch(ctx context.Context) (model.Queue, error) {
+	progress := source.ProgressFromContext(ctx)
+	if progress == nil {
+		return model.Queue{}, errors.New("no progress callback in fetch context")
+	}
+	progress(3, 10)
+	return s.queue, nil
+}
+
+func TestDaemon_RefreshEmitsFetchProgress(t *testing.T) {
+	t.Parallel()
+
+	src := &progressSource{queue: model.Queue{Viewer: "kalverra"}}
+	bus := runDaemon(t, daemon.Options{Source: src})
+	c := collect(t, bus)
+
+	ev := c.waitFor(t, events.TypeFetchProgress)
+	payload, ok := ev.Payload.(events.FetchProgressPayload)
+	require.True(t, ok, "fetch_progress payload must be events.FetchProgressPayload, got %T", ev.Payload)
+	assert.Equal(t, 3, payload.Loaded)
+	assert.Equal(t, 10, payload.Total)
 }
 
 func TestDaemon_FirstFetchSeedsBaseline(t *testing.T) {

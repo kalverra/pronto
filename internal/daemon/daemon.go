@@ -352,7 +352,13 @@ func (d *Daemon) refresh(ctx context.Context) {
 	}
 
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
-	q, err := d.opts.Source.Fetch(fetchCtx)
+	progressCtx := source.WithProgress(fetchCtx, func(loaded, total int) {
+		d.bus.Emit(events.Event{
+			Type:    events.TypeFetchProgress,
+			Payload: events.FetchProgressPayload{Loaded: loaded, Total: total},
+		})
+	})
+	q, err := d.opts.Source.Fetch(progressCtx)
 	cancel()
 
 	d.mu.Lock()

@@ -653,6 +653,11 @@ func (m Model) renderStatusBanner() string {
 		}
 		return errorBannerStyle.Render(fmt.Sprintf(
 			"⚠ refresh failed: %s — data from %s ago", m.fetchErr, humanAge(time.Since(m.lastFetch))))
+	case !m.loading && m.loadingTotal > 0 && m.loadingLoaded < m.loadingTotal:
+		barWidth := min(20, max(8, m.width-40))
+		bar := renderProgressBar(m.loadingLoaded, m.loadingTotal, barWidth)
+		return faintStyle.Render(fmt.Sprintf(
+			"refreshing… %s %d/%d", bar, m.loadingLoaded, m.loadingTotal))
 	case m.refreshing:
 		return faintStyle.Render("refreshing…")
 	case m.staleSnapshot:

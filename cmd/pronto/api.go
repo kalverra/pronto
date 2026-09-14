@@ -13,9 +13,10 @@ func newAPICmd() *cobra.Command {
 		Use:   "api",
 		Short: "Inspect the socket API protocol",
 	}
-	// The output is the embedded schema.json verbatim — the same artifact the
-	// drift tests pin to server.Methods and events.ValidTypes — so the command
-	// itself has no content that can drift from the protocol.
+	// The output is the embedded schema.json verbatim — the same artifact
+	// tools/gendocs generates from events.ValidTypes, events.ValidCodes, and
+	// server.Methods — so the command itself has no content that can drift
+	// from the protocol.
 	schemaCmd := &cobra.Command{
 		Use:   "schema",
 		Short: "Print the socket API JSON Schema",

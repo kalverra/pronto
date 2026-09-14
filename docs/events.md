@@ -19,6 +19,7 @@ and the in-process event bus used to fan events out to socket subscribers.
 | `pr_added` | indicates a PR newly appeared in the queue. |
 | `pr_removed` | indicates a PR left the queue without merging. |
 | `queue_refreshed` | reports the outcome of a queue poll. It is not scoped to a single PR. |
+| `fetch_progress` | reports incremental progress of an in-flight queue fetch. It is not scoped to a single PR and is not a notification trigger. |
 
 ## ReviewPayload
 
@@ -40,6 +41,15 @@ QueueRefreshedPayload carries details for queue_refreshed events.
 | `Error` | `error` | `string` | yes | — |
 | `Authored` | `authored` | `int` |  | — |
 | `Inbox` | `inbox` | `int` |  | — |
+
+## FetchProgressPayload
+
+FetchProgressPayload carries details for fetch_progress events.
+
+| Field | JSON | Type | Omitempty | Description |
+| ----- | ---- | ---- | --------- | ----------- |
+| `Loaded` | `loaded` | `int` |  | — |
+| `Total` | `total` | `int` |  | — |
 
 ## Event
 

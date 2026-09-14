@@ -1,9 +1,10 @@
 // Package gendocs generates pronto's published reference docs
 // (docs/events.md, docs/config.md, docs/model.md) from source code and the
-// config spec table.
+// config spec table, plus the wire protocol schema
+// (internal/events/schema.json) from the event and method vocabularies.
 //
 // Regenerate with `mise run generate` (go generate ./...). Output is
-// deterministic; a staleness test fails when committed docs drift from
+// deterministic; staleness tests fail when committed files drift from
 // regeneration.
 package gendocs
 

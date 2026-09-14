@@ -573,14 +573,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.eventsCh != nil {
 			cmds = append(cmds, WaitForEventCmd(m.eventsCh))
 		}
-		if ev.Type == events.TypeQueueRefreshed {
+		switch ev.Type {
+		case events.TypeFetchProgress:
+			if p, ok := ev.Payload.(events.FetchProgressPayload); ok {
+				m.loadingLoaded = p.Loaded
+				m.loadingTotal = p.Total
+			}
+		case events.TypeQueueRefreshed:
 			if m.src != nil && !m.loading && !m.staleSnapshot {
 				m.refreshing = true
 				cmds = append(cmds, FetchQueueCmd(m.ctx, m.src))
 			}
-		} else if isTriggerEvent(ev.Type) {
-			n := notificationFromEvent(ev, m.notifCfg)
-			cmds = append(cmds, notifySingleCmd(m.ctx, m.notifier, n))
+		default:
+			if isTriggerEvent(ev.Type) {
+				n := notificationFromEvent(ev, m.notifCfg)
+				cmds = append(cmds, notifySingleCmd(m.ctx, m.notifier, n))
+			}
 		}
 		return m, tea.Batch(cmds...)
 

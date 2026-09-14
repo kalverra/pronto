@@ -7,7 +7,7 @@ Create an maintain a simple CLI + TUI tool for a clean interface of PR statuses.
 - Still in alpha. Large, breaking changes fine to keep code clean and performant.
 - Read docs/architecture.md for a high-level overview of the application. Update this file as necessary.
 - Consider using `testing/synctest` for channel/timing tests. Socket/daemon tests cannot bubble (fd blocking).
-- Wire protocol changes: edit `internal/events` (vocabulary) or `internal/server` (methods), update `internal/events/schema.json`, then run `mise run generate`. Drift tests pin the schema.json enums to `events.ValidTypes` and `server.Method*` consts; `tools/gendocs` regenerates `docs/{events,config,model}.md` (never edit those).
+- Wire protocol changes: edit `internal/events` (vocabulary) or `internal/server` (methods), then run `mise run generate`. `tools/gendocs` regenerates `docs/{events,config,model}.md` and `internal/events/schema.json` from `events.ValidTypes`, `events.ValidCodes`, and `server.Methods` (never edit those generated files). Staleness tests in `tools/gendocs` fail if regeneration is skipped.
 
 ## Layout
 
@@ -26,7 +26,7 @@ Create an maintain a simple CLI + TUI tool for a clean interface of PR statuses.
 | `internal/client` | Socket client used by `watch`/`wait`                                                                 |
 | `internal/cache`  | On-disk JSON cache (`Store` interface)                                                               |
 | `internal/config` | viper/TOML, env overrides (`PRONTO_*`); `Specs` table is the single source of truth                  |
-| `tools/gendocs`   | `go generate` doc generator for `docs/{events,config,model}.md`                                      |
+| `tools/gendocs`   | `go generate` generator for `docs/{events,config,model}.md` + `internal/events/schema.json`           |
 | `docs/`           | high-level docs on architecture, usage, and design; `events.md`/`config.md`/`model.md` are generated |
 
 ## Dev Commands
@@ -43,6 +43,7 @@ mise run race
 mise run test_thorough
 mise run race_thorough
 
-# Regenerate reference docs (docs/events.md, config.md, model.md)
+# Regenerate reference docs (docs/events.md, config.md, model.md) and
+# the wire schema (internal/events/schema.json)
 mise run generate
 ```

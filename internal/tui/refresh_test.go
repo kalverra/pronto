@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kalverra/pronto/internal/cache"
+	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/server"
@@ -802,4 +803,168 @@ func TestStartupModel_SubscribesToDaemonSource(t *testing.T) {
 	eventMsg, ok := msg.(tui.EventMsg)
 	require.True(t, ok, "Init command must deliver EventMsg from subscribed channel, got %T", msg)
 	assert.Equal(t, events.TypeQueueRefreshed, eventMsg.Type)
+}
+
+// daemonProgressSource reports fetch progress through the context callback,
+// then returns a fixed queue.
+type daemonProgressSource struct {
+	queue model.Queue
+}
+
+func (s *daemonProgressSource) Fetch(ctx context.Context) (model.Queue, error) {
+	if progress := source.ProgressFromContext(ctx); progress != nil {
+		progress(3, 10)
+	}
+	return s.queue, nil
+}
+
+// TestStartupModel_EmbeddedDaemonStreamsFetchProgress replicates the real
+// embedded-daemon wiring end to end: a daemon with a progress-reporting
+// source, an in-process daemon.Source, and a stale cached snapshot. The
+// startup model must receive fetch_progress events through its live event
+// subscription and expose them via LoadingProgress.
+func TestStartupModel_EmbeddedDaemonStreamsFetchProgress(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	src := &daemonProgressSource{queue: makeTestQueue()}
+	d := daemon.New(daemon.Options{
+		Source:   src,
+		Bus:      events.NewBus(),
+		Interval: 50 * time.Millisecond,
+	})
+	go func() { _ = d.Run(ctx) }()
+	select {
+	case <-d.Ready():
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon never became ready")
+	}
+
+	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	m := tui.StartupModel(ctx, daemon.NewSource(d), store)
+	require.True(t, m.StaleSnapshot(), "stale snapshot must flag an immediate refresh")
+
+	runCmds(t, m.Init(), func(msg tea.Msg) bool {
+		if ev, ok := msg.(tui.EventMsg); ok && ev.Type == events.TypeFetchProgress {
+			updated, _ := m.Update(msg)
+			next := updated.(tui.Model)
+			loaded, total := next.LoadingProgress()
+			assert.Equal(t, 3, loaded)
+			assert.Equal(t, 10, total)
+			return true
+		}
+		return false
+	})
+}
+
+// runCmds executes Bubbletea commands (flattening batch messages) until pred
+// returns true, failing the test after timeout.
+func runCmds(t *testing.T, cmd tea.Cmd, pred func(tea.Msg) bool) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	pending := []tea.Cmd{cmd}
+	for len(pending) > 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for predicted message")
+		default:
+		}
+		next := pending[0]
+		pending = pending[1:]
+		if next == nil {
+			continue
+		}
+		msg := next()
+		if msg == nil {
+			continue
+		}
+		if pred(msg) {
+			return
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			pending = append(pending, batch...)
+		}
+	}
+}
+
+func TestView_InFlightFetchShowsBannerProgressBar(t *testing.T) {
+	t.Parallel()
+
+	// Fresh snapshot, not stale, not refreshing: progress events alone must
+	// surface the banner bar during any background fetch.
+	m := tui.New(makeTestQueue())
+
+	updated, _ := m.Update(tui.EventMsg{
+		Type:    events.TypeFetchProgress,
+		Payload: events.FetchProgressPayload{Loaded: 4, Total: 9},
+	})
+	next, ok := updated.(tui.Model)
+	require.True(t, ok)
+	require.False(t, next.IsRefreshing())
+	require.False(t, next.StaleSnapshot())
+
+	view := next.View()
+	assert.Contains(t, view, "refreshing")
+	assert.Contains(t, view, "4/9")
+	assert.Contains(t, view, "█", "banner must render a progress bar while a fetch streams")
+}
+
+func TestView_CompletedFetchHidesBannerProgressBar(t *testing.T) {
+	t.Parallel()
+
+	m := tui.New(makeTestQueue())
+
+	updated, _ := m.Update(tui.EventMsg{
+		Type:    events.TypeFetchProgress,
+		Payload: events.FetchProgressPayload{Loaded: 9, Total: 9},
+	})
+	next, ok := updated.(tui.Model)
+	require.True(t, ok)
+
+	assert.NotContains(t, next.View(), "9/9",
+		"completed fetch must clear the banner bar")
+}
+
+func TestModel_FetchProgressEventUpdatesLoadingProgress(t *testing.T) {
+	t.Parallel()
+
+	eventsCh := make(chan events.Event, 1)
+	m := tui.New(makeTestQueue(), tui.WithEvents(eventsCh))
+	_, before := m.LoadingProgress()
+	require.Zero(t, before, "no fetch in flight; total must start at zero")
+
+	updated, cmd := m.Update(tui.EventMsg{
+		Type:    events.TypeFetchProgress,
+		Payload: events.FetchProgressPayload{Loaded: 4, Total: 9},
+	})
+	next, ok := updated.(tui.Model)
+	require.True(t, ok)
+	require.NotNil(t, cmd, "event handler must re-arm the event wait command")
+
+	loaded, total := next.LoadingProgress()
+	assert.Equal(t, 4, loaded)
+	assert.Equal(t, 9, total)
+}
+
+func TestView_StaleSnapshotBannerShowsProgressBar(t *testing.T) {
+	t.Parallel()
+
+	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
+	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	m := tui.StartupModel(context.Background(), src, store)
+	require.True(t, m.StaleSnapshot(), "10-minute-old snapshot must flag stale")
+
+	updated, _ := m.Update(tui.EventMsg{
+		Type:    events.TypeFetchProgress,
+		Payload: events.FetchProgressPayload{Loaded: 4, Total: 9},
+	})
+	next, ok := updated.(tui.Model)
+	require.True(t, ok)
+
+	view := next.View()
+	assert.Contains(t, view, "refreshing")
+	assert.Contains(t, view, "4/9", "status banner must show fetch counts")
+	assert.Contains(t, view, "█", "status banner must render a progress bar")
 }

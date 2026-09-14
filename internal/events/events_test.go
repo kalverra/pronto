@@ -13,6 +13,25 @@ import (
 	"github.com/kalverra/pronto/internal/events"
 )
 
+func TestFetchProgressTypeIsValidAndNotTrigger(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, events.ValidTypes[events.TypeFetchProgress],
+		"fetch_progress must be a valid event type")
+	assert.NotContains(t, events.TriggerTypes, events.TypeFetchProgress,
+		"fetch_progress is not a notification trigger")
+}
+
+func TestValidCodesListsAllWireErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	assert.Len(t, events.ValidCodes, 4)
+	assert.Contains(t, events.ValidCodes, events.CodeInvalidRequest)
+	assert.Contains(t, events.ValidCodes, events.CodeInvalidParams)
+	assert.Contains(t, events.ValidCodes, events.CodeUnsupportedMethod)
+	assert.Contains(t, events.ValidCodes, events.CodeNotFound)
+}
+
 func TestSubscription_Matches(t *testing.T) {
 	t.Parallel()
 

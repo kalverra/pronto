@@ -26,13 +26,16 @@ func main() {
 	outDir := filepath.Join(root, *out)
 
 	if *check {
-		if err := checkDocs(root, outDir); err != nil {
+		if err := checkGenerated(root, outDir); err != nil {
 			fatal(err)
 		}
-		fmt.Println("docs are current")
+		fmt.Println("generated files are current")
 		return
 	}
 	if err := gendocs.Generate(root, outDir); err != nil {
+		fatal(err)
+	}
+	if err := gendocs.GenerateSchema(root); err != nil {
 		fatal(err)
 	}
 }
@@ -55,9 +58,9 @@ func findRoot(start string) (string, error) {
 	}
 }
 
-// checkDocs regenerates docs into a temp dir and reports any that differ from
-// the committed copies.
-func checkDocs(root, outDir string) error {
+// checkGenerated regenerates docs into a temp dir and the schema in memory,
+// then reports any that differ from the committed copies.
+func checkGenerated(root, outDir string) error {
 	tmp, err := os.MkdirTemp("", "gendocs-*")
 	if err != nil {
 		return err
@@ -87,8 +90,27 @@ func checkDocs(root, outDir string) error {
 			stale = true
 		}
 	}
+
+	schemaWant, err := gendocs.RenderSchema()
+	if err != nil {
+		return err
+	}
+	schemaGot, err := os.ReadFile(
+		filepath.Join(root, "internal", "events", "schema.json"),
+	) // #nosec G304 — generated schema path under the repo.
+	switch {
+	case os.IsNotExist(err):
+		fmt.Println("internal/events/schema.json: missing")
+		stale = true
+	case err != nil:
+		return err
+	case string(schemaWant) != string(schemaGot):
+		fmt.Println("internal/events/schema.json: stale")
+		stale = true
+	}
+
 	if stale {
-		return errors.New("docs are stale; run: mise run generate")
+		return errors.New("generated files are stale; run: mise run generate")
 	}
 	return nil
 }

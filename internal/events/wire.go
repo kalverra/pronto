@@ -10,6 +10,15 @@ const (
 	CodeNotFound          = "not_found"
 )
 
+// ValidCodes lists every protocol error code. tools/gendocs derives the
+// schema.json error enum from this slice.
+var ValidCodes = []string{
+	CodeInvalidRequest,
+	CodeInvalidParams,
+	CodeUnsupportedMethod,
+	CodeNotFound,
+}
+
 // WireError represents a protocol-level error returned by the daemon.
 type WireError struct {
 	Code    string `json:"code"`

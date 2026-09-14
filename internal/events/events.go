@@ -31,6 +31,9 @@ const (
 	// TypeQueueRefreshed reports the outcome of a queue poll. It is not
 	// scoped to a single PR.
 	TypeQueueRefreshed Type = "queue_refreshed"
+	// TypeFetchProgress reports incremental progress of an in-flight queue
+	// fetch. It is not scoped to a single PR and is not a notification trigger.
+	TypeFetchProgress Type = "fetch_progress"
 )
 
 // ValidTypes lists every known event type.
@@ -43,6 +46,7 @@ var ValidTypes = map[Type]bool{
 	TypePRAdded:        true,
 	TypePRRemoved:      true,
 	TypeQueueRefreshed: true,
+	TypeFetchProgress:  true,
 }
 
 // TriggerTypes lists event types that represent PR notification triggers.
@@ -76,6 +80,12 @@ type QueueRefreshedPayload struct {
 	Error    string `json:"error,omitempty"`
 	Authored int    `json:"authored"`
 	Inbox    int    `json:"inbox"`
+}
+
+// FetchProgressPayload carries details for fetch_progress events.
+type FetchProgressPayload struct {
+	Loaded int `json:"loaded"`
+	Total  int `json:"total"`
 }
 
 // Event is a single emitted pronto event. Seq is monotonic per server

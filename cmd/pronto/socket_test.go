@@ -20,7 +20,6 @@ import (
 	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
-	"github.com/kalverra/pronto/internal/server"
 )
 
 // scriptedSource returns queued fetch results in order, then repeats the
@@ -155,37 +154,11 @@ func TestRun_APISchema(t *testing.T) {
 	err := Run(context.Background(), []string{"api", "schema"}, nil, &stdout, &stderr)
 	require.NoError(t, err)
 
-	// The command must print the embedded schema verbatim; its enums are
-	// derived from the same code constants the drift tests pin, so this
-	// guards the CLI against drifting from the protocol.
-	var doc struct {
-		Defs struct {
-			Request struct {
-				Properties struct {
-					Method struct {
-						Enum []string `json:"enum"`
-					} `json:"method"`
-				} `json:"properties"`
-			} `json:"request"`
-			Event struct {
-				Properties struct {
-					Type struct {
-						Enum []string `json:"enum"`
-					} `json:"type"`
-				} `json:"properties"`
-			} `json:"event"`
-		} `json:"$defs"`
-	}
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &doc), "api schema must print the JSON Schema document")
-
-	assert.ElementsMatch(t, server.Methods, doc.Defs.Request.Properties.Method.Enum,
-		"schema method enum must match server.Methods")
-	wantTypes := make([]string, 0, len(events.ValidTypes))
-	for typ := range events.ValidTypes {
-		wantTypes = append(wantTypes, string(typ))
-	}
-	assert.ElementsMatch(t, wantTypes, doc.Defs.Event.Properties.Type.Enum,
-		"schema event type enum must match events.ValidTypes")
+	// The command must print the embedded schema verbatim. The schema itself
+	// is generated from events.ValidTypes, events.ValidCodes, and
+	// server.Methods; a staleness test in tools/gendocs guards regeneration.
+	assert.Equal(t, events.SchemaJSON()+"\n", stdout.String(),
+		"api schema must print the embedded JSON Schema document verbatim")
 }
 
 func TestRun_WaitUntilEvent(t *testing.T) {
