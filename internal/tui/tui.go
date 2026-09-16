@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/browser"
+	"github.com/rs/zerolog"
 
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/events"
@@ -76,9 +77,12 @@ type Model struct {
 	lastClosedPR          *model.PullRequest
 	closePR               ClosePRFunc
 	notifier              notify.Notifier
+	notifierFactory       NotifierFactory
 	detector              *notify.Detector
 	notifCfg              *config.NotificationConfig
 	notificationsDisabled bool
+	detectionDisabled     bool
+	logger                zerolog.Logger
 	lastNotification      *notify.Notification
 	notificationFocused   bool
 	viewPR                ViewPRFunc
@@ -214,6 +218,73 @@ func WithoutNotifications() Option {
 	return func(m *Model) {
 		m.notificationsDisabled = true
 	}
+}
+
+// WithoutChangeDetection disables local change detection while keeping desktop
+// delivery. Daemon-backed models use this: the daemon detects transitions and
+// emits events, and the TUI is the only component that can reach the desktop.
+func WithoutChangeDetection() Option {
+	return func(m *Model) {
+		m.detectionDisabled = true
+	}
+}
+
+// WithNotifierFactory overrides how the desktop notifier is built from user
+// notification config.
+func WithNotifierFactory(factory NotifierFactory) Option {
+	return func(m *Model) {
+		m.notifierFactory = factory
+	}
+}
+
+// WithLogger sets the logger used to report notification delivery failures.
+func WithLogger(logger zerolog.Logger) Option {
+	return func(m *Model) {
+		m.logger = logger
+	}
+}
+
+// NotifierFactory builds the desktop notifier from user notification config.
+type NotifierFactory func(config.NotificationConfig) notify.Notifier
+
+// DefaultNotifierFactory builds a notifier for the configured channels. It
+// returns nil when every channel is disabled, so an empty notifier can never
+// masquerade as a working one.
+func DefaultNotifierFactory(cfg config.NotificationConfig) notify.Notifier {
+	var notifiers notify.MultiNotifier
+	if cfg.Popups {
+		notifiers = append(notifiers, notify.NewMacNotifier(notify.WithSoundEnabled(false)))
+	}
+	if cfg.Sound {
+		notifiers = append(notifiers, notify.NewSoundNotifier(notify.NewMacSoundPlayer(), true))
+	}
+	if len(notifiers) == 0 {
+		return nil
+	}
+	return notifiers
+}
+
+// detectorOptions builds detector options from user notification config.
+func detectorOptions(cfg *config.NotificationConfig) []notify.DetectorOption {
+	opts := []notify.DetectorOption{notify.WithBotFilter(true)}
+	if cfg == nil {
+		return opts
+	}
+	if len(cfg.Images) > 0 {
+		imgs := make(map[notify.Trigger]string, len(cfg.Images))
+		for k, v := range cfg.Images {
+			imgs[notify.Trigger(k)] = config.ExpandPath(v)
+		}
+		opts = append(opts, notify.WithTriggerImages(imgs))
+	}
+	if len(cfg.Sounds) > 0 {
+		sounds := make(map[notify.Trigger]string, len(cfg.Sounds))
+		for k, v := range cfg.Sounds {
+			sounds[notify.Trigger(k)] = config.ExpandPath(v)
+		}
+		opts = append(opts, notify.WithTriggerSounds(sounds))
+	}
+	return opts
 }
 
 // WithEvents configures an event channel for the model to listen on.
@@ -414,6 +485,7 @@ func New(q model.Queue, opts ...Option) Model {
 		height:          24,
 		stacksCollapsed: true,
 		expandedStacks:  make(map[string]bool),
+		logger:          zerolog.Nop(),
 	}
 
 	for _, opt := range opts {
@@ -435,47 +507,23 @@ func New(q model.Queue, opts ...Option) Model {
 	if m.teams == nil {
 		m.teams = q.Teams
 	}
+	if m.notifierFactory == nil {
+		m.notifierFactory = DefaultNotifierFactory
+	}
 	if !m.notificationsDisabled {
-		if m.notifCfg != nil {
-			if m.notifier == nil {
-				var notifiers notify.MultiNotifier
-				if m.notifCfg.Popups {
-					notifiers = append(notifiers, notify.NewMacNotifier(notify.WithSoundEnabled(false)))
-				}
-				if m.notifCfg.Sound {
-					player := notify.NewMacSoundPlayer()
-					notifiers = append(notifiers, notify.NewSoundNotifier(player, true))
-				}
-				m.notifier = notifiers
-			}
-			if m.detector == nil {
-				var opts []notify.DetectorOption
-				opts = append(opts, notify.WithBotFilter(true))
-				if len(m.notifCfg.Images) > 0 {
-					imgs := make(map[notify.Trigger]string, len(m.notifCfg.Images))
-					for k, v := range m.notifCfg.Images {
-						imgs[notify.Trigger(k)] = config.ExpandPath(v)
-					}
-					opts = append(opts, notify.WithTriggerImages(imgs))
-				}
-				if len(m.notifCfg.Sounds) > 0 {
-					sounds := make(map[notify.Trigger]string, len(m.notifCfg.Sounds))
-					for k, v := range m.notifCfg.Sounds {
-						sounds[notify.Trigger(k)] = config.ExpandPath(v)
-					}
-					opts = append(opts, notify.WithTriggerSounds(sounds))
-				}
-				m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, opts...)
-			}
-		}
-
 		if m.notifier == nil {
-			m.notifier = notify.NewDefaultNotifier()
+			if m.notifCfg != nil {
+				m.notifier = m.notifierFactory(*m.notifCfg)
+			} else {
+				m.notifier = notify.NewDefaultNotifier()
+			}
 		}
-		if m.detector == nil {
-			m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, notify.WithBotFilter(true))
+		if !m.detectionDisabled {
+			if m.detector == nil {
+				m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, detectorOptions(m.notifCfg)...)
+			}
+			m.detector.Seed(q.Authored)
 		}
-		m.detector.Seed(q.Authored)
 	}
 	if m.viewPR == nil {
 		m.viewPR = defaultViewPR
@@ -587,7 +635,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			if isTriggerEvent(ev.Type) {
 				n := notificationFromEvent(ev, m.notifCfg)
-				cmds = append(cmds, notifySingleCmd(m.ctx, m.notifier, n))
+				cmds = append(cmds, notifySingleCmd(m.ctx, m.notifier, m.logger, n))
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -997,7 +1045,7 @@ func (m Model) handleQueueLoaded(msg QueueLoadedMsg) (Model, tea.Cmd) {
 			m.detector.Seed(msg.Queue.Authored)
 		}
 	} else if m.detector != nil && !m.isDaemon() {
-		notifCmd = notifyCmd(m.ctx, m.detector, m.notifier, m.queue.Authored, msg.Queue.Authored)
+		notifCmd = notifyCmd(m.ctx, m.detector, m.notifier, m.logger, m.queue.Authored, msg.Queue.Authored)
 	}
 
 	m = m.applyQueue(msg.Queue)
@@ -1068,19 +1116,40 @@ func notificationFromEvent(ev events.Event, cfg *config.NotificationConfig) noti
 			}
 		}
 	}
+	if n.ImagePath == "" {
+		n.ImagePath = notify.DefaultTriggerImage(n)
+	}
 	return n
 }
 
-func notifySingleCmd(ctx context.Context, notifier notify.Notifier, n notify.Notification) tea.Cmd {
+func notifySingleCmd(
+	ctx context.Context,
+	notifier notify.Notifier,
+	logger zerolog.Logger,
+	n notify.Notification,
+) tea.Cmd {
 	return func() tea.Msg {
 		if notifier != nil {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			_ = notifier.Notify(ctx, n)
+			if err := notifier.Notify(ctx, n); err != nil {
+				logNotifyFailure(logger, err, n)
+			}
 		}
 		return NotificationMsg{Notifications: []notify.Notification{n}}
 	}
+}
+
+// logNotifyFailure records a delivery failure. Without it a suppressed or
+// broken notification backend is indistinguishable from a quiet queue.
+func logNotifyFailure(logger zerolog.Logger, err error, n notify.Notification) {
+	logger.Error().
+		Err(err).
+		Str("trigger", string(n.Trigger)).
+		Str("repo", n.Repo).
+		Int("pr", n.PRNumber).
+		Msg("delivering notification failed")
 }
 
 func refreshQueueCmd(ctx context.Context, refresher any) tea.Cmd {

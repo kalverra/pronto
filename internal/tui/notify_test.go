@@ -527,7 +527,7 @@ func TestModel_WithoutNotifications(t *testing.T) {
 	assert.Nil(t, cmd, "WithoutNotifications must not run notification command on refresh")
 }
 
-func TestStartupModel_DaemonSource_SkipsDetectorAndNotifier(t *testing.T) {
+func TestStartupModel_DaemonSource_SkipsChangeDetection(t *testing.T) {
 	t.Parallel()
 
 	q := model.Queue{
@@ -573,5 +573,5 @@ func TestStartupModel_DaemonSource_SkipsDetectorAndNotifier(t *testing.T) {
 
 	// Update with refresh
 	_, cmd := m.Update(tui.QueueLoadedMsg{Queue: refreshedQ})
-	assert.Nil(t, cmd, "daemon source must skip detector/notifier and produce no notification command")
+	assert.Nil(t, cmd, "daemon source must skip local change detection; the daemon detects instead")
 }

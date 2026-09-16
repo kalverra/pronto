@@ -62,6 +62,7 @@ func NewRootCmd(src source.Source, stdout, stderr io.Writer) *cobra.Command {
 	rootCmd.AddCommand(newWatchCmd())
 	rootCmd.AddCommand(newWaitCmd())
 	rootCmd.AddCommand(newAgentCmd())
+	rootCmd.AddCommand(newNotifyCmd())
 
 	return rootCmd
 }
@@ -113,6 +114,7 @@ func runRootTUI(cmd *cobra.Command, src source.Source) error {
 		tui.WithPRViewer(viewer),
 		tui.WithPRDiffer(differ),
 		tui.WithNotificationConfig(cfg.Notifications),
+		tui.WithLogger(logger),
 	}
 	return runTUI(tuiCtx, s, store, opts...)
 }

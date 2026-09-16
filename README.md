@@ -26,6 +26,34 @@ go install github.com/kalverra/pronto/cmd/pronto@latest
 
 Download pre-compiled binaries for macOS and Linux from [GitHub Releases](https://github.com/kalverra/pronto/releases).
 
+### Enable Notifications
+
+<details>
+
+<summary>macOS</summary>
+
+pronto can post desktop notifications when CI finishes, a review lands, a PR hits a merge conflict, or a PR merges.
+
+1. Install [terminal-notifier](https://github.com/julienxx/terminal-notifier) for best experience
+2. Configure notifications in `~/.config/pronto/pronto.toml`:
+
+  ```toml
+  [notifications]
+  popups = true
+  sound  = true
+  ```
+
+3.Check the setup and send a test notification:
+
+  ```sh
+  pronto notify        # show config, backends, and per-trigger assets
+  pronto notify --test # deliver a test notification through the configured channels
+  ```
+
+`pronto notify --test` exits non-zero if delivery fails. If it reports `Sent` but no banner appears, macOS suppressed it — allow **terminal-notifier** under System Settings → Notifications, and turn off Focus / Do Not Disturb. Delivery failures during normal runs are recorded in the log:
+
+</details>
+
 ## Usage
 
 Launch interactive TUI:

@@ -150,3 +150,34 @@ func TestMacNotifier_TerminalNotifier_Failure_FallsBackToOSAScript(t *testing.T)
 	assert.Equal(t, "/opt/homebrew/bin/terminal-notifier", executedCommands[0])
 	assert.Equal(t, "osascript", executedCommands[1])
 }
+
+func TestMacNotifier_TerminalNotifier_DefaultImageFallback(t *testing.T) {
+	t.Parallel()
+
+	var executedArgs []string
+	runner := func(_ context.Context, _ string, args ...string) error {
+		executedArgs = args
+		return nil
+	}
+
+	notifier := notify.NewMacNotifier(
+		notify.WithTerminalNotifierPath("/opt/homebrew/bin/terminal-notifier"),
+		notify.WithCommandRunner(runner),
+	)
+
+	n := notify.Notification{
+		Trigger:  notify.TriggerCIPassed,
+		PRNumber: 123,
+		PRTitle:  "Fix critical bug",
+		Repo:     "kalverra/pronto",
+		Title:    "PRonto: CI Passed (#123)",
+		Message:  "Checks passed",
+	}
+
+	err := notifier.Notify(context.Background(), n)
+	require.NoError(t, err)
+
+	argStr := strings.Join(executedArgs, " ")
+	assert.Contains(t, argStr, "-contentImage")
+	assert.Contains(t, argStr, "ci-passed.png")
+}
