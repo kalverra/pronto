@@ -112,6 +112,9 @@ func (d *Detector) applyImage(n *Notification) {
 	if d.imageResolver != nil {
 		n.ImagePath = d.imageResolver(*n)
 	}
+	if n.ImagePath == "" {
+		n.ImagePath = defaultTriggerImage(*n)
+	}
 }
 
 func (d *Detector) applySound(n *Notification) {

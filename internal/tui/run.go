@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rs/zerolog"
 
 	"github.com/kalverra/pronto/internal/cache"
 	"github.com/kalverra/pronto/internal/events"
@@ -46,6 +47,7 @@ func notifyCmd(
 	ctx context.Context,
 	detector *notify.Detector,
 	notifier notify.Notifier,
+	logger zerolog.Logger,
 	prev, curr []model.PullRequest,
 ) tea.Cmd {
 	if detector == nil {
@@ -56,12 +58,18 @@ func notifyCmd(
 			ctx = context.Background()
 		}
 		notes, err := detector.DetectMineChanges(ctx, prev, curr)
-		if err != nil || len(notes) == 0 {
+		if err != nil {
+			logger.Error().Err(err).Msg("change detection failed")
+			return nil
+		}
+		if len(notes) == 0 {
 			return nil
 		}
 		if notifier != nil {
 			for _, n := range notes {
-				_ = notifier.Notify(ctx, n)
+				if nErr := notifier.Notify(ctx, n); nErr != nil {
+					logNotifyFailure(logger, nErr, n)
+				}
 			}
 		}
 		return NotificationMsg{Notifications: notes}
@@ -146,7 +154,7 @@ func WaitForEventCmd(ch <-chan events.Event) tea.Cmd {
 // a refresh, and no snapshot starts in a loading state.
 func StartupModel(ctx context.Context, src source.Source, store cache.Store, opts ...Option) Model {
 	if ds, ok := src.(interface{ IsDaemon() bool }); ok && ds.IsDaemon() {
-		opts = append([]Option{WithoutNotifications()}, opts...)
+		opts = append([]Option{WithoutChangeDetection()}, opts...)
 	}
 	if sub, ok := src.(interface {
 		Subscribe(context.Context, ...events.Subscription) (<-chan events.Event, error)
