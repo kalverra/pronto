@@ -39,8 +39,8 @@ pronto can post desktop notifications when CI finishes, a review lands, a PR hit
 
   ```toml
   [notifications]
-  popups = [true|false]
-  sound  = [true|false]
+  popups = true
+  sound  = true
   ```
 
 3.Check the setup and send a test notification:
