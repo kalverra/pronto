@@ -152,12 +152,15 @@ type rawCommits struct {
 						Count int    `json:"count"`
 					} `json:"statusContextCountsByState"`
 					Nodes []struct {
-						Typename   string `json:"__typename"`
-						Name       string `json:"name"`
-						Status     string `json:"status"`
-						Conclusion string `json:"conclusion"`
-						Context    string `json:"context"`
-						State      string `json:"state"`
+						Typename    string     `json:"__typename"`
+						Name        string     `json:"name"`
+						Status      string     `json:"status"`
+						Conclusion  string     `json:"conclusion"`
+						Context     string     `json:"context"`
+						State       string     `json:"state"`
+						StartedAt   *time.Time `json:"startedAt"`
+						CompletedAt *time.Time `json:"completedAt"`
+						CreatedAt   *time.Time `json:"createdAt"`
 					} `json:"nodes"`
 				} `json:"contexts"`
 			} `json:"statusCheckRollup"`
@@ -214,6 +217,61 @@ func convertStack(rawS *rawStack, rawE *rawStackEntry) *model.PRStack {
 		Position:    pos,
 		BaseRefName: rawS.BaseRefName,
 	}
+}
+
+func convertChecks(commits rawCommits) (model.CheckRollup, []model.ContextCheck) {
+	var rollup model.CheckRollup
+	var checks []model.ContextCheck
+	if len(commits.Nodes) == 0 || commits.Nodes[0].Commit.StatusCheckRollup == nil {
+		return rollup, checks
+	}
+
+	ru := commits.Nodes[0].Commit.StatusCheckRollup
+	rollup.State = ru.State
+	rollup.TotalCount = ru.Contexts.TotalCount
+	if len(ru.Contexts.CheckRunCountsByState) > 0 {
+		rollup.RunCounts = make(map[string]int, len(ru.Contexts.CheckRunCountsByState))
+		for _, c := range ru.Contexts.CheckRunCountsByState {
+			rollup.RunCounts[c.State] = c.Count
+		}
+	}
+	if len(ru.Contexts.StatusContextCountsByState) > 0 {
+		rollup.StatusCounts = make(map[string]int, len(ru.Contexts.StatusContextCountsByState))
+		for _, c := range ru.Contexts.StatusContextCountsByState {
+			rollup.StatusCounts[c.State] = c.Count
+		}
+	}
+	for _, node := range ru.Contexts.Nodes {
+		name := node.Name
+		if name == "" {
+			name = node.Context
+		}
+		status := node.Status
+		if status == "" {
+			status = node.State
+		}
+		startedAt := node.StartedAt
+		if (startedAt == nil || startedAt.IsZero()) && node.CreatedAt != nil && !node.CreatedAt.IsZero() {
+			startedAt = node.CreatedAt
+		}
+		var finalStartedAt, finalCompletedAt *time.Time
+		if startedAt != nil && !startedAt.IsZero() {
+			t := *startedAt
+			finalStartedAt = &t
+		}
+		if node.CompletedAt != nil && !node.CompletedAt.IsZero() {
+			t := *node.CompletedAt
+			finalCompletedAt = &t
+		}
+		checks = append(checks, model.ContextCheck{
+			Name:        name,
+			Status:      status,
+			Conclusion:  node.Conclusion,
+			StartedAt:   finalStartedAt,
+			CompletedAt: finalCompletedAt,
+		})
+	}
+	return rollup, checks
 }
 
 type convertOpts struct {
@@ -292,40 +350,7 @@ func convertPR(
 		requiredContexts = fresh.BaseRef.BranchProtectionRule.RequiredStatusCheckContexts
 	}
 
-	var rollup model.CheckRollup
-	var checks []model.ContextCheck
-	if len(fresh.Commits.Nodes) > 0 && fresh.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
-		ru := fresh.Commits.Nodes[0].Commit.StatusCheckRollup
-		rollup.State = ru.State
-		rollup.TotalCount = ru.Contexts.TotalCount
-		if len(ru.Contexts.CheckRunCountsByState) > 0 {
-			rollup.RunCounts = make(map[string]int, len(ru.Contexts.CheckRunCountsByState))
-			for _, c := range ru.Contexts.CheckRunCountsByState {
-				rollup.RunCounts[c.State] = c.Count
-			}
-		}
-		if len(ru.Contexts.StatusContextCountsByState) > 0 {
-			rollup.StatusCounts = make(map[string]int, len(ru.Contexts.StatusContextCountsByState))
-			for _, c := range ru.Contexts.StatusContextCountsByState {
-				rollup.StatusCounts[c.State] = c.Count
-			}
-		}
-		for _, node := range ru.Contexts.Nodes {
-			name := node.Name
-			if name == "" {
-				name = node.Context
-			}
-			status := node.Status
-			if status == "" {
-				status = node.State
-			}
-			checks = append(checks, model.ContextCheck{
-				Name:       name,
-				Status:     status,
-				Conclusion: node.Conclusion,
-			})
-		}
-	}
+	rollup, checks := convertChecks(fresh.Commits)
 
 	isInMergeQueue := ident.IsInMergeQueue
 	mergeStatus := model.ComputeMergeStatus(fresh.Mergeable, fresh.MergeStateStatus, ident.IsDraft)

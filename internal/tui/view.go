@@ -203,10 +203,7 @@ func (m Model) buildDisplayRows(tab Tab) []displayRow {
 		return nil
 	}
 
-	refTime := m.now
-	if refTime.IsZero() {
-		refTime = time.Now()
-	}
+	refTime := m.refTime()
 
 	if tab == TabInbox {
 		return m.buildInboxDisplayRows(list, refTime)
@@ -480,10 +477,7 @@ func (m Model) View() string {
 		visRows := m.VisibleRows()
 		cursor := m.Cursor()
 
-		refTime := m.now
-		if refTime.IsZero() {
-			refTime = time.Now()
-		}
+		refTime := m.refTime()
 
 		displayRows := m.buildDisplayRows(m.activeTab)
 
@@ -536,7 +530,7 @@ func (m Model) View() string {
 
 			statusBadge := renderStatusBadge(item.PR)
 			sizeText := renderDiffSize(item.PR.Additions, item.PR.Deletions)
-			ciBadge := m.renderCIBadge(item.PR.Checks)
+			ciBadge := m.renderCIBadge(item.PR.Checks, refTime)
 			if item.PR.Partial {
 				// Discovery-only PR: unknown status/CI/diff, so render a
 				// loading indicator instead of misleading zero values.
@@ -833,10 +827,7 @@ func (m Model) renderDetailsModal() string {
 		)
 	}
 
-	refTime := m.now
-	if refTime.IsZero() {
-		refTime = time.Now()
-	}
+	refTime := m.refTime()
 	if !pr.UpdatedAt.IsZero() {
 		ageStr := humanAge(refTime.Sub(pr.UpdatedAt)) + " ago"
 		if !pr.CreatedAt.IsZero() {
@@ -907,11 +898,19 @@ func (m Model) renderDetailsModal() string {
 	// CI Checks
 	if pr.Checks.Total > 0 || pr.Checks.ReqTotal > 0 {
 		b.WriteString("\n")
-		ciTitle := "CI Checks: " + m.renderCIBadge(pr.Checks)
+		ciTitle := "CI Checks: " + m.renderCIBadge(pr.Checks, refTime)
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render(ciTitle))
 		b.WriteString("\n")
-		fmt.Fprintf(&b, "  Total: %d | Done: %d | Failed: %d | Running: %d\n",
-			pr.Checks.Total, pr.Checks.Done, pr.Checks.Failed, pr.Checks.Running)
+		durationSuffix := ""
+		if d, ok := pr.Checks.Duration(refTime); ok {
+			if pr.Checks.IsRunning() {
+				durationSuffix = " | Elapsed: " + humanAge(d)
+			} else {
+				durationSuffix = " | Duration: " + humanAge(d)
+			}
+		}
+		fmt.Fprintf(&b, "  Total: %d | Done: %d | Failed: %d | Running: %d%s\n",
+			pr.Checks.Total, pr.Checks.Done, pr.Checks.Failed, pr.Checks.Running, durationSuffix)
 	}
 
 	// Changed Files & Diffstat
@@ -948,12 +947,15 @@ func (m Model) spinnerChar() string {
 	return spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 }
 
-func (m Model) renderCIBadge(summary model.ChecksSummary) string {
+func (m Model) renderCIBadge(summary model.ChecksSummary, refTime time.Time) string {
 	badge := summary.BadgeWithSpinner(m.spinnerChar())
 	if badge == "" {
 		return ""
 	}
 	text := strings.TrimPrefix(badge, "CI: ")
+	if d, ok := summary.Duration(refTime); ok {
+		text += " " + humanAge(d)
+	}
 	if summary.IsFailing() {
 		return ciFailStyle.Render(text)
 	}

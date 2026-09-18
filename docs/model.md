@@ -18,6 +18,8 @@ ContextCheck represents an individual check run or status context.
 | `Name` | `name` | `string` |  | — |
 | `Status` | `status` | `string` |  | — |
 | `Conclusion` | `conclusion` | `string` |  | — |
+| `StartedAt` | `started_at` | `*time.Time` | yes | — |
+| `CompletedAt` | `completed_at` | `*time.Time` | yes | — |
 
 ## CheckRollup
 
@@ -38,6 +40,8 @@ ChecksSummary summarizes CI check status for a pull request.
 | ----- | ---- | ---- | --------- | ----------- |
 | `State` | `state` | `string` | yes | — |
 | `HasRequiredChecks` | `has_required_checks` | `bool` |  | — |
+| `StartedAt` | `started_at` | `*time.Time` | yes | — |
+| `CompletedAt` | `completed_at` | `*time.Time` | yes | — |
 | `ReqTotal` | `req_total` | `int` |  | — |
 | `ReqRunning` | `req_running` | `int` |  | — |
 | `ReqDone` | `req_done` | `int` |  | — |

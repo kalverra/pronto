@@ -181,3 +181,137 @@ func TestHydrateQueries_StaticStructure(t *testing.T) {
 	assert.Contains(t, hydrateFullQuery, "fragment FreshFields")
 	assert.Contains(t, hydrateFullQuery, "rateLimit")
 }
+
+func TestFreshFields_IncludesCheckTimestamps(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, freshFragment, "... on CheckRun { name status conclusion startedAt completedAt }")
+	assert.Contains(t, freshFragment, "... on StatusContext { context state createdAt }")
+}
+
+func TestConvertPR_CheckTimestamps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("check runs with startedAt and completedAt", func(t *testing.T) {
+		t.Parallel()
+		start1 := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+		end2 := time.Date(2026, 9, 17, 12, 10, 0, 0, time.UTC)
+
+		freshJSON := `{
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "SUCCESS",
+								"contexts": {
+									"totalCount": 2,
+									"nodes": [
+										{
+											"__typename": "CheckRun",
+											"name": "lint",
+											"status": "COMPLETED",
+											"conclusion": "SUCCESS",
+											"startedAt": "2026-09-17T12:00:00Z",
+											"completedAt": "2026-09-17T12:05:00Z"
+										},
+										{
+											"__typename": "CheckRun",
+											"name": "test",
+											"status": "COMPLETED",
+											"conclusion": "SUCCESS",
+											"startedAt": "2026-09-17T12:02:00Z",
+											"completedAt": "2026-09-17T12:10:00Z"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			}
+		}`
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 1}, stableFields{}, fresh, false, convertOpts{})
+		require.NotNil(t, pr.Checks.StartedAt)
+		require.NotNil(t, pr.Checks.CompletedAt)
+		assert.Equal(t, start1, *pr.Checks.StartedAt)
+		assert.Equal(t, end2, *pr.Checks.CompletedAt)
+
+		dur, ok := pr.Checks.Duration(time.Time{})
+		assert.True(t, ok)
+		assert.Equal(t, 10*time.Minute, dur)
+	})
+
+	t.Run("status context falls back to createdAt as startedAt", func(t *testing.T) {
+		t.Parallel()
+		created := time.Date(2026, 9, 17, 14, 30, 0, 0, time.UTC)
+
+		freshJSON := `{
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "SUCCESS",
+								"contexts": {
+									"totalCount": 1,
+									"nodes": [
+										{
+											"__typename": "StatusContext",
+											"context": "coverage",
+											"state": "SUCCESS",
+											"createdAt": "2026-09-17T14:30:00Z"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			}
+		}`
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 2}, stableFields{}, fresh, false, convertOpts{})
+		require.NotNil(t, pr.Checks.StartedAt)
+		assert.Equal(t, created, *pr.Checks.StartedAt)
+		assert.Nil(t, pr.Checks.CompletedAt)
+	})
+
+	t.Run("check run without timestamps leaves StartedAt and CompletedAt nil", func(t *testing.T) {
+		t.Parallel()
+		freshJSON := `{
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "SUCCESS",
+								"contexts": {
+									"totalCount": 1,
+									"nodes": [
+										{
+											"__typename": "CheckRun",
+											"name": "build",
+											"status": "COMPLETED",
+											"conclusion": "SUCCESS"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			}
+		}`
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 3}, stableFields{}, fresh, false, convertOpts{})
+		assert.Nil(t, pr.Checks.StartedAt)
+		assert.Nil(t, pr.Checks.CompletedAt)
+	})
+}

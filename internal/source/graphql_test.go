@@ -52,11 +52,14 @@ type testCommit struct {
 }
 
 type testCheckContext struct {
-	name       string
-	status     string
-	conclusion string
-	context    string
-	state      string
+	name        string
+	status      string
+	conclusion  string
+	context     string
+	state       string
+	startedAt   *time.Time
+	completedAt *time.Time
+	createdAt   *time.Time
 }
 
 type checkSpec = testCheckContext
@@ -180,18 +183,29 @@ func (s prSpec) hydrateJSON() string {
 		var checkNodes []string
 		for _, c := range s.checkContexts {
 			if c.context != "" {
+				extra := ""
+				if c.createdAt != nil && !c.createdAt.IsZero() {
+					extra += fmt.Sprintf(`, "createdAt": %q`, c.createdAt.Format(time.RFC3339))
+				}
 				checkNodes = append(checkNodes, fmt.Sprintf(`{
 					"__typename": "StatusContext",
 					"context": %q,
-					"state": %q
-				}`, c.context, c.state))
+					"state": %q%s
+				}`, c.context, c.state, extra))
 			} else {
+				extra := ""
+				if c.startedAt != nil && !c.startedAt.IsZero() {
+					extra += fmt.Sprintf(`, "startedAt": %q`, c.startedAt.Format(time.RFC3339))
+				}
+				if c.completedAt != nil && !c.completedAt.IsZero() {
+					extra += fmt.Sprintf(`, "completedAt": %q`, c.completedAt.Format(time.RFC3339))
+				}
 				checkNodes = append(checkNodes, fmt.Sprintf(`{
 					"__typename": "CheckRun",
 					"name": %q,
 					"status": %q,
-					"conclusion": %q
-				}`, c.name, c.status, c.conclusion))
+					"conclusion": %q%s
+				}`, c.name, c.status, c.conclusion, extra))
 			}
 		}
 		rollupJSON := "null"
@@ -3020,4 +3034,103 @@ func TestFetch_SecondaryRateLimitWithCachedPRsDegrades(t *testing.T) {
 
 	// PR 2 must not be cached
 	assert.False(t, store.hasPR("org/repo", 2))
+}
+
+func TestFetch_PopulatesCheckTimestamps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("check runs with startedAt and completedAt", func(t *testing.T) {
+		t.Parallel()
+
+		start1 := time.Date(2026, 9, 10, 9, 30, 0, 0, time.UTC)
+		end1 := time.Date(2026, 9, 10, 9, 45, 0, 0, time.UTC)
+		start2 := time.Date(2026, 9, 10, 9, 35, 0, 0, time.UTC)
+		end2 := time.Date(2026, 9, 10, 9, 50, 0, 0, time.UTC)
+
+		spec := prSpec{
+			num: 1, title: "PR with CheckRun Timestamps", repo: "org/repo", author: "alice", oid: "oid1",
+			mergeable: "MERGEABLE", mergeState: "CLEAN",
+			checkContexts: []checkSpec{
+				{
+					name:        "lint",
+					status:      "COMPLETED",
+					conclusion:  "SUCCESS",
+					startedAt:   &start1,
+					completedAt: &end1,
+				},
+				{
+					name:        "test",
+					status:      "COMPLETED",
+					conclusion:  "SUCCESS",
+					startedAt:   &start2,
+					completedAt: &end2,
+				},
+			},
+		}
+		fake := &fakeGitHub{
+			login: "kalverra",
+			searches: map[string][]discoveryPage{
+				"review-requested:@me": discoverPRs([]prSpec{spec}),
+			},
+			prs: map[string]map[int]string{
+				"org/repo": {1: spec.hydrateJSON()},
+			},
+		}
+
+		client := newTestGraphQLClient(t, fake.handler())
+		src := source.NewGraphQLSource(client, source.WithLogger(discardLogger()))
+
+		queue, err := src.Fetch(context.Background())
+		require.NoError(t, err)
+		require.Len(t, queue.Inbox, 1)
+
+		pr := queue.Inbox[0]
+		require.NotNil(t, pr.Checks.StartedAt)
+		require.NotNil(t, pr.Checks.CompletedAt)
+		assert.Equal(t, start1, *pr.Checks.StartedAt)
+		assert.Equal(t, end2, *pr.Checks.CompletedAt)
+
+		dur, ok := pr.Checks.Duration(time.Time{})
+		assert.True(t, ok)
+		assert.Equal(t, 20*time.Minute, dur)
+	})
+
+	t.Run("status context with createdAt falls back to startedAt", func(t *testing.T) {
+		t.Parallel()
+
+		created := time.Date(2026, 9, 10, 8, 15, 0, 0, time.UTC)
+
+		spec := prSpec{
+			num: 2, title: "PR with StatusContext CreatedAt", repo: "org/repo", author: "bob", oid: "oid2",
+			mergeable: "MERGEABLE", mergeState: "CLEAN",
+			checkContexts: []checkSpec{
+				{
+					context:   "continuous-integration/jenkins",
+					state:     "SUCCESS",
+					createdAt: &created,
+				},
+			},
+		}
+		fake := &fakeGitHub{
+			login: "kalverra",
+			searches: map[string][]discoveryPage{
+				"review-requested:@me": discoverPRs([]prSpec{spec}),
+			},
+			prs: map[string]map[int]string{
+				"org/repo": {2: spec.hydrateJSON()},
+			},
+		}
+
+		client := newTestGraphQLClient(t, fake.handler())
+		src := source.NewGraphQLSource(client, source.WithLogger(discardLogger()))
+
+		queue, err := src.Fetch(context.Background())
+		require.NoError(t, err)
+		require.Len(t, queue.Inbox, 1)
+
+		pr := queue.Inbox[0]
+		require.NotNil(t, pr.Checks.StartedAt)
+		assert.Equal(t, created, *pr.Checks.StartedAt)
+		assert.Nil(t, pr.Checks.CompletedAt)
+	})
 }

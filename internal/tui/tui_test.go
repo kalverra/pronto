@@ -1677,3 +1677,87 @@ func TestModel_PRStacks_CursorNavigationAndClamping(t *testing.T) {
 	require.NotNil(t, selectedClamped)
 	assert.Equal(t, 101, selectedClamped.Number, "collapsing while on child PR must snap cursor to bottom PR")
 }
+
+func TestModel_TableView_CIDuration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	startedRunning := now.Add(-3 * time.Minute)
+	startedDone := now.Add(-10 * time.Minute)
+	completedDone := now.Add(-6 * time.Minute)
+	startedFailed := now.Add(-15 * time.Minute)
+	completedFailed := now.Add(-3 * time.Minute)
+
+	prRunning := model.PullRequest{
+		Number:            101,
+		Title:             "Running CI PR",
+		RepoNameWithOwner: "org/repo",
+		Checks: model.ChecksSummary{
+			HasRequiredChecks: true,
+			ReqTotal:          2,
+			ReqDone:           1,
+			ReqRunning:        1,
+			StartedAt:         &startedRunning,
+		},
+	}
+
+	prCompleted := model.PullRequest{
+		Number:            102,
+		Title:             "Completed CI PR",
+		RepoNameWithOwner: "org/repo",
+		Checks: model.ChecksSummary{
+			HasRequiredChecks: true,
+			ReqTotal:          2,
+			ReqDone:           2,
+			ReqFailed:         0,
+			StartedAt:         &startedDone,
+			CompletedAt:       &completedDone,
+		},
+	}
+
+	prFailed := model.PullRequest{
+		Number:            103,
+		Title:             "Failed CI PR",
+		RepoNameWithOwner: "org/repo",
+		Checks: model.ChecksSummary{
+			HasRequiredChecks: true,
+			ReqTotal:          1,
+			ReqDone:           1,
+			ReqFailed:         1,
+			StartedAt:         &startedFailed,
+			CompletedAt:       &completedFailed,
+		},
+	}
+
+	prNoTimes := model.PullRequest{
+		Number:            104,
+		Title:             "No Times PR",
+		RepoNameWithOwner: "org/repo",
+		Checks: model.ChecksSummary{
+			HasRequiredChecks: true,
+			ReqTotal:          2,
+			ReqDone:           2,
+			ReqFailed:         0,
+		},
+	}
+
+	q := model.Queue{
+		Inbox: []model.PullRequest{prRunning, prCompleted, prFailed, prNoTimes},
+	}
+
+	m := tui.New(q, tui.WithNow(now), tui.WithDimensions(140, 30))
+	view := m.View()
+
+	// Running checks show spinner and compact duration
+	assert.Contains(t, view, "1/2 req (1 ⠋) 3m")
+	// Completed checks show pass and compact duration
+	assert.Contains(t, view, "✓ 2/2 4m")
+	// Completed failed checks show failure and compact duration
+	assert.Contains(t, view, "✗ 1 req failed 12m")
+
+	// No timestamps check retains standard badge without duration
+	mOnly := tui.New(model.Queue{Inbox: []model.PullRequest{prNoTimes}}, tui.WithNow(now), tui.WithDimensions(140, 30))
+	viewOnly := mOnly.View()
+	assert.Contains(t, viewOnly, "✓ 2/2")
+	assert.NotRegexp(t, `✓ 2/2 \d+`, viewOnly)
+}

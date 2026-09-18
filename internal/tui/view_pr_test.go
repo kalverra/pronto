@@ -284,3 +284,87 @@ func TestModel_ViewPR_DiffReadyMsg_ErrorBanner(t *testing.T) {
 	assert.Equal(t, 101, model2.ViewErrPR().Number)
 	assert.Contains(t, model2.View(), "failed to view #101: tarball download failed")
 }
+
+func TestModel_DetailModal_CIDuration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	startedRunning := now.Add(-5 * time.Minute)
+	startedDone := now.Add(-20 * time.Minute)
+	completedDone := now.Add(-12 * time.Minute)
+
+	t.Run("running CI shows elapsed duration", func(t *testing.T) {
+		t.Parallel()
+
+		pr := model.PullRequest{
+			Number:            101,
+			Title:             "Running CI PR",
+			RepoNameWithOwner: "org/repo",
+			Checks: model.ChecksSummary{
+				Total:     2,
+				Done:      1,
+				Running:   1,
+				StartedAt: &startedRunning,
+			},
+		}
+		q := model.Queue{Inbox: []model.PullRequest{pr}}
+		m := tui.New(q, tui.WithNow(now))
+
+		mOpened, _ := sendKey(m, tea.KeyEnter)
+		view := mOpened.View()
+
+		assert.Contains(t, view, "CI Checks:")
+		assert.Contains(t, view, "1/2 (1 ⠋) 5m")
+		assert.Contains(t, view, "Total: 2 | Done: 1 | Failed: 0 | Running: 1 | Elapsed: 5m")
+	})
+
+	t.Run("settled CI shows total duration", func(t *testing.T) {
+		t.Parallel()
+
+		pr := model.PullRequest{
+			Number:            102,
+			Title:             "Settled CI PR",
+			RepoNameWithOwner: "org/repo",
+			Checks: model.ChecksSummary{
+				Total:       2,
+				Done:        2,
+				StartedAt:   &startedDone,
+				CompletedAt: &completedDone,
+			},
+		}
+		q := model.Queue{Inbox: []model.PullRequest{pr}}
+		m := tui.New(q, tui.WithNow(now))
+
+		mOpened, _ := sendKey(m, tea.KeyEnter)
+		view := mOpened.View()
+
+		assert.Contains(t, view, "CI Checks:")
+		assert.Contains(t, view, "✓ 2/2 8m")
+		assert.Contains(t, view, "Total: 2 | Done: 2 | Failed: 0 | Running: 0 | Duration: 8m")
+	})
+
+	t.Run("checks without timestamps do not show elapsed or duration", func(t *testing.T) {
+		t.Parallel()
+
+		pr := model.PullRequest{
+			Number:            103,
+			Title:             "No Timestamps PR",
+			RepoNameWithOwner: "org/repo",
+			Checks: model.ChecksSummary{
+				Total: 2,
+				Done:  2,
+			},
+		}
+		q := model.Queue{Inbox: []model.PullRequest{pr}}
+		m := tui.New(q, tui.WithNow(now))
+
+		mOpened, _ := sendKey(m, tea.KeyEnter)
+		view := mOpened.View()
+
+		assert.Contains(t, view, "CI Checks:")
+		assert.Contains(t, view, "✓ 2/2")
+		assert.Contains(t, view, "Total: 2 | Done: 2 | Failed: 0 | Running: 0")
+		assert.NotContains(t, view, "Elapsed:")
+		assert.NotContains(t, view, "Duration:")
+	})
+}

@@ -2,6 +2,7 @@ package model_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -530,5 +531,251 @@ func TestComputeChecksSummary_RollupCountsAndState(t *testing.T) {
 		assert.Equal(t, 44, summary.Failed)
 		assert.Equal(t, 181, summary.Succeeded())
 		assert.Equal(t, "CI: ✓ 181  ✗ 44", summary.BadgeWithSpinner("⠋"))
+	})
+}
+
+func TestChecksSummary_Duration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	start := now.Add(-10 * time.Minute)
+	complete := now.Add(-2 * time.Minute)
+	zeroTime := time.Time{}
+
+	tests := []struct {
+		name         string
+		summary      model.ChecksSummary
+		refTime      time.Time
+		wantDuration time.Duration
+		wantOK       bool
+	}{
+		{
+			name:         "started_at is nil",
+			summary:      model.ChecksSummary{StartedAt: nil},
+			refTime:      now,
+			wantDuration: 0,
+			wantOK:       false,
+		},
+		{
+			name:         "started_at is zero time",
+			summary:      model.ChecksSummary{StartedAt: &zeroTime},
+			refTime:      now,
+			wantDuration: 0,
+			wantOK:       false,
+		},
+		{
+			name: "running checks duration against refTime",
+			summary: model.ChecksSummary{
+				Running:   1,
+				Total:     2,
+				StartedAt: &start,
+			},
+			refTime:      now,
+			wantDuration: 10 * time.Minute,
+			wantOK:       true,
+		},
+		{
+			name: "running checks refTime earlier than started_at clamps to zero",
+			summary: model.ChecksSummary{
+				Running:   1,
+				Total:     2,
+				StartedAt: &now,
+			},
+			refTime:      now.Add(-5 * time.Minute),
+			wantDuration: 0,
+			wantOK:       true,
+		},
+		{
+			name: "settled checks duration between StartedAt and CompletedAt",
+			summary: model.ChecksSummary{
+				Done:        2,
+				Total:       2,
+				StartedAt:   &start,
+				CompletedAt: &complete,
+			},
+			refTime:      now,
+			wantDuration: 8 * time.Minute,
+			wantOK:       true,
+		},
+		{
+			name: "settled checks CompletedAt before StartedAt clamps to zero",
+			summary: model.ChecksSummary{
+				Done:        2,
+				Total:       2,
+				StartedAt:   &complete,
+				CompletedAt: &start,
+			},
+			refTime:      now,
+			wantDuration: 0,
+			wantOK:       true,
+		},
+		{
+			name: "completed checks but CompletedAt is nil returns false",
+			summary: model.ChecksSummary{
+				Done:      2,
+				Total:     2,
+				StartedAt: &start,
+			},
+			refTime:      now,
+			wantDuration: 0,
+			wantOK:       false,
+		},
+		{
+			name: "completed checks but CompletedAt is zero time returns false",
+			summary: model.ChecksSummary{
+				Done:        2,
+				Total:       2,
+				StartedAt:   &start,
+				CompletedAt: &zeroTime,
+			},
+			refTime:      now,
+			wantDuration: 0,
+			wantOK:       false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, ok := tc.summary.Duration(tc.refTime)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantDuration, d)
+		})
+	}
+}
+
+func TestComputeChecksSummary_Timestamps(t *testing.T) {
+	t.Parallel()
+
+	t1 := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 9, 17, 10, 5, 0, 0, time.UTC)
+	t3 := time.Date(2026, 9, 17, 10, 15, 0, 0, time.UTC)
+	t4 := time.Date(2026, 9, 17, 10, 20, 0, 0, time.UTC)
+
+	tEarlier := t1.Add(-time.Hour)
+	tLater := t4.Add(time.Hour)
+
+	t.Run("required mode - all completed aggregates earliest start and latest completion", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t2, CompletedAt: &t3},
+			{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t1, CompletedAt: &t4},
+			{Name: "opt", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &tEarlier, CompletedAt: &tLater},
+		}
+
+		summary := model.ComputeChecksSummary([]string{"lint", "test"}, checks)
+		assert.NotNil(t, summary.StartedAt)
+		assert.NotNil(t, summary.CompletedAt)
+		assert.Equal(t, t1, *summary.StartedAt)
+		assert.Equal(t, t4, *summary.CompletedAt)
+
+		d, ok := summary.Duration(t4.Add(5 * time.Minute))
+		assert.True(t, ok)
+		assert.Equal(t, 20*time.Minute, d)
+	})
+
+	t.Run(
+		"required mode - running check leaves CompletedAt nil and duration computes against refTime",
+		func(t *testing.T) {
+			t.Parallel()
+			checks := []model.ContextCheck{
+				{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t2, CompletedAt: &t3},
+				{Name: "test", Status: "IN_PROGRESS", StartedAt: &t1},
+			}
+
+			summary := model.ComputeChecksSummary([]string{"lint", "test"}, checks)
+			assert.NotNil(t, summary.StartedAt)
+			assert.Nil(t, summary.CompletedAt)
+			assert.Equal(t, t1, *summary.StartedAt)
+
+			refTime := t1.Add(25 * time.Minute)
+			d, ok := summary.Duration(refTime)
+			assert.True(t, ok)
+			assert.Equal(t, 25*time.Minute, d)
+		},
+	)
+
+	t.Run("required mode - check not yet reported leaves CompletedAt nil and ok false", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t2, CompletedAt: &t3},
+		}
+
+		summary := model.ComputeChecksSummary([]string{"lint", "test"}, checks)
+		assert.NotNil(t, summary.StartedAt)
+		assert.Nil(t, summary.CompletedAt)
+		assert.Equal(t, t2, *summary.StartedAt)
+
+		_, ok := summary.Duration(t3.Add(5 * time.Minute))
+		assert.False(t, ok, "not running and not all required checks settled should return ok=false")
+	})
+
+	t.Run("fallback mode - all completed aggregates earliest start and latest completion", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t2, CompletedAt: &t3},
+			{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t1, CompletedAt: &t4},
+		}
+
+		summary := model.ComputeChecksSummary(nil, checks)
+		assert.NotNil(t, summary.StartedAt)
+		assert.NotNil(t, summary.CompletedAt)
+		assert.Equal(t, t1, *summary.StartedAt)
+		assert.Equal(t, t4, *summary.CompletedAt)
+
+		d, ok := summary.Duration(t4.Add(5 * time.Minute))
+		assert.True(t, ok)
+		assert.Equal(t, 20*time.Minute, d)
+	})
+
+	t.Run("fallback mode - running check leaves CompletedAt nil and computes against refTime", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t2, CompletedAt: &t3},
+			{Name: "test", Status: "IN_PROGRESS", StartedAt: &t1},
+		}
+
+		summary := model.ComputeChecksSummary(nil, checks)
+		assert.NotNil(t, summary.StartedAt)
+		assert.Nil(t, summary.CompletedAt)
+		assert.Equal(t, t1, *summary.StartedAt)
+
+		refTime := t1.Add(30 * time.Minute)
+		d, ok := summary.Duration(refTime)
+		assert.True(t, ok)
+		assert.Equal(t, 30*time.Minute, d)
+	})
+
+	t.Run("fallback mode - unset timestamps return ok false", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		}
+
+		summary := model.ComputeChecksSummary(nil, checks)
+		assert.Nil(t, summary.StartedAt)
+		assert.Nil(t, summary.CompletedAt)
+
+		_, ok := summary.Duration(time.Now())
+		assert.False(t, ok)
+	})
+
+	t.Run("rollup mode - aggregates timestamps from checks when present", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t2, CompletedAt: &t3},
+			{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: &t1, CompletedAt: &t4},
+		}
+		rollup := model.CheckRollup{
+			TotalCount: 2,
+			RunCounts:  map[string]int{"SUCCESS": 2},
+		}
+
+		summary := model.ComputeChecksSummaryWithRollup(nil, checks, rollup)
+		assert.NotNil(t, summary.StartedAt)
+		assert.NotNil(t, summary.CompletedAt)
+		assert.Equal(t, t1, *summary.StartedAt)
+		assert.Equal(t, t4, *summary.CompletedAt)
 	})
 }

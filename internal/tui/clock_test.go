@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kalverra/pronto/internal/model"
+	"github.com/kalverra/pronto/internal/score"
 )
 
 func TestHandleQueueLoaded_AdvancesClockWhenNotInjected(t *testing.T) {
@@ -67,4 +68,37 @@ func TestRemovePR_DoesNotAdvanceLastFetch(t *testing.T) {
 	got := m.removePR(q.Inbox[0])
 	assert.True(t, got.lastFetch.Equal(fetchAt), "removing a PR is not a fetch; lastFetch must not advance")
 	assert.Empty(t, got.queue.Inbox)
+}
+
+func TestSpinnerTick_AdvancesClockWhenNotInjected(t *testing.T) {
+	t.Parallel()
+
+	startup := time.Now().Add(-time.Hour)
+	m := Model{
+		now:       startup,
+		activeTab: TabInbox,
+		inboxItems: []score.Scored{
+			{PR: model.PullRequest{Checks: model.ChecksSummary{Running: 1}}},
+		},
+	}
+	updated, _ := m.Update(SpinnerTickMsg{})
+	got := updated.(Model)
+	require.True(t, got.now.After(startup), "clock must advance on spinner tick when CI is running")
+}
+
+func TestSpinnerTick_KeepsInjectedClock(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	m := Model{
+		now:         fixed,
+		nowInjected: true,
+		activeTab:   TabInbox,
+		inboxItems: []score.Scored{
+			{PR: model.PullRequest{Checks: model.ChecksSummary{Running: 1}}},
+		},
+	}
+	updated, _ := m.Update(SpinnerTickMsg{})
+	got := updated.(Model)
+	assert.True(t, got.now.Equal(fixed), "injected clock must stay fixed for deterministic tests")
 }

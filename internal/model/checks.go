@@ -4,6 +4,7 @@ package model
 import (
 	"fmt"
 	"slices"
+	"time"
 )
 
 // CheckState represents the status of a check run or context.
@@ -11,9 +12,11 @@ type CheckState string
 
 // ContextCheck represents an individual check run or status context.
 type ContextCheck struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 // CheckRollup captures rollup-level metadata from GitHub statusCheckRollup.
@@ -26,8 +29,10 @@ type CheckRollup struct {
 
 // ChecksSummary summarizes CI check status for a pull request.
 type ChecksSummary struct {
-	State             string `json:"state,omitempty"`
-	HasRequiredChecks bool   `json:"has_required_checks"`
+	State             string     `json:"state,omitempty"`
+	HasRequiredChecks bool       `json:"has_required_checks"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	CompletedAt       *time.Time `json:"completed_at,omitempty"`
 
 	ReqTotal   int `json:"req_total"`
 	ReqRunning int `json:"req_running"`
@@ -66,7 +71,7 @@ func ComputeChecksSummaryWithRollup(
 		return computeRequiredChecksSummary(requiredContexts, checks, rollup.State)
 	}
 	if rollup.TotalCount > 0 || len(rollup.RunCounts) > 0 || len(rollup.StatusCounts) > 0 {
-		return aggregateRollupCounts(rollup)
+		return aggregateRollupCounts(rollup, checks)
 	}
 	return computeFallbackChecksSummary(checks, rollup.State)
 }
@@ -78,6 +83,7 @@ func computeRequiredChecksSummary(requiredContexts []string, checks []ContextChe
 		ReqTotal:          len(requiredContexts),
 	}
 
+	relevantChecks := make([]ContextCheck, 0, len(requiredContexts))
 	for _, req := range requiredContexts {
 		idx := slices.IndexFunc(checks, func(c ContextCheck) bool {
 			return c.Name == req
@@ -85,7 +91,9 @@ func computeRequiredChecksSummary(requiredContexts []string, checks []ContextChe
 		if idx == -1 {
 			continue
 		}
-		done, failed, running := classifyCheck(checks[idx])
+		c := checks[idx]
+		relevantChecks = append(relevantChecks, c)
+		done, failed, running := classifyCheck(c)
 		if done {
 			summary.ReqDone++
 		}
@@ -97,10 +105,13 @@ func computeRequiredChecksSummary(requiredContexts []string, checks []ContextChe
 		}
 	}
 
+	allDone := summary.ReqTotal > 0 && summary.ReqDone == summary.ReqTotal && summary.ReqRunning == 0
+	summary.StartedAt, summary.CompletedAt = aggregateTimestamps(relevantChecks, allDone)
+
 	return summary
 }
 
-func aggregateRollupCounts(rollup CheckRollup) ChecksSummary {
+func aggregateRollupCounts(rollup CheckRollup, checks []ContextCheck) ChecksSummary {
 	var failed, running, success, skipped, pending int
 	for state, count := range rollup.RunCounts {
 		switch state {
@@ -145,13 +156,18 @@ func aggregateRollupCounts(rollup CheckRollup) ChecksSummary {
 		}
 	}
 
-	return ChecksSummary{
+	summary := ChecksSummary{
 		State:   rollup.State,
 		Total:   total,
 		Running: running,
 		Done:    done,
 		Failed:  failed,
 	}
+
+	allDone := total > 0 && done == total && running == 0
+	summary.StartedAt, summary.CompletedAt = aggregateTimestamps(checks, allDone)
+
+	return summary
 }
 
 func computeFallbackChecksSummary(checks []ContextCheck, state string) ChecksSummary {
@@ -184,7 +200,38 @@ func computeFallbackChecksSummary(checks []ContextCheck, state string) ChecksSum
 		summary.Failed = 1
 	}
 
+	allDone := summary.Total > 0 && summary.Done == summary.Total && summary.Running == 0
+	summary.StartedAt, summary.CompletedAt = aggregateTimestamps(checks, allDone)
+
 	return summary
+}
+
+func aggregateTimestamps(checks []ContextCheck, allDone bool) (startedAt, completedAt *time.Time) {
+	var earliestStart *time.Time
+	var latestComplete *time.Time
+
+	for _, c := range checks {
+		if c.StartedAt != nil && !c.StartedAt.IsZero() {
+			if earliestStart == nil || c.StartedAt.Before(*earliestStart) {
+				t := *c.StartedAt
+				earliestStart = &t
+			}
+		}
+		if c.CompletedAt != nil && !c.CompletedAt.IsZero() {
+			if latestComplete == nil || c.CompletedAt.After(*latestComplete) {
+				t := *c.CompletedAt
+				latestComplete = &t
+			}
+		}
+	}
+
+	if earliestStart != nil {
+		startedAt = earliestStart
+	}
+	if allDone && latestComplete != nil {
+		completedAt = latestComplete
+	}
+	return startedAt, completedAt
 }
 
 // classifyCheck classifies a single check run or status context.
@@ -253,6 +300,23 @@ func (c ChecksSummary) IsSettled() bool {
 		return c.ReqTotal > 0 && c.ReqDone == c.ReqTotal
 	}
 	return c.Total > 0 && c.Done == c.Total
+}
+
+// Duration returns the elapsed duration of checks. If checks are running, it
+// calculates elapsed time against refTime. If checks are settled and CompletedAt
+// is set, it calculates duration from StartedAt to CompletedAt. If StartedAt is
+// nil/zero, or if completed but CompletedAt is nil/zero, it returns (0, false).
+func (c ChecksSummary) Duration(refTime time.Time) (time.Duration, bool) {
+	if c.StartedAt == nil || c.StartedAt.IsZero() {
+		return 0, false
+	}
+	if c.IsRunning() {
+		return max(0, refTime.Sub(*c.StartedAt)), true
+	}
+	if c.CompletedAt != nil && !c.CompletedAt.IsZero() {
+		return max(0, c.CompletedAt.Sub(*c.StartedAt)), true
+	}
+	return 0, false
 }
 
 // Badge returns the CI badge string formatted for the TUI using the default static spinner.

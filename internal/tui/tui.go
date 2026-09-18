@@ -323,6 +323,13 @@ func (m Model) SpinnerFrame() int {
 	return m.spinnerFrame
 }
 
+func (m Model) refTime() time.Time {
+	if !m.now.IsZero() {
+		return m.now
+	}
+	return time.Now()
+}
+
 func (m Model) hasRunningCI() bool {
 	for _, it := range m.inboxItems {
 		if it.PR.Checks.IsRunning() {
@@ -603,6 +610,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SpinnerTickMsg:
 		if !m.hasRunningCI() && !m.hasPartialPRs() {
 			return m, nil
+		}
+		if !m.nowInjected {
+			m.now = time.Now()
 		}
 		m.spinnerFrame++
 		return m, nil
