@@ -1464,6 +1464,8 @@ func (m Model) VisibleRows() int {
 	}
 	// Chrome lines: margins (2), tabs (2), table headers & border (3), scroll indicator (1), help bar (2) = 10 lines
 	chrome := 10
+	notificationsHeight := 1 + max(1, len(m.notifications)) + 1
+	chrome += notificationsHeight
 	if m.statusBannerShown() {
 		chrome += 2
 	}
@@ -1480,7 +1482,6 @@ func (m Model) statusBannerShown() bool {
 	return m.fetchErr != nil || m.refreshing || m.staleSnapshot ||
 		(m.closeErr != nil && m.closeErrPR != nil) ||
 		m.confirmClosePR != nil || m.closingPR != nil || m.lastClosedPR != nil ||
-		m.LastNotification() != nil ||
 		(m.viewErr != nil && m.viewErrPR != nil)
 }
 

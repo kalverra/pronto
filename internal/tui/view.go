@@ -462,6 +462,8 @@ func (m Model) View() string {
 	b.WriteString(tabs)
 	b.WriteString("\n\n")
 
+	b.WriteString(m.renderNotificationsArea())
+
 	// Body
 	list := m.activeList()
 	switch {
@@ -614,11 +616,11 @@ func (m Model) View() string {
 
 	// Help bar
 	b.WriteString("\n")
-	b.WriteString(
-		helpStyle.Render(
-			"enter: details • d: diff • ↑/↓: navigate • space/e: expand • tab: switch • o: open • x: close stale • ?: why score • r: refresh • q: quit",
-		),
-	)
+	helpText := "enter: details • d: diff • ↑/↓: navigate • space/e: expand • tab: switch • o: open • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
+	if m.IsNotificationFocused() {
+		helpText = "enter/o: open • ↑/↓: select • x: dismiss • esc: back to PRs • q: quit"
+	}
+	b.WriteString(helpStyle.Render(helpText))
 	b.WriteString("\n")
 
 	return appStyle.Render(b.String())
@@ -641,8 +643,6 @@ func (m Model) renderStatusBanner() string {
 	case m.lastClosedPR != nil:
 		return successBannerStyle.Render(fmt.Sprintf(
 			"closed #%d as stale", m.lastClosedPR.Number))
-	case m.LastNotification() != nil:
-		return m.renderNotificationBanner()
 	case m.fetchErr != nil:
 		if m.lastFetch.IsZero() {
 			return errorBannerStyle.Render(fmt.Sprintf(
@@ -664,39 +664,108 @@ func (m Model) renderStatusBanner() string {
 	}
 }
 
-func (m Model) renderNotificationBanner() string {
-	n := m.LastNotification()
-	if n == nil {
-		return ""
-	}
-	title := strings.TrimPrefix(n.Title, "PRonto: ")
-	content := fmt.Sprintf("★ %s: %s", title, n.Message)
+func (m Model) renderNotificationsArea() string {
+	var b strings.Builder
+
+	headerStyle := dividerStyle
 	if m.IsNotificationFocused() {
-		content = "> " + content
+		headerStyle = cursorStyle
+	}
+	header := fmt.Sprintf("── NOTIFICATIONS (%d) ──", len(m.notifications))
+	b.WriteString(headerStyle.Render(header))
+	b.WriteString("\n")
+
+	if len(m.notifications) == 0 {
+		b.WriteString(faintStyle.Render("  No recent notifications"))
+		b.WriteString("\n\n")
+		return b.String()
 	}
 
-	var style lipgloss.Style
+	for i, n := range m.notifications {
+		prefix := "  "
+		if m.IsNotificationFocused() && i == m.notificationCursor {
+			prefix = cursorStyle.Render("> ")
+		}
+
+		badge := notificationBadge(n)
+
+		ref := n.Repo
+		if ref != "" && n.PRNumber > 0 {
+			ref = fmt.Sprintf("%s#%d", ref, n.PRNumber)
+		} else if n.PRNumber > 0 {
+			ref = fmt.Sprintf("#%d", n.PRNumber)
+		}
+
+		text := n.Message
+		if text == "" {
+			text = n.Title
+		}
+
+		age := "0s"
+		if !n.SubmittedAt.IsZero() {
+			d := max(m.currentTime().Sub(n.SubmittedAt), 0)
+			age = humanAge(d)
+		}
+		ts := faintStyle.Render(age + " ago")
+
+		var rowParts []string
+		if ref != "" {
+			rowParts = append(rowParts, ref)
+		}
+		if text != "" {
+			rowParts = append(rowParts, text)
+		}
+		content := strings.Join(rowParts, " ")
+
+		if content != "" {
+			fmt.Fprintf(&b, "%s%s %s  %s\n", prefix, badge, content, ts)
+		} else {
+			fmt.Fprintf(&b, "%s%s  %s\n", prefix, badge, ts)
+		}
+	}
+
+	b.WriteString("\n")
+	return b.String()
+}
+
+func notificationBadge(n notify.Notification) string {
+	var (
+		badgeText  string
+		badgeStyle lipgloss.Style
+	)
 	switch n.Trigger {
-	case notify.TriggerCIFailed, notify.TriggerConflict:
-		style = notificationFailStyle
+	case notify.TriggerCIFailed:
+		badgeText = "[CI FAIL]"
+		badgeStyle = notificationFailStyle
+	case notify.TriggerConflict:
+		badgeText = "[CONFLICT]"
+		badgeStyle = notificationFailStyle
 	case notify.TriggerReviewReceived:
 		switch n.ReviewState {
 		case "CHANGES_REQUESTED":
-			style = notificationFailStyle
+			badgeText = "[CHANGES REQ]"
+			badgeStyle = notificationFailStyle
 		case "APPROVED":
-			style = notificationPassStyle
+			badgeText = "[APPROVED]"
+			badgeStyle = notificationPassStyle
+		case "COMMENTED":
+			badgeText = "[COMMENT]"
+			badgeStyle = notificationNeutralStyle
 		default:
-			style = notificationNeutralStyle
+			badgeText = "[REVIEW]"
+			badgeStyle = notificationNeutralStyle
 		}
 	case notify.TriggerPRMerged:
-		style = notificationMergedStyle
+		badgeText = "[MERGED]"
+		badgeStyle = notificationMergedStyle
 	case notify.TriggerCIPassed:
-		style = notificationPassStyle
+		badgeText = "[CI PASS]"
+		badgeStyle = notificationPassStyle
 	default:
-		style = notificationNeutralStyle
+		badgeText = "[NOTIF]"
+		badgeStyle = notificationNeutralStyle
 	}
-
-	return style.Render(content)
+	return badgeStyle.Render(badgeText)
 }
 
 // humanAge renders a duration as a compact age string like "45s", "3m", "2h".

@@ -573,9 +573,9 @@ func TestModel_TableHeadersAndScoresHidden(t *testing.T) {
 func TestModel_ScrollWithArrowKeys(t *testing.T) {
 	t.Parallel()
 
-	// 25 PRs in inbox, terminal height 14 (leaving around 5-6 visible rows)
+	// 25 PRs in inbox, terminal height 17 (leaving around 4-5 visible rows after notification chrome)
 	q := makeLargeTestQueue(25, 0)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 14))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 17))
 
 	assert.Equal(t, 0, m.Cursor())
 	assert.Equal(t, 0, m.ScrollOffset())
@@ -1337,7 +1337,7 @@ func TestModel_ScrollIndicatorCountsVisiblePRs(t *testing.T) {
 	// The scroll indicator must count item rows, not display rows: display
 	// row indices include section dividers and can exceed the PR count.
 	q := makeLargeTestQueue(25, 0)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 14))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 17))
 
 	mEnd, _ := sendRune(m, 'G')
 	atEnd := mEnd.(tui.Model)
