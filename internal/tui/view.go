@@ -213,6 +213,8 @@ func (m Model) buildDisplayRows(tab Tab) []displayRow {
 	refTime := m.refTime()
 
 	switch tab {
+	case TabFocus:
+		return m.buildFocusDisplayRows(list, refTime)
 	case TabInbox:
 		return m.buildInboxDisplayRows(list, refTime)
 	case TabMine:
@@ -459,6 +461,147 @@ func (m Model) buildMineDisplayRows(list []score.Scored, refTime time.Time) []di
 			dividerText: fmt.Sprintf("── STALE (%d) ──", len(staleIndices)),
 		})
 		displayRows = append(displayRows, m.buildCategoryDisplayRows(list, staleIndices)...)
+	}
+	return displayRows
+}
+
+type focusSection int
+
+const (
+	focusSectionAttention focusSection = iota
+	focusSectionActionRequired
+	focusSectionMergeQueue
+	focusSectionReadyToMerge
+	focusSectionInReview
+	focusSectionBlocked
+	focusSectionDrafts
+	focusSectionStale
+	focusSectionUnknown
+)
+
+var focusSections = []struct {
+	id    focusSection
+	title string
+}{
+	{focusSectionAttention, "── NEEDS YOUR ATTENTION (%d) ──"},
+	{focusSectionActionRequired, "── ACTION REQUIRED (%d) ──"},
+	{focusSectionMergeQueue, "── MERGE QUEUE (%d) ──"},
+	{focusSectionReadyToMerge, "── READY TO MERGE (%d) ──"},
+	{focusSectionInReview, "── IN REVIEW (%d) ──"},
+	{focusSectionBlocked, "── BLOCKED (%d) ──"},
+	{focusSectionDrafts, "── DRAFTS (%d) ──"},
+	{focusSectionStale, "── STALE (%d) ──"},
+}
+
+func computeFocusStackCategories(
+	list []score.Scored,
+	isAuthored func(model.PullRequest) bool,
+	refTime time.Time,
+) (map[string]model.MineCategory, map[string]model.InboxCategory) {
+	mineStackCat := make(map[string]model.MineCategory)
+	inboxStackCat := make(map[string]model.InboxCategory)
+	for _, item := range list {
+		if !item.PR.IsPartOfStack() {
+			continue
+		}
+		key := item.PR.StackKey()
+		if isAuthored(item.PR) {
+			if !item.PR.InMergeQueue() {
+				cat := item.PR.MineCategory(refTime)
+				if current, ok := mineStackCat[key]; !ok || cat < current {
+					mineStackCat[key] = cat
+				}
+			}
+		} else {
+			cat := item.PR.InboxCategory(refTime)
+			if current, ok := inboxStackCat[key]; !ok || cat < current {
+				inboxStackCat[key] = cat
+			}
+		}
+	}
+	return mineStackCat, inboxStackCat
+}
+
+func categorizeFocusItem(
+	item score.Scored,
+	isAuthored bool,
+	refTime time.Time,
+	mineStackCat map[string]model.MineCategory,
+	inboxStackCat map[string]model.InboxCategory,
+) focusSection {
+	if isAuthored {
+		cat := item.PR.MineCategory(refTime)
+		if item.PR.IsPartOfStack() && !item.PR.InMergeQueue() {
+			if eff, ok := mineStackCat[item.PR.StackKey()]; ok {
+				cat = eff
+			}
+		}
+		switch cat {
+		case model.MineCategoryActionRequired:
+			return focusSectionActionRequired
+		case model.MineCategoryQueued:
+			return focusSectionMergeQueue
+		case model.MineCategoryReadyToMerge:
+			return focusSectionReadyToMerge
+		case model.MineCategoryInReview:
+			return focusSectionInReview
+		case model.MineCategoryDraft:
+			return focusSectionDrafts
+		case model.MineCategoryStale:
+			return focusSectionStale
+		}
+		return focusSectionUnknown
+	}
+
+	cat := item.PR.InboxCategory(refTime)
+	if item.PR.IsPartOfStack() {
+		if eff, ok := inboxStackCat[item.PR.StackKey()]; ok {
+			cat = eff
+		}
+	}
+	switch cat {
+	case model.CategoryAttention:
+		return focusSectionAttention
+	case model.CategoryBlocked:
+		return focusSectionBlocked
+	case model.CategoryStale:
+		return focusSectionStale
+	}
+	return focusSectionUnknown
+}
+
+func (m Model) buildFocusDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
+	if len(list) == 0 {
+		return nil
+	}
+
+	mineKeys := make(map[model.PRKey]bool, len(m.mineItems))
+	for _, it := range m.mineItems {
+		mineKeys[it.PR.Key()] = true
+	}
+	isAuthored := func(pr model.PullRequest) bool {
+		return mineKeys[pr.Key()] || (m.viewer != "" && strings.EqualFold(pr.Author, m.viewer))
+	}
+
+	mineStackCat, inboxStackCat := computeFocusStackCategories(list, isAuthored, refTime)
+
+	sectionIndices := make(map[focusSection][]int)
+	for i, item := range list {
+		sec := categorizeFocusItem(item, isAuthored(item.PR), refTime, mineStackCat, inboxStackCat)
+		sectionIndices[sec] = append(sectionIndices[sec], i)
+	}
+
+	displayRows := make([]displayRow, 0, len(list)+len(focusSections))
+	for _, sec := range focusSections {
+		indices := sectionIndices[sec.id]
+		if len(indices) == 0 {
+			continue
+		}
+		displayRows = append(displayRows, displayRow{
+			kind:        rowDivider,
+			dividerText: fmt.Sprintf(sec.title, len(indices)),
+		})
+		displayRows = append(displayRows, m.buildCategoryDisplayRows(list, indices)...)
 	}
 	return displayRows
 }

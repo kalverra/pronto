@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/kalverra/pronto/internal/cache"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/tui"
@@ -457,4 +459,313 @@ func TestModel_FocusedPR_StarPrefix(t *testing.T) {
 
 	// Help bar displays 'f: focus'
 	assert.Contains(t, view, "f: focus")
+}
+
+func TestModel_FocusTab_CategoryDividers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty Focus tab renders no pull requests message", func(t *testing.T) {
+		t.Parallel()
+		q := model.Queue{}
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithActiveTab(tui.TabFocus),
+		)
+		view := m.View()
+		assert.Contains(t, view, "No pull requests in this view.")
+	})
+
+	t.Run("renders all non-empty category dividers and preserves section order", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+
+		// Inbox PRs (viewer is reviewer)
+		prAttention := model.PullRequest{
+			Number:            101,
+			Title:             "Inbox Attention PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			Mergeable:         "MERGEABLE",
+			MergeStateStatus:  "CLEAN",
+			MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqDone: 2},
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		prBlocked := model.PullRequest{
+			Number:            102,
+			Title:             "Inbox Blocked PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "bob",
+			Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqFailed: 1},
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-2 * time.Hour),
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-2 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		prStaleInbox := model.PullRequest{
+			Number:            103,
+			Title:             "Inbox Stale PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "charlie",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-40 * 24 * time.Hour),
+			TimelineItems: []model.TimelineItem{
+				{
+					Type:         model.TimelineItemReviewRequested,
+					CreatedAt:    now.Add(-40 * 24 * time.Hour),
+					ReviewerUser: "kalverra",
+				},
+			},
+		}
+
+		// Authored PRs (authored by kalverra)
+		prAction := model.PullRequest{
+			Number:            201,
+			Title:             "Mine Action Required PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqFailed: 1},
+			ReviewDecision:    "CHANGES_REQUESTED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+		}
+		prQueue := model.PullRequest{
+			Number:            202,
+			Title:             "Mine Queued PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			IsInMergeQueue:    true,
+			UpdatedAt:         now.Add(-2 * time.Hour),
+		}
+		prReady := model.PullRequest{
+			Number:            203,
+			Title:             "Mine Ready to Merge PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			Mergeable:         "MERGEABLE",
+			MergeStateStatus:  "CLEAN",
+			MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			ReviewDecision:    "APPROVED",
+			UpdatedAt:         now.Add(-3 * time.Hour),
+		}
+		prInReview := model.PullRequest{
+			Number:            204,
+			Title:             "Mine In Review PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-4 * time.Hour),
+		}
+		prDraft := model.PullRequest{
+			Number:            205,
+			Title:             "Mine Draft PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			IsDraft:           true,
+			UpdatedAt:         now.Add(-5 * time.Hour),
+		}
+		prStaleMine := model.PullRequest{
+			Number:            206,
+			Title:             "Mine Stale PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			UpdatedAt:         now.Add(-45 * 24 * time.Hour),
+		}
+
+		q := model.Queue{
+			Inbox:    []model.PullRequest{prAttention, prBlocked, prStaleInbox},
+			Authored: []model.PullRequest{prAction, prQueue, prReady, prInReview, prDraft, prStaleMine},
+		}
+
+		allKeys := []model.PRKey{
+			prAttention.Key(), prBlocked.Key(), prStaleInbox.Key(),
+			prAction.Key(), prQueue.Key(), prReady.Key(),
+			prInReview.Key(), prDraft.Key(), prStaleMine.Key(),
+		}
+
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(160, 40),
+			tui.WithActiveTab(tui.TabFocus),
+			tui.WithFocusedPRs(allKeys),
+		)
+
+		view := m.View()
+
+		// Verify each section divider is present with expected count
+		assert.Contains(t, view, "── NEEDS YOUR ATTENTION (1) ──")
+		assert.Contains(t, view, "── ACTION REQUIRED (1) ──")
+		assert.Contains(t, view, "── MERGE QUEUE (1) ──")
+		assert.Contains(t, view, "── READY TO MERGE (1) ──")
+		assert.Contains(t, view, "── IN REVIEW (1) ──")
+		assert.Contains(t, view, "── BLOCKED (1) ──")
+		assert.Contains(t, view, "── DRAFTS (1) ──")
+		assert.Contains(t, view, "── STALE (2) ──")
+
+		// Verify section order
+		idxAttention := strings.Index(view, "── NEEDS YOUR ATTENTION (1) ──")
+		idxAction := strings.Index(view, "── ACTION REQUIRED (1) ──")
+		idxQueue := strings.Index(view, "── MERGE QUEUE (1) ──")
+		idxReady := strings.Index(view, "── READY TO MERGE (1) ──")
+		idxReview := strings.Index(view, "── IN REVIEW (1) ──")
+		idxBlocked := strings.Index(view, "── BLOCKED (1) ──")
+		idxDrafts := strings.Index(view, "── DRAFTS (1) ──")
+		idxStale := strings.Index(view, "── STALE (2) ──")
+
+		assert.Less(t, idxAttention, idxAction)
+		assert.Less(t, idxAction, idxQueue)
+		assert.Less(t, idxQueue, idxReady)
+		assert.Less(t, idxReady, idxReview)
+		assert.Less(t, idxReview, idxBlocked)
+		assert.Less(t, idxBlocked, idxDrafts)
+		assert.Less(t, idxDrafts, idxStale)
+	})
+
+	t.Run("only renders dividers for non-empty sections", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+
+		prAttention := model.PullRequest{
+			Number:            101,
+			Title:             "Inbox Attention PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+		}
+		prReady := model.PullRequest{
+			Number:            203,
+			Title:             "Mine Ready PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			Mergeable:         "MERGEABLE",
+			MergeStateStatus:  "CLEAN",
+			MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			ReviewDecision:    "APPROVED",
+			UpdatedAt:         now.Add(-3 * time.Hour),
+		}
+		q := model.Queue{
+			Inbox:    []model.PullRequest{prAttention},
+			Authored: []model.PullRequest{prReady},
+		}
+
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(160, 40),
+			tui.WithActiveTab(tui.TabFocus),
+			tui.WithFocusedPRs([]model.PRKey{prAttention.Key(), prReady.Key()}),
+		)
+
+		view := m.View()
+		assert.Contains(t, view, "── NEEDS YOUR ATTENTION (1) ──")
+		assert.Contains(t, view, "── READY TO MERGE (1) ──")
+		assert.NotContains(t, view, "── ACTION REQUIRED")
+		assert.NotContains(t, view, "── MERGE QUEUE")
+		assert.NotContains(t, view, "── IN REVIEW")
+		assert.NotContains(t, view, "── BLOCKED")
+		assert.NotContains(t, view, "── DRAFTS")
+		assert.NotContains(t, view, "── STALE")
+	})
+
+	t.Run("navigation moves cursor correctly in Focus tab", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+
+		pr1 := model.PullRequest{
+			Number:            101,
+			Title:             "Inbox PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+		}
+		pr2 := model.PullRequest{
+			Number:            201,
+			Title:             "Mine PR",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-2 * time.Hour),
+		}
+		q := model.Queue{
+			Inbox:    []model.PullRequest{pr1},
+			Authored: []model.PullRequest{pr2},
+		}
+
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(160, 40),
+			tui.WithActiveTab(tui.TabFocus),
+			tui.WithFocusedPRs([]model.PRKey{pr1.Key(), pr2.Key()}),
+		)
+
+		sel0 := m.SelectedPR()
+		require.NotNil(t, sel0)
+		assert.Equal(t, 101, sel0.Number)
+
+		// Move down with 'j'
+		mDown, _ := sendRune(m, 'j')
+		modelDown := mDown.(tui.Model)
+		sel1 := modelDown.SelectedPR()
+		require.NotNil(t, sel1)
+		assert.Equal(t, 201, sel1.Number)
+
+		// Move down with down arrow
+		mDownKey, _ := sendKey(m, tea.KeyDown)
+		modelDownKey := mDownKey.(tui.Model)
+		sel1Key := modelDownKey.SelectedPR()
+		require.NotNil(t, sel1Key)
+		assert.Equal(t, 201, sel1Key.Number)
+
+		// Move up with 'k'
+		mUp, _ := sendRune(modelDown, 'k')
+		modelUp := mUp.(tui.Model)
+		selUp := modelUp.SelectedPR()
+		require.NotNil(t, selUp)
+		assert.Equal(t, 101, selUp.Number)
+
+		// Move up with up arrow
+		mUpKey, _ := sendKey(modelDownKey, tea.KeyUp)
+		modelUpKey := mUpKey.(tui.Model)
+		selUpKey := modelUpKey.SelectedPR()
+		require.NotNil(t, selUpKey)
+		assert.Equal(t, 101, selUpKey.Number)
+	})
 }
