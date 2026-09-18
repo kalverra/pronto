@@ -31,6 +31,8 @@ type Store interface {
 	PrunePRs(ctx context.Context, olderThan time.Duration) (removed int, err error)
 	Queue(ctx context.Context) (q model.Queue, savedAt time.Time, ok bool)
 	SaveQueue(ctx context.Context, q model.Queue) error
+	Focus(ctx context.Context) (keys []model.PRKey, savedAt time.Time, ok bool)
+	SaveFocus(ctx context.Context, keys []model.PRKey) error
 }
 
 // Dir returns the default cache directory: PRONTO_CACHE_DIR when set,

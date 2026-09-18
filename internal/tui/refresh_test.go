@@ -106,6 +106,12 @@ func (m *memStore) SaveQueue(_ context.Context, q model.Queue) error {
 	return nil
 }
 
+func (m *memStore) Focus(context.Context) ([]model.PRKey, time.Time, bool) {
+	return nil, time.Time{}, false
+}
+
+func (m *memStore) SaveFocus(context.Context, []model.PRKey) error { return nil }
+
 // --- startup ----------------------------------------------------------------
 
 func TestStartupModel_FreshSnapshotSkipsFetch(t *testing.T) {

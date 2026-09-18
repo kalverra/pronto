@@ -234,6 +234,15 @@ func TestDiskStore_SchemaMismatchMisses(t *testing.T) {
 	)
 	_, _, ok = store.PR(ctx, "org/repo", 42)
 	assert.False(t, ok, "schema mismatch must miss on PR")
+
+	// 4. Focus schema mismatch
+	focusFile := filepath.Join(dir, "focus.json")
+	require.NoError(
+		t,
+		os.WriteFile(focusFile, []byte(`{"schema": 999, "saved_at": "2026-09-10T10:00:00Z", "data": []}`), 0o600),
+	)
+	_, _, ok = store.Focus(ctx)
+	assert.False(t, ok, "schema mismatch must miss on Focus")
 }
 
 func TestDiskStore_ColludingRepoNamesDoNotCollide(t *testing.T) {
@@ -357,6 +366,7 @@ func TestDiskStore_PruneLeavesNonPREntries(t *testing.T) {
 
 	require.NoError(t, store.SaveIdentity(ctx, cache.Identity{Login: "kalverra"}))
 	require.NoError(t, store.SaveQueue(ctx, model.Queue{}))
+	require.NoError(t, store.SaveFocus(ctx, []model.PRKey{{Repo: "org/repo", Number: 1}}))
 
 	removed, err := store.PrunePRs(ctx, 0)
 	require.NoError(t, err)
@@ -367,6 +377,9 @@ func TestDiskStore_PruneLeavesNonPREntries(t *testing.T) {
 
 	_, _, ok = store.Queue(ctx)
 	assert.True(t, ok, "Queue must not be pruned")
+
+	_, _, ok = store.Focus(ctx)
+	assert.True(t, ok, "Focus must not be pruned")
 }
 
 func TestDiskStore_PruneSweepsAbandonedTempFiles(t *testing.T) {
@@ -467,4 +480,44 @@ func TestOpen_DefaultsToUserCacheDir(t *testing.T) {
 	base, err := os.UserCacheDir()
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(base, "pronto"), store.Dir())
+}
+
+func TestDiskStore_FocusRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	store := cache.NewDiskStore(t.TempDir())
+	ctx := context.Background()
+
+	_, _, ok := store.Focus(ctx)
+	require.False(t, ok, "empty store must miss")
+
+	keys := []model.PRKey{
+		{Repo: "org/repo", Number: 42},
+		{Repo: "other/repo", Number: 101},
+	}
+	require.NoError(t, store.SaveFocus(ctx, keys))
+
+	got, savedAt, ok := store.Focus(ctx)
+	require.True(t, ok)
+	assert.Equal(t, keys, got)
+	assert.WithinDuration(t, time.Now(), savedAt, time.Minute)
+
+	// Overwrite with empty keys list
+	require.NoError(t, store.SaveFocus(ctx, []model.PRKey{}))
+	gotEmpty, _, ok := store.Focus(ctx)
+	require.True(t, ok)
+	assert.Empty(t, gotEmpty)
+}
+
+func TestDiskStore_FocusCorruptFileMisses(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := cache.NewDiskStore(dir)
+	ctx := context.Background()
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "focus.json"), []byte("{not json"), 0o600))
+
+	_, _, ok := store.Focus(ctx)
+	assert.False(t, ok, "corrupt focus file must miss, not error")
 }

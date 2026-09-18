@@ -117,6 +117,12 @@ func (f *fakeStore) SaveQueue(ctx context.Context, q model.Queue) error {
 	return nil
 }
 
+func (f *fakeStore) Focus(context.Context) ([]model.PRKey, time.Time, bool) {
+	return nil, time.Time{}, false
+}
+
+func (f *fakeStore) SaveFocus(context.Context, []model.PRKey) error { return nil }
+
 func (f *fakeStore) savedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

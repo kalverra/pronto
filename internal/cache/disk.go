@@ -19,6 +19,8 @@ type DiskStore struct {
 	dir string
 }
 
+var _ Store = (*DiskStore)(nil)
+
 // NewDiskStore creates a DiskStore rooted at dir.
 func NewDiskStore(dir string) *DiskStore {
 	return &DiskStore{dir: dir}
@@ -234,4 +236,25 @@ func (d *DiskStore) Queue(ctx context.Context) (model.Queue, time.Time, bool) {
 // SaveQueue persists a queue snapshot.
 func (d *DiskStore) SaveQueue(ctx context.Context, q model.Queue) error {
 	return d.write(ctx, filepath.Join(d.dir, "queue.json"), "queue", q)
+}
+
+// Focus returns the cached focused PR keys, or ok=false when absent.
+func (d *DiskStore) Focus(ctx context.Context) ([]model.PRKey, time.Time, bool) {
+	var keys []model.PRKey
+	stamped, err := d.read(ctx, filepath.Join(d.dir, "focus.json"), &keys)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	if stamped.Key != "focus" {
+		return nil, time.Time{}, false
+	}
+	if ctx.Err() != nil {
+		return nil, time.Time{}, false
+	}
+	return keys, stamped.SavedAt, true
+}
+
+// SaveFocus persists focused PR keys.
+func (d *DiskStore) SaveFocus(ctx context.Context, keys []model.PRKey) error {
+	return d.write(ctx, filepath.Join(d.dir, "focus.json"), "focus", keys)
 }
