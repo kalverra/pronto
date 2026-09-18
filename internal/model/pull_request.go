@@ -73,8 +73,10 @@ type PullRequest struct {
 	// unknown until a later poll completes them.
 	Partial bool `json:"partial,omitempty"`
 
-	MergeStatus MergeStatus   `json:"merge_status"`
-	Checks      ChecksSummary `json:"checks"`
+	MergeStatus      MergeStatus     `json:"merge_status"`
+	Checks           ChecksSummary   `json:"checks"`
+	MergeQueue       *MergeQueueInfo `json:"merge_queue,omitempty"`
+	MergeQueueChecks ChecksSummary   `json:"merge_queue_checks,omitempty"` //nolint:modernize // omitempty matches model spec
 
 	Stack *PRStack `json:"stack,omitempty"`
 
@@ -99,7 +101,7 @@ func (pr PullRequest) IsPartOfStack() bool {
 
 // InMergeQueue reports whether the pull request has entered a merge queue.
 func (pr PullRequest) InMergeQueue() bool {
-	return pr.IsInMergeQueue || pr.MergeStateStatus == "QUEUED" || pr.MergeStatus.IsQueued()
+	return pr.IsInMergeQueue || pr.MergeStateStatus == "QUEUED" || pr.MergeStatus.IsQueued() || pr.MergeQueue != nil
 }
 
 // StackKey returns a composite identifier for grouping PRs in the same stack.

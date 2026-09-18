@@ -1682,7 +1682,7 @@ func TestModel_TableView_CIDuration(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	startedRunning := now.Add(-3 * time.Minute)
+	startedRunning := now.Add(-14*time.Minute - 12*time.Second)
 	startedDone := now.Add(-10 * time.Minute)
 	completedDone := now.Add(-6 * time.Minute)
 	startedFailed := now.Add(-15 * time.Minute)
@@ -1749,11 +1749,17 @@ func TestModel_TableView_CIDuration(t *testing.T) {
 	view := m.View()
 
 	// Running checks show spinner and compact duration
-	assert.Contains(t, view, "1/2 req (1 ⠋) 3m")
+	assert.Contains(t, view, "1/2 req (1 ⠋)")
+	assert.Contains(t, view, "14m12s")
+	assert.NotContains(t, view, "1/2 req (1 ⠋) 14m12s")
 	// Completed checks show pass and compact duration
-	assert.Contains(t, view, "✓ 2/2 4m")
+	assert.Contains(t, view, "✓ 2/2")
+	assert.Contains(t, view, "4m0s")
+	assert.NotContains(t, view, "✓ 2/2 4m0s")
 	// Completed failed checks show failure and compact duration
-	assert.Contains(t, view, "✗ 1 req failed 12m")
+	assert.Contains(t, view, "✗ 1 req failed")
+	assert.Contains(t, view, "12m0s")
+	assert.NotContains(t, view, "✗ 1 req failed 12m0s")
 
 	// No timestamps check retains standard badge without duration
 	mOnly := tui.New(model.Queue{Inbox: []model.PullRequest{prNoTimes}}, tui.WithNow(now), tui.WithDimensions(140, 30))

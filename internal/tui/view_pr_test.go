@@ -289,8 +289,8 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	startedRunning := now.Add(-5 * time.Minute)
-	startedDone := now.Add(-20 * time.Minute)
+	startedRunning := now.Add(-14*time.Minute - 12*time.Second)
+	startedDone := now.Add(-20*time.Minute - 12*time.Second)
 	completedDone := now.Add(-12 * time.Minute)
 
 	t.Run("running CI shows elapsed duration", func(t *testing.T) {
@@ -314,8 +314,10 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 		view := mOpened.View()
 
 		assert.Contains(t, view, "CI Checks:")
-		assert.Contains(t, view, "1/2 (1 ⠋) 5m")
-		assert.Contains(t, view, "Total: 2 | Done: 1 | Failed: 0 | Running: 1 | Elapsed: 5m")
+		assert.Contains(t, view, "1/2 (1 ⠋)")
+		assert.Contains(t, view, "14m12s")
+		assert.NotContains(t, view, "1/2 (1 ⠋) 14m12s", "badge and duration should be styled separately")
+		assert.Contains(t, view, "Total: 2 | Done: 1 | Failed: 0 | Running: 1 | Elapsed: 14m12s")
 	})
 
 	t.Run("settled CI shows total duration", func(t *testing.T) {
@@ -339,8 +341,10 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 		view := mOpened.View()
 
 		assert.Contains(t, view, "CI Checks:")
-		assert.Contains(t, view, "✓ 2/2 8m")
-		assert.Contains(t, view, "Total: 2 | Done: 2 | Failed: 0 | Running: 0 | Duration: 8m")
+		assert.Contains(t, view, "✓ 2/2")
+		assert.Contains(t, view, "8m12s")
+		assert.NotContains(t, view, "✓ 2/2 8m12s", "badge and duration should be styled separately")
+		assert.Contains(t, view, "Total: 2 | Done: 2 | Failed: 0 | Running: 0 | Duration: 8m12s")
 	})
 
 	t.Run("checks without timestamps do not show elapsed or duration", func(t *testing.T) {
@@ -367,4 +371,64 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 		assert.NotContains(t, view, "Elapsed:")
 		assert.NotContains(t, view, "Duration:")
 	})
+}
+
+func TestFormatCIDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		d        time.Duration
+		expected string
+	}{
+		{name: "zero", d: 0, expected: "0s"},
+		{name: "negative", d: -5 * time.Second, expected: "0s"},
+		{name: "sub-second", d: 800 * time.Millisecond, expected: "0s"},
+		{name: "seconds only", d: 45 * time.Second, expected: "45s"},
+		{name: "exact minute", d: 5 * time.Minute, expected: "5m0s"},
+		{name: "minutes and seconds", d: 14*time.Minute + 12*time.Second, expected: "14m12s"},
+		{name: "sub-second truncated", d: 14*time.Minute + 12*time.Second + 900*time.Millisecond, expected: "14m12s"},
+		{name: "exact hour", d: 1 * time.Hour, expected: "1h0m0s"},
+		{name: "hours minutes seconds", d: 1*time.Hour + 14*time.Minute + 12*time.Second, expected: "1h14m12s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tui.FormatCIDuration(tt.d))
+		})
+	}
+}
+
+func TestModel_CIBadge_DifferentiatesDuration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-14*time.Minute - 12*time.Second)
+	completed := now
+
+	pr := model.PullRequest{
+		Number:            101,
+		Title:             "PR with checks",
+		RepoNameWithOwner: "org/repo",
+		Checks: model.ChecksSummary{
+			Total:       2,
+			Done:        2,
+			StartedAt:   &started,
+			CompletedAt: &completed,
+		},
+	}
+
+	m := tui.New(model.Queue{Inbox: []model.PullRequest{pr}}, tui.WithNow(now), tui.WithDimensions(140, 30))
+	view := m.View()
+
+	// Badge result and duration must be separated, not styled as a single unseparated chunk
+	assert.Contains(t, view, "✓ 2/2")
+	assert.Contains(t, view, "14m12s")
+	assert.NotContains(
+		t,
+		view,
+		"✓ 2/2 14m12s",
+		"badge text and timestamp must not be formatted as a single monolithic styled string",
+	)
 }

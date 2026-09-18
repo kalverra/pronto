@@ -62,6 +62,16 @@ MergeStatus evaluates GitHub mergeable and mergeStateStatus fields.
 | `IsDraft` | `is_draft` | `bool` |  | — |
 | `IsInMergeQueue` | `is_in_merge_queue` | `bool` | yes | — |
 
+## MergeQueueInfo
+
+MergeQueueInfo contains metadata about a pull request's entry in a merge queue.
+
+| Field | JSON | Type | Omitempty | Description |
+| ----- | ---- | ---- | --------- | ----------- |
+| `Position` | `position` | `int` |  | — |
+| `State` | `state` | `string` |  | — |
+| `EnqueuedAt` | `enqueued_at` | `*time.Time` | yes | — |
+
 ## PRKey
 
 PRKey uniquely identifies a pull request by repository and number.
@@ -139,6 +149,8 @@ PullRequest represents a pull request in the review queue.
 | `Partial` | `partial` | `bool` | yes | Partial marks a PR built from discovery data only (hydration skipped, e.g. due to a rate limit): merge status, checks, and diff size are unknown until a later poll completes them. |
 | `MergeStatus` | `merge_status` | `MergeStatus` |  | — |
 | `Checks` | `checks` | `ChecksSummary` |  | — |
+| `MergeQueue` | `merge_queue` | `*MergeQueueInfo` | yes | — |
+| `MergeQueueChecks` | `merge_queue_checks` | `ChecksSummary` | yes | — |
 | `Stack` | `stack` | `*PRStack` | yes | — |
 | `LatestReviews` | `latest_reviews` | `[]Review` |  | — |
 | `TimelineItems` | `timeline_items` | `[]TimelineItem` |  | — |

@@ -156,6 +156,9 @@ var (
 			Background(lipgloss.Color("#1f242c")).
 			Padding(0, 1)
 
+	ciDurationStyle = lipgloss.NewStyle().
+			Faint(true)
+
 	botBadgeStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#a5b4fc")).
@@ -710,6 +713,11 @@ func humanAge(d time.Duration) string {
 	}
 }
 
+// FormatCIDuration formats a CI duration with second precision, e.g. "45s", "14m12s", "1h2m3s".
+func FormatCIDuration(d time.Duration) string {
+	return max(0, d).Truncate(time.Second).String()
+}
+
 func renderProgressBar(loaded, total, barWidth int) string {
 	if total <= 0 || barWidth <= 0 {
 		return ""
@@ -904,9 +912,9 @@ func (m Model) renderDetailsModal() string {
 		durationSuffix := ""
 		if d, ok := pr.Checks.Duration(refTime); ok {
 			if pr.Checks.IsRunning() {
-				durationSuffix = " | Elapsed: " + humanAge(d)
+				durationSuffix = " | Elapsed: " + FormatCIDuration(d)
 			} else {
-				durationSuffix = " | Duration: " + humanAge(d)
+				durationSuffix = " | Duration: " + FormatCIDuration(d)
 			}
 		}
 		fmt.Fprintf(&b, "  Total: %d | Done: %d | Failed: %d | Running: %d%s\n",
@@ -953,19 +961,21 @@ func (m Model) renderCIBadge(summary model.ChecksSummary, refTime time.Time) str
 		return ""
 	}
 	text := strings.TrimPrefix(badge, "CI: ")
+	var renderedBadge string
+	switch {
+	case summary.IsFailing():
+		renderedBadge = ciFailStyle.Render(text)
+	case summary.IsRunning():
+		renderedBadge = ciRunningStyle.Render(text)
+	case summary.IsPassing():
+		renderedBadge = ciPassStyle.Render(text)
+	default:
+		renderedBadge = ciNeutralStyle.Render(text)
+	}
 	if d, ok := summary.Duration(refTime); ok {
-		text += " " + humanAge(d)
+		return renderedBadge + " " + ciDurationStyle.Render(FormatCIDuration(d))
 	}
-	if summary.IsFailing() {
-		return ciFailStyle.Render(text)
-	}
-	if summary.IsRunning() {
-		return ciRunningStyle.Render(text)
-	}
-	if summary.IsPassing() {
-		return ciPassStyle.Render(text)
-	}
-	return ciNeutralStyle.Render(text)
+	return renderedBadge
 }
 
 func renderStatusBadge(pr model.PullRequest) string {
