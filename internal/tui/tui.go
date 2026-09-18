@@ -31,10 +31,12 @@ import (
 type Tab int
 
 const (
-	// TabInbox displays incoming review-requested PRs.
-	TabInbox Tab = iota
+	// TabFocus displays focused PRs.
+	TabFocus Tab = iota
 	// TabMine displays authored PRs.
 	TabMine
+	// TabInbox displays incoming review-requested PRs.
+	TabInbox
 )
 
 // Model represents the pronto Bubbletea terminal interface.
@@ -49,12 +51,15 @@ type Model struct {
 	width        int
 	height       int
 	activeTab    Tab
-	cursorInbox  int
+	cursorFocus  int
 	cursorMine   int
-	scrollInbox  int
+	cursorInbox  int
+	scrollFocus  int
 	scrollMine   int
+	scrollInbox  int
 	modalOpen    bool
 	detailsOpen  bool
+	focusItems   []score.Scored
 	inboxItems   []score.Scored
 	mineItems    []score.Scored
 	spinnerFrame int
@@ -485,11 +490,18 @@ func closePRCmd(ctx context.Context, closer ClosePRFunc, pr model.PullRequest, c
 	}
 }
 
+// WithActiveTab sets the initial active tab.
+func WithActiveTab(tab Tab) Option {
+	return func(m *Model) {
+		m.activeTab = tab
+	}
+}
+
 // New creates an initialized Model with the given queue and options.
 func New(q model.Queue, opts ...Option) Model {
 	m := Model{
 		weights:         score.DefaultWeights(),
-		activeTab:       TabInbox,
+		activeTab:       TabFocus,
 		width:           80,
 		height:          24,
 		stacksCollapsed: true,
@@ -582,8 +594,9 @@ func (m Model) applyQueue(q model.Queue) Model {
 	m.queue = q
 	m.mineItems = score.RankMine(authoredPRs, m.now, score.DefaultMineWeights())
 
-	m = m.clampTabView(TabInbox)
+	m = m.clampTabView(TabFocus)
 	m = m.clampTabView(TabMine)
+	m = m.clampTabView(TabInbox)
 
 	m = m.syncNotificationsWithQueue()
 	m = m.pruneStaleNotifications()
@@ -612,8 +625,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m = m.clampTabView(TabInbox)
+		m = m.clampTabView(TabFocus)
 		m = m.clampTabView(TabMine)
+		m = m.clampTabView(TabInbox)
 		return m, nil
 
 	case SpinnerTickMsg:
@@ -771,7 +785,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.notificationFocused = false
 			return m, nil
 		}
-	case "tab", "shift+tab", "1", "2":
+	case "tab", "shift+tab", "1", "2", "3":
 		return m.handleTabKey(msg.String())
 	case "r":
 		return m.handleRefreshKey()
@@ -797,14 +811,28 @@ func (m Model) handleTabKey(key string) (tea.Model, tea.Cmd) {
 	m.notificationFocused = false
 	switch key {
 	case "1":
-		m.activeTab = TabInbox
+		m.activeTab = TabFocus
 	case "2":
 		m.activeTab = TabMine
-	default:
-		if m.activeTab == TabInbox {
-			m.activeTab = TabMine
-		} else {
+	case "3":
+		m.activeTab = TabInbox
+	case "shift+tab":
+		switch m.activeTab {
+		case TabFocus:
 			m.activeTab = TabInbox
+		case TabMine:
+			m.activeTab = TabFocus
+		case TabInbox:
+			m.activeTab = TabMine
+		}
+	default:
+		switch m.activeTab {
+		case TabFocus:
+			m.activeTab = TabMine
+		case TabMine:
+			m.activeTab = TabInbox
+		case TabInbox:
+			m.activeTab = TabFocus
 		}
 	}
 	return m, nil
@@ -1219,10 +1247,15 @@ func formatReviewState(state string) string {
 }
 
 func (m Model) activeList() []score.Scored {
-	if m.activeTab == TabInbox {
+	switch m.activeTab {
+	case TabFocus:
+		return m.focusItems
+	case TabMine:
+		return m.mineItems
+	case TabInbox:
 		return m.inboxItems
 	}
-	return m.mineItems
+	return nil
 }
 
 func (m Model) isStackExpanded(key string) bool {
@@ -1234,10 +1267,13 @@ func (m Model) isStackExpanded(key string) bool {
 
 func (m Model) findStackBottomIndex(tab Tab, key string) int {
 	var list []score.Scored
-	if tab == TabInbox {
-		list = m.inboxItems
-	} else {
+	switch tab {
+	case TabFocus:
+		list = m.focusItems
+	case TabMine:
 		list = m.mineItems
+	case TabInbox:
+		list = m.inboxItems
 	}
 	for i, it := range list {
 		if it.PR.IsPartOfStack() && it.PR.StackKey() == key {
@@ -1344,10 +1380,13 @@ func (m Model) setCursor(pos int) Model {
 	if len(list) == 0 {
 		return m
 	}
-	if m.activeTab == TabInbox {
-		m.cursorInbox = clampIndex(pos, len(list)-1)
-	} else {
+	switch m.activeTab {
+	case TabFocus:
+		m.cursorFocus = clampIndex(pos, len(list)-1)
+	case TabMine:
 		m.cursorMine = clampIndex(pos, len(list)-1)
+	case TabInbox:
+		m.cursorInbox = clampIndex(pos, len(list)-1)
 	}
 	return m.clampTabView(m.activeTab)
 }
@@ -1356,7 +1395,26 @@ func (m Model) setCursor(pos int) Model {
 // so the cursor's display row stays within the visible window.
 func (m Model) clampTabView(tab Tab) Model {
 	visRows := m.VisibleRows()
-	if tab == TabInbox {
+	switch tab {
+	case TabFocus:
+		if len(m.focusItems) == 0 {
+			m.cursorFocus, m.scrollFocus = 0, 0
+			return m
+		}
+		m.cursorFocus = clampIndex(m.cursorFocus, len(m.focusItems)-1)
+		dispCursor, totalRows := m.displayCursorAndRows(TabFocus)
+		m.scrollFocus = clampScroll(m.scrollFocus, dispCursor, totalRows, visRows)
+		return m
+	case TabMine:
+		if len(m.mineItems) == 0 {
+			m.cursorMine, m.scrollMine = 0, 0
+			return m
+		}
+		m.cursorMine = clampIndex(m.cursorMine, len(m.mineItems)-1)
+		dispCursor, totalRows := m.displayCursorAndRows(TabMine)
+		m.scrollMine = clampScroll(m.scrollMine, dispCursor, totalRows, visRows)
+		return m
+	case TabInbox:
 		if len(m.inboxItems) == 0 {
 			m.cursorInbox, m.scrollInbox = 0, 0
 			return m
@@ -1366,13 +1424,6 @@ func (m Model) clampTabView(tab Tab) Model {
 		m.scrollInbox = clampScroll(m.scrollInbox, dispCursor, totalRows, visRows)
 		return m
 	}
-	if len(m.mineItems) == 0 {
-		m.cursorMine, m.scrollMine = 0, 0
-		return m
-	}
-	m.cursorMine = clampIndex(m.cursorMine, len(m.mineItems)-1)
-	dispCursor, totalRows := m.displayCursorAndRows(TabMine)
-	m.scrollMine = clampScroll(m.scrollMine, dispCursor, totalRows, visRows)
 	return m
 }
 
@@ -1382,10 +1433,13 @@ func (m Model) displayCursorAndRows(tab Tab) (int, int) {
 		return 0, 0
 	}
 	var cursor int
-	if tab == TabInbox {
-		cursor = m.cursorInbox
-	} else {
+	switch tab {
+	case TabFocus:
+		cursor = m.cursorFocus
+	case TabMine:
 		cursor = m.cursorMine
+	case TabInbox:
+		cursor = m.cursorInbox
 	}
 
 	displayCursor := cursor
@@ -1442,18 +1496,28 @@ func (m Model) ActiveTab() Tab {
 
 // Cursor returns the cursor index in the active tab.
 func (m Model) Cursor() int {
-	if m.activeTab == TabInbox {
+	switch m.activeTab {
+	case TabFocus:
+		return m.cursorFocus
+	case TabMine:
+		return m.cursorMine
+	case TabInbox:
 		return m.cursorInbox
 	}
-	return m.cursorMine
+	return 0
 }
 
 // ScrollOffset returns the scroll offset index in the active tab.
 func (m Model) ScrollOffset() int {
-	if m.activeTab == TabInbox {
+	switch m.activeTab {
+	case TabFocus:
+		return m.scrollFocus
+	case TabMine:
+		return m.scrollMine
+	case TabInbox:
 		return m.scrollInbox
 	}
-	return m.scrollMine
+	return 0
 }
 
 // VisibleRows returns the number of visible table rows fitting within terminal height.
@@ -1529,16 +1593,24 @@ func (m Model) SelectedScored() *score.Scored {
 	if m.IsNotificationFocused() {
 		return nil
 	}
-	if m.activeTab == TabInbox {
+	switch m.activeTab {
+	case TabFocus:
+		if len(m.focusItems) == 0 || m.cursorFocus < 0 || m.cursorFocus >= len(m.focusItems) {
+			return nil
+		}
+		return &m.focusItems[m.cursorFocus]
+	case TabMine:
+		if len(m.mineItems) == 0 || m.cursorMine < 0 || m.cursorMine >= len(m.mineItems) {
+			return nil
+		}
+		return &m.mineItems[m.cursorMine]
+	case TabInbox:
 		if len(m.inboxItems) == 0 || m.cursorInbox < 0 || m.cursorInbox >= len(m.inboxItems) {
 			return nil
 		}
 		return &m.inboxItems[m.cursorInbox]
 	}
-	if len(m.mineItems) == 0 || m.cursorMine < 0 || m.cursorMine >= len(m.mineItems) {
-		return nil
-	}
-	return &m.mineItems[m.cursorMine]
+	return nil
 }
 
 // IsModalOpen reports whether the score breakdown modal is currently visible.
@@ -1549,6 +1621,18 @@ func (m Model) IsModalOpen() bool {
 // IsDetailsOpen reports whether the condensed PR details view is currently visible.
 func (m Model) IsDetailsOpen() bool {
 	return m.detailsOpen
+}
+
+// FocusItems returns the scored pull requests in the focus tab.
+func (m Model) FocusItems() []score.Scored {
+	return m.focusItems
+}
+
+// WithFocusItems sets initial focus items.
+func WithFocusItems(items []score.Scored) Option {
+	return func(m *Model) {
+		m.focusItems = items
+	}
 }
 
 // InboxItems returns the scored pull requests in the inbox tab.

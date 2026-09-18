@@ -305,7 +305,7 @@ func TestModel_Notification_CursorNavigation(t *testing.T) {
 			{Number: 2, Title: "PR 2", RepoNameWithOwner: "kalverra/pronto"},
 		},
 	}
-	m := tui.New(q)
+	m := tui.New(q, tui.WithActiveTab(tui.TabInbox))
 	updated, _ := m.Update(tui.NotificationMsg{
 		Notifications: []notify.Notification{
 			{PRNumber: 1, Title: "Note 1"},
@@ -1056,7 +1056,7 @@ func TestModel_Notification_ViewRenderBetweenTabsAndTable(t *testing.T) {
 			{Number: 42, Title: "Inbox PR", RepoNameWithOwner: "kalverra/pronto"},
 		},
 	}
-	m := tui.New(q, tui.WithNow(now))
+	m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 	updated, _ := m.Update(tui.NotificationMsg{
 		Notifications: []notify.Notification{

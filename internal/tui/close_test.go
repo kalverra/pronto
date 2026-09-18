@@ -72,7 +72,7 @@ func TestModel_CloseStalePR_ConfirmationPrompt(t *testing.T) {
 		Inbox: []model.PullRequest{stalePR},
 	}
 
-	m := tui.New(q, tui.WithNow(now))
+	m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 	m2, cmd := sendRune(m, 'x')
 	assert.Nil(t, cmd)
@@ -104,7 +104,7 @@ func TestModel_CloseStalePR_CancelConfirmation(t *testing.T) {
 		return nil
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer))
+	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer), tui.WithActiveTab(tui.TabInbox))
 
 	m2, _ := sendRune(m, 'x')
 	model2 := m2.(tui.Model)
@@ -152,7 +152,7 @@ func TestModel_CloseStalePR_ConfirmAndExecute(t *testing.T) {
 		return nil
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer))
+	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer), tui.WithActiveTab(tui.TabInbox))
 
 	m2, _ := sendRune(m, 'x')
 	model2 := m2.(tui.Model)
@@ -199,7 +199,7 @@ func TestModel_CloseStalePR_ErrorHandling(t *testing.T) {
 		return errors.New("GraphQL: Resource not accessible by integration")
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer))
+	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer), tui.WithActiveTab(tui.TabInbox))
 
 	m2, _ := sendRune(m, 'x')
 	m3, cmd := sendRune(m2, 'y')
@@ -293,7 +293,7 @@ func TestModel_CloseStalePR_BannersClearOnNavigation(t *testing.T) {
 		return nil
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer))
+	m := tui.New(q, tui.WithNow(now), tui.WithCloser(closer), tui.WithActiveTab(tui.TabInbox))
 
 	m2, _ := sendRune(m, 'x')
 	m3, cmd := sendRune(m2.(tui.Model), 'y')
@@ -312,7 +312,7 @@ func TestModel_CloseStalePR_BannersClearOnNavigation(t *testing.T) {
 	failCloser := func(_ context.Context, _ model.PullRequest, _ string) error {
 		return errors.New("boom")
 	}
-	em := tui.New(q, tui.WithNow(now), tui.WithCloser(failCloser))
+	em := tui.New(q, tui.WithNow(now), tui.WithCloser(failCloser), tui.WithActiveTab(tui.TabInbox))
 	em2, _ := sendRune(em, 'x')
 	em3, cmd := sendRune(em2.(tui.Model), 'y')
 	require.NotNil(t, cmd)

@@ -124,7 +124,7 @@ func TestModel_InitialState(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithWeights(score.DefaultWeights()))
 
-	assert.Equal(t, tui.TabInbox, m.ActiveTab())
+	assert.Equal(t, tui.TabFocus, m.ActiveTab())
 	assert.Equal(t, 0, m.Cursor())
 	assert.False(t, m.IsModalOpen())
 
@@ -134,7 +134,12 @@ func TestModel_InitialState(t *testing.T) {
 	// Items should be ranked by score descending
 	assert.GreaterOrEqual(t, m.InboxItems()[0].Score, m.InboxItems()[1].Score)
 
-	selected := m.SelectedPR()
+	// Focus tab starts empty, so no PR is selected
+	assert.Nil(t, m.SelectedPR())
+
+	// Switching to Inbox tab allows selecting inbox PR
+	mInbox, _ := sendRune(m, '3')
+	selected := mInbox.(tui.Model).SelectedPR()
 	require.NotNil(t, selected)
 	assert.Equal(t, m.InboxItems()[0].PR.Number, selected.Number)
 }
@@ -145,7 +150,10 @@ func TestModel_TabSwitching(t *testing.T) {
 	q := makeTestQueue()
 	m := tui.New(q, tui.WithViewer("kalverra"))
 
-	// Tab toggles to Mine
+	// Default active tab is Focus
+	assert.Equal(t, tui.TabFocus, m.ActiveTab())
+
+	// Tab advances to Mine
 	m2, _ := sendKey(m, tea.KeyTab)
 	model2 := m2.(tui.Model)
 	assert.Equal(t, tui.TabMine, model2.ActiveTab())
@@ -153,31 +161,108 @@ func TestModel_TabSwitching(t *testing.T) {
 	require.NotNil(t, model2.SelectedPR())
 	assert.Equal(t, 201, model2.SelectedPR().Number)
 
-	// Tab toggles back to Inbox
+	// Tab advances to Inbox
 	m3, _ := sendKey(model2, tea.KeyTab)
 	model3 := m3.(tui.Model)
 	assert.Equal(t, tui.TabInbox, model3.ActiveTab())
 
-	// Shift+Tab also switches
-	m4, _ := sendKey(model3, tea.KeyShiftTab)
+	// Tab cycles back to Focus
+	mFocus, _ := sendKey(model3, tea.KeyTab)
+	modelFocus := mFocus.(tui.Model)
+	assert.Equal(t, tui.TabFocus, modelFocus.ActiveTab())
+
+	// Shift+Tab reverses: Focus -> Inbox
+	m4, _ := sendKey(modelFocus, tea.KeyShiftTab)
 	model4 := m4.(tui.Model)
-	assert.Equal(t, tui.TabMine, model4.ActiveTab())
+	assert.Equal(t, tui.TabInbox, model4.ActiveTab())
 
 	// Number keys switch explicitly
 	m5, _ := sendRune(model4, '1')
 	model5 := m5.(tui.Model)
-	assert.Equal(t, tui.TabInbox, model5.ActiveTab())
+	assert.Equal(t, tui.TabFocus, model5.ActiveTab())
 
 	m6, _ := sendRune(model5, '2')
 	model6 := m6.(tui.Model)
 	assert.Equal(t, tui.TabMine, model6.ActiveTab())
+
+	m7, _ := sendRune(model6, '3')
+	model7 := m7.(tui.Model)
+	assert.Equal(t, tui.TabInbox, model7.ActiveTab())
+}
+
+func TestModel_TabSwitching_ThreeTabs(t *testing.T) {
+	t.Parallel()
+
+	q := makeTestQueue()
+	m := tui.New(q, tui.WithViewer("kalverra"))
+
+	// 1. Defaults to TabFocus
+	assert.Equal(t, tui.TabFocus, m.ActiveTab())
+
+	// 2. Tab cycling: Focus -> Mine -> Inbox -> Focus
+	m1, _ := sendKey(m, tea.KeyTab)
+	assert.Equal(t, tui.TabMine, m1.(tui.Model).ActiveTab())
+
+	m2, _ := sendKey(m1, tea.KeyTab)
+	assert.Equal(t, tui.TabInbox, m2.(tui.Model).ActiveTab())
+
+	m3, _ := sendKey(m2, tea.KeyTab)
+	assert.Equal(t, tui.TabFocus, m3.(tui.Model).ActiveTab())
+
+	// 3. Shift+Tab cycling: Focus -> Inbox -> Mine -> Focus
+	mr1, _ := sendKey(m3, tea.KeyShiftTab)
+	assert.Equal(t, tui.TabInbox, mr1.(tui.Model).ActiveTab())
+
+	mr2, _ := sendKey(mr1, tea.KeyShiftTab)
+	assert.Equal(t, tui.TabMine, mr2.(tui.Model).ActiveTab())
+
+	mr3, _ := sendKey(mr2, tea.KeyShiftTab)
+	assert.Equal(t, tui.TabFocus, mr3.(tui.Model).ActiveTab())
+
+	// 4. Number keys direct navigation: 1 -> Focus, 2 -> Mine, 3 -> Inbox
+	mk3, _ := sendRune(m, '3')
+	assert.Equal(t, tui.TabInbox, mk3.(tui.Model).ActiveTab())
+
+	mk2, _ := sendRune(mk3, '2')
+	assert.Equal(t, tui.TabMine, mk2.(tui.Model).ActiveTab())
+
+	mk1, _ := sendRune(mk2, '1')
+	assert.Equal(t, tui.TabFocus, mk1.(tui.Model).ActiveTab())
+
+	// 5. Tab headers render all 3 tabs with counts: 1: Focus (N)  2: Mine (N)  3: Inbox (N)
+	view := m.View()
+	assert.Contains(t, view, "1: Focus (0)")
+	assert.Contains(t, view, "2: Mine (1)")
+	assert.Contains(t, view, "3: Inbox (2)")
+}
+
+func TestModel_FocusTab_HeadersIncludeAuthor(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	pr := model.PullRequest{
+		Number:    101,
+		Title:     "Focused PR",
+		Author:    "alice",
+		UpdatedAt: now.Add(-1 * time.Hour),
+	}
+	m := tui.New(
+		model.Queue{},
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithFocusItems([]score.Scored{{PR: pr}}),
+	)
+
+	assert.Equal(t, tui.TabFocus, m.ActiveTab())
+	view := m.View()
+	assert.Contains(t, view, "AUTHOR")
 }
 
 func TestModel_NavigationKeybindings(t *testing.T) {
 	t.Parallel()
 
 	q := makeTestQueue()
-	m := tui.New(q, tui.WithViewer("kalverra"))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithActiveTab(tui.TabInbox))
 
 	// Move down with 'j'
 	m2, _ := sendRune(m, 'j')
@@ -225,22 +310,30 @@ func TestModel_CursorPreservedPerTab(t *testing.T) {
 	t.Parallel()
 
 	q := makeTestQueue()
-	m := tui.New(q, tui.WithViewer("kalverra"))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithActiveTab(tui.TabInbox))
 
 	// Move down in Inbox to index 1
 	m2, _ := sendRune(m, 'j')
 	model2 := m2.(tui.Model)
 	assert.Equal(t, 1, model2.Cursor())
 
-	// Switch to Mine (cursor should be 0)
+	// Switch to Focus (cursor should be 0)
 	m3, _ := sendKey(model2, tea.KeyTab)
 	model3 := m3.(tui.Model)
+	assert.Equal(t, tui.TabFocus, model3.ActiveTab())
 	assert.Equal(t, 0, model3.Cursor())
 
-	// Switch back to Inbox (cursor should still be 1)
+	// Switch to Mine (cursor should be 0)
 	m4, _ := sendKey(model3, tea.KeyTab)
 	model4 := m4.(tui.Model)
-	assert.Equal(t, 1, model4.Cursor())
+	assert.Equal(t, tui.TabMine, model4.ActiveTab())
+	assert.Equal(t, 0, model4.Cursor())
+
+	// Switch back to Inbox (cursor should still be 1)
+	m5, _ := sendKey(model4, tea.KeyTab)
+	model5 := m5.(tui.Model)
+	assert.Equal(t, tui.TabInbox, model5.ActiveTab())
+	assert.Equal(t, 1, model5.Cursor())
 }
 
 func TestModel_ScoreBreakdownModal(t *testing.T) {
@@ -248,7 +341,7 @@ func TestModel_ScoreBreakdownModal(t *testing.T) {
 
 	q := makeTestQueue()
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 	assert.False(t, m.IsModalOpen())
 
@@ -282,7 +375,13 @@ func TestModel_BadgesAndDisplayInView(t *testing.T) {
 
 	q := makeTestQueue()
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(120, 40))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(120, 40),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	view := m.View()
 
@@ -298,7 +397,7 @@ func TestModel_BadgesAndDisplayInView(t *testing.T) {
 	assert.Contains(t, view, "CLEAN")
 
 	// Switch to Mine tab
-	mMine, _ := sendKey(m, tea.KeyTab)
+	mMine, _ := sendRune(m, '2')
 	mineView := mMine.View()
 	assert.Contains(t, mineView, "Implement TUI dashboard")
 	assert.Contains(t, mineView, "1/2 req (1 ⠋)")
@@ -371,7 +470,13 @@ func TestModel_NewDefaultColumnsAndBotBadge(t *testing.T) {
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 40))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 40),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	// Column headers: TITLE | STATUS | SIZE | CI | UPDATED | REPO | AUTHOR (and no old PR header)
@@ -410,29 +515,35 @@ func TestModel_QueuedPRStatusBadgeAndDivider(t *testing.T) {
 
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	q := model.Queue{
-		Authored: []model.PullRequest{
-			{
-				Number:         201,
-				Title:          "Merge queue feature",
-				IsInMergeQueue: true,
-				UpdatedAt:      now.Add(-30 * time.Minute),
-			},
-		},
 		Inbox: []model.PullRequest{
 			{
 				Number:           101,
-				Title:            "Peer queued PR",
+				Title:            "Inbox PR in merge queue",
+				MergeStateStatus: "QUEUED",
+				UpdatedAt:        now.Add(-10 * time.Minute),
+			},
+		},
+		Authored: []model.PullRequest{
+			{
+				Number:           201,
+				Title:            "My PR in merge queue",
 				MergeStateStatus: "QUEUED",
 				UpdatedAt:        now.Add(-15 * time.Minute),
 			},
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 40))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 40),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	inboxView := m.View()
 	assert.Contains(t, inboxView, "QUEUED")
 
-	mMine, _ := sendKey(m, tea.KeyTab)
+	mMine, _ := sendRune(m, '2')
 	mineView := mMine.View()
 	assert.Contains(t, mineView, "QUEUED")
 	assert.Contains(t, mineView, "── MERGE QUEUE (1) ──")
@@ -494,7 +605,7 @@ func TestModel_WithFixtureData(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 	assert.NotEmpty(t, m.InboxItems())
 	assert.NotEmpty(t, m.MineItems())
@@ -544,7 +655,13 @@ func TestModel_TableHeadersAndScoresHidden(t *testing.T) {
 
 	q := makeTestQueue()
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(120, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(120, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	view := m.View()
 
@@ -575,7 +692,7 @@ func TestModel_ScrollWithArrowKeys(t *testing.T) {
 
 	// 25 PRs in inbox, terminal height 17 (leaving around 4-5 visible rows after notification chrome)
 	q := makeLargeTestQueue(25, 0)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 17))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 17), tui.WithActiveTab(tui.TabInbox))
 
 	assert.Equal(t, 0, m.Cursor())
 	assert.Equal(t, 0, m.ScrollOffset())
@@ -613,7 +730,7 @@ func TestModel_ScrollPreservedPerTab(t *testing.T) {
 	t.Parallel()
 
 	q := makeLargeTestQueue(25, 25)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 14))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 14), tui.WithActiveTab(tui.TabInbox))
 
 	// Move down in Inbox
 	current := m
@@ -624,8 +741,13 @@ func TestModel_ScrollPreservedPerTab(t *testing.T) {
 	inboxOffset := current.ScrollOffset()
 	require.Positive(t, inboxOffset)
 
+	// Switch to Focus tab
+	mFocus, _ := sendKey(current, tea.KeyTab)
+	focusModel := mFocus.(tui.Model)
+	assert.Equal(t, tui.TabFocus, focusModel.ActiveTab())
+
 	// Switch to Mine tab
-	mMine, _ := sendKey(current, tea.KeyTab)
+	mMine, _ := sendKey(focusModel, tea.KeyTab)
 	mineModel := mMine.(tui.Model)
 	assert.Equal(t, tui.TabMine, mineModel.ActiveTab())
 	assert.Equal(t, 0, mineModel.ScrollOffset(), "Mine tab should start at scroll offset 0")
@@ -641,7 +763,7 @@ func TestModel_PageUpDown(t *testing.T) {
 	t.Parallel()
 
 	q := makeLargeTestQueue(30, 0)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 14))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 14), tui.WithActiveTab(tui.TabInbox))
 
 	// Page down advances cursor and scroll
 	mPageDown, _ := sendKey(m, tea.KeyPgDown)
@@ -679,7 +801,13 @@ func TestModel_SizeColumnValues(t *testing.T) {
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(120, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(120, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	assert.Contains(t, view, "SIZE")
@@ -750,7 +878,13 @@ func TestModel_StaleBreakAndNavigation(t *testing.T) {
 		Inbox: []model.PullRequest{stalePR1, activePR1, stalePR2, activePR2},
 	}
 
-	m := tui.New(q, tui.WithViewer(viewer), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer(viewer),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	// Active items must come before stale items in InboxItems()
 	inbox := m.InboxItems()
@@ -829,7 +963,13 @@ func TestModel_StaleBreak_AllStalePRs(t *testing.T) {
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(120, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(120, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	assert.Contains(t, view, "── STALE (2) ──")
@@ -860,7 +1000,13 @@ func TestModel_MineTab_OmitsAuthorColumn(t *testing.T) {
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	// In Inbox tab, AUTHOR column is present
 	inboxView := m.View()
@@ -868,7 +1014,7 @@ func TestModel_MineTab_OmitsAuthorColumn(t *testing.T) {
 	assert.Contains(t, inboxView, "@alice")
 
 	// Switch to Mine tab
-	mMine, _ := sendKey(m, tea.KeyTab)
+	mMine, _ := sendRune(m, '2')
 	mineView := mMine.View()
 
 	// Mine tab has headers except AUTHOR
@@ -890,6 +1036,7 @@ func TestModel_OpenBrowser_Inbox(t *testing.T) {
 	m := tui.New(
 		q,
 		tui.WithViewer("kalverra"),
+		tui.WithActiveTab(tui.TabInbox),
 		tui.WithOpener(func(rawURL string) error {
 			openedURL = rawURL
 			return nil
@@ -961,6 +1108,7 @@ func TestModel_OpenBrowser_OpenerError(t *testing.T) {
 	m := tui.New(
 		q,
 		tui.WithViewer("kalverra"),
+		tui.WithActiveTab(tui.TabInbox),
 		tui.WithOpener(func(string) error {
 			return errors.New("failed to launch browser")
 		}),
@@ -988,6 +1136,7 @@ func TestModel_OpenBrowser_ModalOpen(t *testing.T) {
 	m := tui.New(
 		q,
 		tui.WithViewer("kalverra"),
+		tui.WithActiveTab(tui.TabInbox),
 		tui.WithOpener(func(string) error {
 			t.Fatal("opener should not be called when modal is open")
 			return nil
@@ -1034,7 +1183,7 @@ func TestModel_ActionStatusBadges(t *testing.T) {
 			},
 		},
 	}
-	m := tui.New(q, tui.WithViewer("kalverra"))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithActiveTab(tui.TabInbox))
 	view := m.View()
 
 	assert.Contains(t, view, "FAILING CI")
@@ -1076,7 +1225,13 @@ func TestModel_InboxCategoryDividers(t *testing.T) {
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	assert.Contains(t, view, "── NEEDS YOUR ATTENTION (1) ──")
@@ -1233,6 +1388,7 @@ func TestModel_StackGrouping(t *testing.T) {
 		tui.WithNow(now),
 		tui.WithDimensions(160, 40),
 		tui.WithCollapsedStacks(false),
+		tui.WithActiveTab(tui.TabInbox),
 	)
 	view := m.View()
 
@@ -1337,7 +1493,7 @@ func TestModel_ScrollIndicatorCountsVisiblePRs(t *testing.T) {
 	// The scroll indicator must count item rows, not display rows: display
 	// row indices include section dividers and can exceed the PR count.
 	q := makeLargeTestQueue(25, 0)
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 17))
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithDimensions(100, 17), tui.WithActiveTab(tui.TabInbox))
 
 	mEnd, _ := sendRune(m, 'G')
 	atEnd := mEnd.(tui.Model)
@@ -1360,7 +1516,13 @@ func TestModel_DividersSpanTableWidthAndUncolored(t *testing.T) {
 		},
 	}
 
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	// 1. Must contain the divider prefix
@@ -1461,7 +1623,13 @@ func TestModel_PRStacks_CollapsedByDefault(t *testing.T) {
 	}
 
 	q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, pr3}}
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	// Bottom PR visible with stack emoji and (+2)
@@ -1516,7 +1684,13 @@ func TestModel_PRStacks_ToggleExpandAndCollapse(t *testing.T) {
 	}
 
 	q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, pr3}}
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	// Initial: collapsed
 	assert.Contains(t, m.View(), "🥞 [1/3] (+2) Alpha base")
@@ -1581,7 +1755,13 @@ func TestModel_PRStacks_ToggleAllKey(t *testing.T) {
 	}
 
 	q := model.Queue{Inbox: []model.PullRequest{prA1, prA2, prB1, prB2}}
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	// Initial: both collapsed
 	view := m.View()
@@ -1648,7 +1828,13 @@ func TestModel_PRStacks_CursorNavigationAndClamping(t *testing.T) {
 	}
 
 	q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, pr3, prSolo}}
-	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 
 	// When collapsed, cursor moving down should skip hidden child PRs and land directly on prSolo
 	mDown, _ := sendKey(m, tea.KeyDown)
@@ -1745,7 +1931,7 @@ func TestModel_TableView_CIDuration(t *testing.T) {
 		Inbox: []model.PullRequest{prRunning, prCompleted, prFailed, prNoTimes},
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(q, tui.WithNow(now), tui.WithDimensions(140, 30), tui.WithActiveTab(tui.TabInbox))
 	view := m.View()
 
 	// Running checks show spinner and compact duration
@@ -1762,7 +1948,12 @@ func TestModel_TableView_CIDuration(t *testing.T) {
 	assert.NotContains(t, view, "✗ 1 req failed 12m0s")
 
 	// No timestamps check retains standard badge without duration
-	mOnly := tui.New(model.Queue{Inbox: []model.PullRequest{prNoTimes}}, tui.WithNow(now), tui.WithDimensions(140, 30))
+	mOnly := tui.New(
+		model.Queue{Inbox: []model.PullRequest{prNoTimes}},
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	viewOnly := mOnly.View()
 	assert.Contains(t, viewOnly, "✓ 2/2")
 	assert.NotRegexp(t, `✓ 2/2 \d+`, viewOnly)

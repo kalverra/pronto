@@ -58,6 +58,7 @@ func TestView_PartialPRShowsLoadingIndicator(t *testing.T) {
 		tui.WithViewer("kalverra"),
 		tui.WithNow(time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)),
 		tui.WithWeights(score.DefaultWeights()),
+		tui.WithActiveTab(tui.TabInbox),
 	)
 
 	view := m.View()

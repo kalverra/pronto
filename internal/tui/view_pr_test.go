@@ -37,7 +37,7 @@ func TestModel_ViewPR_EnterTriggersViewer(t *testing.T) {
 		}
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithPRViewer(viewer))
+	m := tui.New(q, tui.WithNow(now), tui.WithPRViewer(viewer), tui.WithActiveTab(tui.TabInbox))
 
 	m2, cmd := sendRune(m, 'v')
 	require.NotNil(t, cmd)
@@ -122,7 +122,7 @@ func TestModel_ViewPR_DefaultViewer(t *testing.T) {
 		Inbox: []model.PullRequest{pr},
 	}
 
-	m := tui.New(q, tui.WithNow(now))
+	m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 	_, cmd := sendRune(m, 'v')
 	require.NotNil(t, cmd)
 	// Evaluating the Bubbletea ExecProcess cmd produces an execMsg without blocking execution
@@ -308,7 +308,7 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 			},
 		}
 		q := model.Queue{Inbox: []model.PullRequest{pr}}
-		m := tui.New(q, tui.WithNow(now))
+		m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 		mOpened, _ := sendKey(m, tea.KeyEnter)
 		view := mOpened.View()
@@ -335,7 +335,7 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 			},
 		}
 		q := model.Queue{Inbox: []model.PullRequest{pr}}
-		m := tui.New(q, tui.WithNow(now))
+		m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 		mOpened, _ := sendKey(m, tea.KeyEnter)
 		view := mOpened.View()
@@ -360,7 +360,7 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 			},
 		}
 		q := model.Queue{Inbox: []model.PullRequest{pr}}
-		m := tui.New(q, tui.WithNow(now))
+		m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 		mOpened, _ := sendKey(m, tea.KeyEnter)
 		view := mOpened.View()
@@ -419,7 +419,12 @@ func TestModel_CIBadge_DifferentiatesDuration(t *testing.T) {
 		},
 	}
 
-	m := tui.New(model.Queue{Inbox: []model.PullRequest{pr}}, tui.WithNow(now), tui.WithDimensions(140, 30))
+	m := tui.New(
+		model.Queue{Inbox: []model.PullRequest{pr}},
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabInbox),
+	)
 	view := m.View()
 
 	// Badge result and duration must be separated, not styled as a single unseparated chunk

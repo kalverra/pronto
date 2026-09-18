@@ -64,7 +64,7 @@ func TestModel_KeyD_TriggersDiffViewer(t *testing.T) {
 		}
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithPRDiffer(differ))
+	m := tui.New(q, tui.WithNow(now), tui.WithPRDiffer(differ), tui.WithActiveTab(tui.TabInbox))
 
 	// Press 'd'
 	m2, cmd := sendRune(m, 'd')
@@ -85,7 +85,7 @@ func TestModel_KeyEnter_TogglesDetailsView(t *testing.T) {
 		Inbox: []model.PullRequest{pr},
 	}
 
-	m := tui.New(q, tui.WithNow(now))
+	m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 	assert.False(t, m.IsDetailsOpen(), "details view should initially be closed")
 
 	// Press Enter to open details view
@@ -125,7 +125,7 @@ func TestModel_DetailsView_KeyD_LaunchesDiff(t *testing.T) {
 		return nil
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithPRDiffer(differ))
+	m := tui.New(q, tui.WithNow(now), tui.WithPRDiffer(differ), tui.WithActiveTab(tui.TabInbox))
 
 	// Open details
 	m2, _ := sendKey(m, tea.KeyEnter)
@@ -154,7 +154,7 @@ func TestModel_DetailsView_KeyV_LaunchesViewer(t *testing.T) {
 		return nil
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithPRViewer(viewer))
+	m := tui.New(q, tui.WithNow(now), tui.WithPRViewer(viewer), tui.WithActiveTab(tui.TabInbox))
 
 	// Open details
 	m2, _ := sendKey(m, tea.KeyEnter)
@@ -177,7 +177,7 @@ func TestModel_DetailsView_DismissWithEscOrQ(t *testing.T) {
 		Inbox: []model.PullRequest{pr},
 	}
 
-	m := tui.New(q, tui.WithNow(now))
+	m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
 
 	// Open details
 	m2, _ := sendKey(m, tea.KeyEnter)
@@ -213,7 +213,7 @@ func TestModel_DetailsView_KeyO_OpensBrowser(t *testing.T) {
 		return nil
 	}
 
-	m := tui.New(q, tui.WithNow(now), tui.WithOpener(opener))
+	m := tui.New(q, tui.WithNow(now), tui.WithOpener(opener), tui.WithActiveTab(tui.TabInbox))
 
 	// Open details
 	m2, _ := sendKey(m, tea.KeyEnter)

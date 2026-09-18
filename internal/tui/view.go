@@ -197,10 +197,13 @@ type displayRow struct {
 
 func (m Model) buildDisplayRows(tab Tab) []displayRow {
 	var list []score.Scored
-	if tab == TabInbox {
-		list = m.inboxItems
-	} else {
+	switch tab {
+	case TabFocus:
+		list = m.focusItems
+	case TabMine:
 		list = m.mineItems
+	case TabInbox:
+		list = m.inboxItems
 	}
 	if len(list) == 0 {
 		return nil
@@ -208,10 +211,14 @@ func (m Model) buildDisplayRows(tab Tab) []displayRow {
 
 	refTime := m.refTime()
 
-	if tab == TabInbox {
+	switch tab {
+	case TabInbox:
 		return m.buildInboxDisplayRows(list, refTime)
+	case TabMine:
+		return m.buildMineDisplayRows(list, refTime)
+	default:
+		return nil
 	}
-	return m.buildMineDisplayRows(list, refTime)
 }
 
 func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []displayRow {
@@ -441,23 +448,23 @@ func (m Model) View() string {
 	var b strings.Builder
 
 	// Tabs
-	tabInboxTitle := fmt.Sprintf("1: Inbox (%d)", len(m.inboxItems))
+	tabFocusTitle := fmt.Sprintf("1: Focus (%d)", len(m.focusItems))
 	tabMineTitle := fmt.Sprintf("2: Mine (%d)", len(m.mineItems))
+	tabInboxTitle := fmt.Sprintf("3: Inbox (%d)", len(m.inboxItems))
 
-	var tabs string
-	if m.activeTab == TabInbox {
-		tabs = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			activeTabStyle.Render(tabInboxTitle),
-			inactiveTabStyle.Render(tabMineTitle),
-		)
-	} else {
-		tabs = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			inactiveTabStyle.Render(tabInboxTitle),
-			activeTabStyle.Render(tabMineTitle),
-		)
+	renderTab := func(t Tab, title string) string {
+		if m.activeTab == t {
+			return activeTabStyle.Render(title)
+		}
+		return inactiveTabStyle.Render(title)
 	}
+
+	tabs := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		renderTab(TabFocus, tabFocusTitle),
+		renderTab(TabMine, tabMineTitle),
+		renderTab(TabInbox, tabInboxTitle),
+	)
 
 	b.WriteString(tabs)
 	b.WriteString("\n\n")
