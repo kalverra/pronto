@@ -728,3 +728,47 @@ func TestDetector_VanishedPR_CheckerBoundedParallelism(t *testing.T) {
 		)
 	})
 }
+
+func TestDetector_NotificationsHaveSubmittedAt(t *testing.T) {
+	t.Parallel()
+
+	checker := func(_ context.Context, _ string, _ int) (bool, error) {
+		return true, nil
+	}
+	d := notify.NewDetector(checker)
+
+	tBefore := time.Now().Add(-time.Second)
+
+	// 1. CI passed
+	prevPassing := makeBasePR(1, "CI Pass")
+	prevPassing.Checks = model.ChecksSummary{Total: 2, Running: 1, ReqTotal: 2, ReqRunning: 1, HasRequiredChecks: true}
+	currPassing := prevPassing
+	currPassing.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
+
+	// 2. CI failed
+	prevFailing := makeBasePR(2, "CI Fail")
+	prevFailing.Checks = model.ChecksSummary{Total: 2, Running: 1, ReqTotal: 2, ReqRunning: 1, HasRequiredChecks: true}
+	currFailing := prevFailing
+	currFailing.Checks = model.ChecksSummary{Total: 2, Failed: 1, ReqTotal: 2, ReqFailed: 1, HasRequiredChecks: true}
+
+	// 3. Conflict
+	prevConflict := makeBasePR(3, "Conflict")
+	currConflict := prevConflict
+	currConflict.MergeStatus = model.ComputeMergeStatus("CONFLICTING", "DIRTY", false)
+
+	// 4. Vanished (merged)
+	prevMerged := makeBasePR(4, "Merged")
+
+	notes, err := d.DetectMineChanges(
+		context.Background(),
+		[]model.PullRequest{prevPassing, prevFailing, prevConflict, prevMerged},
+		[]model.PullRequest{currPassing, currFailing, currConflict},
+	)
+	require.NoError(t, err)
+	require.Len(t, notes, 4)
+
+	for _, n := range notes {
+		assert.False(t, n.SubmittedAt.IsZero(), "notification trigger %v must have non-zero SubmittedAt", n.Trigger)
+		assert.True(t, n.SubmittedAt.After(tBefore), "SubmittedAt must be recent time.Now()")
+	}
+}

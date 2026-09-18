@@ -146,14 +146,15 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 		if !prevPR.Checks.IsPassing() && currPR.Checks.IsPassing() {
 			if d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "passed") {
 				n := Notification{
-					Trigger:   TriggerCIPassed,
-					PRNumber:  currPR.Number,
-					PRTitle:   currPR.Title,
-					Repo:      currPR.RepoNameWithOwner,
-					URL:       currPR.URL,
-					Author:    currPR.Author,
-					CommitOID: currPR.HeadRefOID,
-					Title:     fmt.Sprintf("CI Passed (#%d)", currPR.Number),
+					Trigger:     TriggerCIPassed,
+					PRNumber:    currPR.Number,
+					PRTitle:     currPR.Title,
+					Repo:        currPR.RepoNameWithOwner,
+					URL:         currPR.URL,
+					Author:      currPR.Author,
+					CommitOID:   currPR.HeadRefOID,
+					SubmittedAt: time.Now(),
+					Title:       fmt.Sprintf("CI Passed (#%d)", currPR.Number),
 					Message: fmt.Sprintf(
 						"Checks passed for %q (%s)",
 						currPR.Title,
@@ -170,14 +171,15 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 		if !prevPR.Checks.IsFailing() && currPR.Checks.IsFailing() {
 			if d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "failed") {
 				n := Notification{
-					Trigger:   TriggerCIFailed,
-					PRNumber:  currPR.Number,
-					PRTitle:   currPR.Title,
-					Repo:      currPR.RepoNameWithOwner,
-					URL:       currPR.URL,
-					Author:    currPR.Author,
-					CommitOID: currPR.HeadRefOID,
-					Title:     fmt.Sprintf("CI Failed (#%d)", currPR.Number),
+					Trigger:     TriggerCIFailed,
+					PRNumber:    currPR.Number,
+					PRTitle:     currPR.Title,
+					Repo:        currPR.RepoNameWithOwner,
+					URL:         currPR.URL,
+					Author:      currPR.Author,
+					CommitOID:   currPR.HeadRefOID,
+					SubmittedAt: time.Now(),
+					Title:       fmt.Sprintf("CI Failed (#%d)", currPR.Number),
 					Message: fmt.Sprintf(
 						"CI failed for %q (%s)",
 						currPR.Title,
@@ -194,14 +196,15 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 		if !prevPR.MergeStatus.HasConflict() && currPR.MergeStatus.HasConflict() {
 			if d.tryMarkSeen(conflictKey(currPR.RepoNameWithOwner, currPR.Number)) {
 				n := Notification{
-					Trigger:   TriggerConflict,
-					PRNumber:  currPR.Number,
-					PRTitle:   currPR.Title,
-					Repo:      currPR.RepoNameWithOwner,
-					URL:       currPR.URL,
-					Author:    currPR.Author,
-					CommitOID: currPR.HeadRefOID,
-					Title:     fmt.Sprintf("Merge Conflict (#%d)", currPR.Number),
+					Trigger:     TriggerConflict,
+					PRNumber:    currPR.Number,
+					PRTitle:     currPR.Title,
+					Repo:        currPR.RepoNameWithOwner,
+					URL:         currPR.URL,
+					Author:      currPR.Author,
+					CommitOID:   currPR.HeadRefOID,
+					SubmittedAt: time.Now(),
+					Title:       fmt.Sprintf("Merge Conflict (#%d)", currPR.Number),
 					Message: fmt.Sprintf(
 						"Merge conflict in %q (%s)",
 						currPR.Title,
@@ -359,13 +362,14 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 
 			if merged && d.tryMarkSeen(target.mKey) {
 				n := Notification{
-					Trigger:  TriggerPRMerged,
-					PRNumber: target.pr.Number,
-					PRTitle:  target.pr.Title,
-					Repo:     target.pr.RepoNameWithOwner,
-					URL:      target.pr.URL,
-					Author:   target.pr.Author,
-					Title:    fmt.Sprintf("PR Merged (#%d)", target.pr.Number),
+					Trigger:     TriggerPRMerged,
+					PRNumber:    target.pr.Number,
+					PRTitle:     target.pr.Title,
+					Repo:        target.pr.RepoNameWithOwner,
+					URL:         target.pr.URL,
+					Author:      target.pr.Author,
+					SubmittedAt: time.Now(),
+					Title:       fmt.Sprintf("PR Merged (#%d)", target.pr.Number),
 					Message: fmt.Sprintf(
 						"Merged: %q (%s)",
 						target.pr.Title,

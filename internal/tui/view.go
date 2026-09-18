@@ -641,7 +641,7 @@ func (m Model) renderStatusBanner() string {
 	case m.lastClosedPR != nil:
 		return successBannerStyle.Render(fmt.Sprintf(
 			"closed #%d as stale", m.lastClosedPR.Number))
-	case m.lastNotification != nil:
+	case m.LastNotification() != nil:
 		return m.renderNotificationBanner()
 	case m.fetchErr != nil:
 		if m.lastFetch.IsZero() {
@@ -665,7 +665,7 @@ func (m Model) renderStatusBanner() string {
 }
 
 func (m Model) renderNotificationBanner() string {
-	n := m.lastNotification
+	n := m.LastNotification()
 	if n == nil {
 		return ""
 	}

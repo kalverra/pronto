@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -574,4 +575,269 @@ func TestStartupModel_DaemonSource_SkipsChangeDetection(t *testing.T) {
 	// Update with refresh
 	_, cmd := m.Update(tui.QueueLoadedMsg{Queue: refreshedQ})
 	assert.Nil(t, cmd, "daemon source must skip local change detection; the daemon detects instead")
+}
+
+func TestModel_Notification_FeedCapAndOrdering(t *testing.T) {
+	t.Parallel()
+
+	q := model.Queue{}
+	m := tui.New(q)
+
+	assert.Empty(t, m.Notifications())
+	assert.Nil(t, m.LastNotification())
+	assert.Equal(t, 0, m.NotificationCursor())
+
+	// Push 6 notifications (1..6)
+	for i := 1; i <= 6; i++ {
+		updated, _ := m.Update(tui.NotificationMsg{
+			Notifications: []notify.Notification{
+				{
+					Trigger:  notify.TriggerCIFailed,
+					PRNumber: i,
+					Repo:     "kalverra/pronto",
+					Title:    "CI Failed",
+				},
+			},
+		})
+		m = updated.(tui.Model)
+	}
+
+	// Max 5 items, newest at index 0 (PR 6, 5, 4, 3, 2)
+	notes := m.Notifications()
+	require.Len(t, notes, 5)
+	assert.Equal(t, 6, notes[0].PRNumber)
+	assert.Equal(t, 5, notes[1].PRNumber)
+	assert.Equal(t, 4, notes[2].PRNumber)
+	assert.Equal(t, 3, notes[3].PRNumber)
+	assert.Equal(t, 2, notes[4].PRNumber)
+	assert.Equal(t, &notes[0], m.LastNotification())
+
+	// Dedup/supersede tests:
+	// 1. CI passed replaces or drops existing CI failed notification for that PR
+	updatedPass, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:  notify.TriggerCIPassed,
+				PRNumber: 6,
+				Repo:     "kalverra/pronto",
+				Title:    "CI Passed",
+			},
+		},
+	})
+	m = updatedPass.(tui.Model)
+	require.Len(t, m.Notifications(), 5)
+	assert.Equal(t, 6, m.Notifications()[0].PRNumber)
+	assert.Equal(t, notify.TriggerCIPassed, m.Notifications()[0].Trigger)
+	pr6Count := 0
+	for _, n := range m.Notifications() {
+		if n.PRNumber == 6 {
+			pr6Count++
+		}
+	}
+	assert.Equal(t, 1, pr6Count)
+
+	// 2. CI failed replaces existing CI passed notification for that PR
+	updatedFail, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:  notify.TriggerCIFailed,
+				PRNumber: 6,
+				Repo:     "kalverra/pronto",
+				Title:    "CI Failed",
+			},
+		},
+	})
+	m = updatedFail.(tui.Model)
+	assert.Equal(t, 6, m.Notifications()[0].PRNumber)
+	assert.Equal(t, notify.TriggerCIFailed, m.Notifications()[0].Trigger)
+
+	// 3. Merge conflict replaces previous conflict notification for that PR
+	updatedConflict1, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:  notify.TriggerConflict,
+				PRNumber: 7,
+				Repo:     "kalverra/pronto",
+				Title:    "Conflict 1",
+			},
+		},
+	})
+	m = updatedConflict1.(tui.Model)
+	assert.Equal(t, 7, m.Notifications()[0].PRNumber)
+	assert.Equal(t, "Conflict 1", m.Notifications()[0].Title)
+
+	updatedConflict2, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:  notify.TriggerConflict,
+				PRNumber: 7,
+				Repo:     "kalverra/pronto",
+				Title:    "Conflict 2",
+			},
+		},
+	})
+	m = updatedConflict2.(tui.Model)
+	assert.Equal(t, 7, m.Notifications()[0].PRNumber)
+	assert.Equal(t, "Conflict 2", m.Notifications()[0].Title)
+	pr7Count := 0
+	for _, n := range m.Notifications() {
+		if n.PRNumber == 7 {
+			pr7Count++
+		}
+	}
+	assert.Equal(t, 1, pr7Count)
+
+	// 4. PR merged replaces earlier pending notifications for that PR
+	updatedMerged, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:  notify.TriggerPRMerged,
+				PRNumber: 7,
+				Repo:     "kalverra/pronto",
+				Title:    "PR Merged",
+			},
+		},
+	})
+	m = updatedMerged.(tui.Model)
+	assert.Equal(t, 7, m.Notifications()[0].PRNumber)
+	assert.Equal(t, notify.TriggerPRMerged, m.Notifications()[0].Trigger)
+	for _, n := range m.Notifications() {
+		if n.PRNumber == 7 {
+			assert.Equal(t, notify.TriggerPRMerged, n.Trigger)
+		}
+	}
+}
+
+func TestModel_Notification_TTLExpiration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	q := model.Queue{}
+	m := tui.New(q, tui.WithNow(now))
+
+	// Notification 1: 35 minutes ago (should expire)
+	// Notification 2: 10 minutes ago (should stay)
+	// Notification 3: 0 timestamp (defaulted to now, should stay)
+	updated, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:     notify.TriggerCIFailed,
+				PRNumber:    1,
+				Repo:        "kalverra/pronto",
+				SubmittedAt: now.Add(-35 * time.Minute),
+			},
+			{
+				Trigger:     notify.TriggerCIFailed,
+				PRNumber:    2,
+				Repo:        "kalverra/pronto",
+				SubmittedAt: now.Add(-10 * time.Minute),
+			},
+			{
+				Trigger:  notify.TriggerConflict,
+				PRNumber: 3,
+				Repo:     "kalverra/pronto",
+			},
+		},
+	})
+	m = updated.(tui.Model)
+
+	// Refresh queue to trigger TTL pruning
+	updated2, _ := m.Update(tui.QueueLoadedMsg{Queue: q})
+	m2 := updated2.(tui.Model)
+
+	notes := m2.Notifications()
+	require.Len(t, notes, 2)
+	assert.Equal(t, 3, notes[0].PRNumber)
+	assert.Equal(t, 2, notes[1].PRNumber)
+	// PR 1 must have been evicted by 30-min TTL
+	for _, n := range notes {
+		assert.NotEqual(t, 1, n.PRNumber)
+	}
+}
+
+func TestModel_Notification_QueueStateSync(t *testing.T) {
+	t.Parallel()
+
+	initialQ := model.Queue{
+		Authored: []model.PullRequest{
+			{
+				Number:            1,
+				Title:             "PR 1",
+				RepoNameWithOwner: "kalverra/pronto",
+				Checks: model.ChecksSummary{
+					Total:  2,
+					Failed: 1,
+					Done:   2,
+				},
+			},
+			{
+				Number:            2,
+				Title:             "PR 2",
+				RepoNameWithOwner: "kalverra/pronto",
+				Mergeable:         "CONFLICTING",
+				MergeStatus:       model.ComputeMergeStatus("CONFLICTING", "DIRTY", false),
+			},
+			{
+				Number:            3,
+				Title:             "PR 3",
+				RepoNameWithOwner: "kalverra/pronto",
+			},
+		},
+	}
+
+	m := tui.New(initialQ)
+
+	// Seed notifications: PR 1 CI failed, PR 2 conflict, PR 3 CI failed
+	updated, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:  notify.TriggerCIFailed,
+				PRNumber: 1,
+				Repo:     "kalverra/pronto",
+			},
+			{
+				Trigger:  notify.TriggerConflict,
+				PRNumber: 2,
+				Repo:     "kalverra/pronto",
+			},
+			{
+				Trigger:  notify.TriggerCIFailed,
+				PRNumber: 3,
+				Repo:     "kalverra/pronto",
+			},
+		},
+	})
+	m = updated.(tui.Model)
+	require.Len(t, m.Notifications(), 3)
+
+	// Refreshed queue:
+	// - PR 1 has passing CI (clears CI fail)
+	// - PR 2 conflict resolved (clears conflict)
+	// - PR 3 is merged (absent from open PR queue, clears pre-merge alerts)
+	refreshedQ := model.Queue{
+		Authored: []model.PullRequest{
+			{
+				Number:            1,
+				Title:             "PR 1",
+				RepoNameWithOwner: "kalverra/pronto",
+				Checks: model.ChecksSummary{
+					Total: 2,
+					Done:  2,
+				},
+			},
+			{
+				Number:            2,
+				Title:             "PR 2",
+				RepoNameWithOwner: "kalverra/pronto",
+				Mergeable:         "MERGEABLE",
+				MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			},
+		},
+	}
+
+	updated2, _ := m.Update(tui.QueueLoadedMsg{Queue: refreshedQ})
+	m2 := updated2.(tui.Model)
+
+	// All 3 pre-merge/failing alerts should have cleared!
+	assert.Empty(t, m2.Notifications(), "CI pass, conflict resolved, and merged PR must clear pre-merge alerts")
 }

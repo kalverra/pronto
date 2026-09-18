@@ -83,7 +83,9 @@ type Model struct {
 	notificationsDisabled bool
 	detectionDisabled     bool
 	logger                zerolog.Logger
-	lastNotification      *notify.Notification
+	notifications         []notify.Notification
+	notificationCursor    int
+	prevQueue             model.Queue
 	notificationFocused   bool
 	viewPR                ViewPRFunc
 	diffPR                ViewPRFunc
@@ -545,7 +547,7 @@ func New(q model.Queue, opts ...Option) Model {
 // applyQueue adopts a freshly fetched (or snapshot) queue, re-ranking items
 // and clamping cursors to the new list bounds.
 func (m Model) applyQueue(q model.Queue) Model {
-	m.queue = q
+	m.prevQueue = m.queue
 	if q.Viewer != "" {
 		m.viewer = q.Viewer
 	}
@@ -565,6 +567,7 @@ func (m Model) applyQueue(q model.Queue) Model {
 		}
 		inboxPRs[i] = pr
 	}
+	q.Inbox = inboxPRs
 	m.inboxItems = score.Rank(inboxPRs, m.now, m.viewer, m.teams, m.index, m.weights)
 
 	authoredPRs := make([]model.PullRequest, len(q.Authored))
@@ -575,10 +578,16 @@ func (m Model) applyQueue(q model.Queue) Model {
 		}
 		authoredPRs[i] = pr
 	}
+	q.Authored = authoredPRs
+	m.queue = q
 	m.mineItems = score.RankMine(authoredPRs, m.now, score.DefaultMineWeights())
 
 	m = m.clampTabView(TabInbox)
 	m = m.clampTabView(TabMine)
+
+	m = m.syncNotificationsWithQueue()
+	m = m.pruneStaleNotifications()
+	m = m.clampNotificationCursor()
 
 	return m
 }
@@ -699,11 +708,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NotificationMsg:
-		if len(msg.Notifications) > 0 {
-			latest := msg.Notifications[len(msg.Notifications)-1]
-			m.lastNotification = &latest
-			m.notificationFocused = false
+		for _, n := range msg.Notifications {
+			m = m.addNotification(n)
 		}
+		m.notificationFocused = false
 		return m, nil
 
 	case tea.KeyMsg:
@@ -750,14 +758,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m.teaQuit()
 	case "n":
-		if m.lastNotification != nil {
+		if m.LastNotification() != nil {
 			m.notificationFocused = !m.notificationFocused
 			return m, nil
 		}
 	case "esc":
 		m.notificationFocused = false
-		if m.lastNotification != nil {
-			m.lastNotification = nil
+		if len(m.notifications) > 0 {
+			m.notifications = nil
 			return m, nil
 		}
 	case "tab", "shift+tab", "1", "2":
@@ -865,7 +873,10 @@ func (m Model) teaQuit() (tea.Model, tea.Cmd) {
 
 func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 	if m.IsNotificationFocused() {
-		targetURL := notificationURL(*m.lastNotification)
+		if m.LastNotification() == nil {
+			return m, nil
+		}
+		targetURL := notificationURL(*m.LastNotification())
 		if targetURL == "" {
 			return m, nil
 		}
@@ -913,7 +924,10 @@ func (m Model) handleViewKey() (tea.Model, tea.Cmd) {
 
 func (m Model) handleOpenKey() (tea.Model, tea.Cmd) {
 	if m.IsNotificationFocused() {
-		targetURL := notificationURL(*m.lastNotification)
+		if m.LastNotification() == nil {
+			return m, nil
+		}
+		targetURL := notificationURL(*m.LastNotification())
 		if targetURL == "" {
 			return m, nil
 		}
@@ -988,7 +1002,7 @@ func (m Model) handleNavKey(key string) (Model, bool) {
 		if len(vis) > 0 {
 			lastVis = vis[len(vis)-1]
 		}
-		if (len(vis) == 0 || cursor == lastVis) && m.lastNotification != nil {
+		if (len(vis) == 0 || cursor == lastVis) && m.LastNotification() != nil {
 			m.notificationFocused = true
 			return m, true
 		}
@@ -1455,7 +1469,7 @@ func (m Model) statusBannerShown() bool {
 	return m.fetchErr != nil || m.refreshing || m.staleSnapshot ||
 		(m.closeErr != nil && m.closeErrPR != nil) ||
 		m.confirmClosePR != nil || m.closingPR != nil || m.lastClosedPR != nil ||
-		m.lastNotification != nil ||
+		m.LastNotification() != nil ||
 		(m.viewErr != nil && m.viewErrPR != nil)
 }
 
@@ -1586,14 +1600,210 @@ func (m Model) CloseErr() error {
 	return m.closeErr
 }
 
+const (
+	maxNotifications = 5
+	notificationTTL  = 30 * time.Minute
+)
+
+// Notifications returns the slice of current notifications, newest first.
+func (m Model) Notifications() []notify.Notification {
+	return m.notifications
+}
+
+// NotificationCursor returns the index of the selected notification.
+func (m Model) NotificationCursor() int {
+	return m.notificationCursor
+}
+
 // LastNotification returns the last notification triggered, if any.
 func (m Model) LastNotification() *notify.Notification {
-	return m.lastNotification
+	if len(m.notifications) == 0 {
+		return nil
+	}
+	return &m.notifications[0]
 }
 
 // IsNotificationFocused reports whether the notification banner currently has focus.
 func (m Model) IsNotificationFocused() bool {
-	return m.notificationFocused && m.lastNotification != nil
+	return m.notificationFocused && len(m.notifications) > 0
+}
+
+func (m Model) currentTime() time.Time {
+	return m.refTime()
+}
+
+func (m Model) clampNotificationCursor() Model {
+	if len(m.notifications) == 0 {
+		m.notificationCursor = 0
+		return m
+	}
+	if m.notificationCursor < 0 {
+		m.notificationCursor = 0
+	} else if m.notificationCursor >= len(m.notifications) {
+		m.notificationCursor = len(m.notifications) - 1
+	}
+	return m
+}
+
+func (m Model) addNotification(n notify.Notification) Model {
+	if n.SubmittedAt.IsZero() {
+		n.SubmittedAt = m.currentTime()
+	}
+
+	m.notifications = slices.DeleteFunc(m.notifications, func(old notify.Notification) bool {
+		samePR := old.PRNumber == n.PRNumber && (old.Repo == "" || n.Repo == "" || old.Repo == n.Repo)
+		if !samePR {
+			return false
+		}
+		switch n.Trigger {
+		case notify.TriggerCIPassed:
+			return old.Trigger == notify.TriggerCIFailed || old.Trigger == notify.TriggerCIPassed
+		case notify.TriggerCIFailed:
+			return old.Trigger == notify.TriggerCIPassed || old.Trigger == notify.TriggerCIFailed
+		case notify.TriggerConflict:
+			return old.Trigger == notify.TriggerConflict
+		case notify.TriggerPRMerged:
+			return true
+		default:
+			return old.Trigger == n.Trigger
+		}
+	})
+
+	m.notifications = append([]notify.Notification{n}, m.notifications...)
+	if len(m.notifications) > maxNotifications {
+		m.notifications = m.notifications[:maxNotifications]
+	}
+	m = m.clampNotificationCursor()
+	return m
+}
+
+func (m Model) pruneStaleNotifications() Model {
+	if len(m.notifications) == 0 {
+		return m
+	}
+	now := m.currentTime()
+	m.notifications = slices.DeleteFunc(m.notifications, func(n notify.Notification) bool {
+		if n.SubmittedAt.IsZero() {
+			return false
+		}
+		return now.Sub(n.SubmittedAt) > notificationTTL
+	})
+	return m.clampNotificationCursor()
+}
+
+type queueSyncContext struct {
+	currPRs    map[model.PRKey]model.PullRequest
+	prevPRs    map[model.PRKey]model.PullRequest
+	mergedPRs  map[model.PRKey]bool
+	mergedNums map[int]bool
+	lastClosed *model.PullRequest
+}
+
+func notificationMatchesPR(pr model.PullRequest, n notify.Notification) bool {
+	if pr.Number != n.PRNumber {
+		return false
+	}
+	if n.Repo == "" || pr.RepoNameWithOwner == "" {
+		return true
+	}
+	return pr.RepoNameWithOwner == n.Repo
+}
+
+func (ctx queueSyncContext) findCurrPR(n notify.Notification) (model.PullRequest, bool) {
+	if pr, ok := ctx.currPRs[model.PRKey{Repo: n.Repo, Number: n.PRNumber}]; ok {
+		return pr, true
+	}
+	for _, pr := range ctx.currPRs {
+		if notificationMatchesPR(pr, n) {
+			return pr, true
+		}
+	}
+	return model.PullRequest{}, false
+}
+
+func (ctx queueSyncContext) wasInPrev(n notify.Notification) bool {
+	if _, ok := ctx.prevPRs[model.PRKey{Repo: n.Repo, Number: n.PRNumber}]; ok {
+		return true
+	}
+	for _, pr := range ctx.prevPRs {
+		if notificationMatchesPR(pr, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ctx queueSyncContext) shouldDrop(n notify.Notification) bool {
+	pk := model.PRKey{Repo: n.Repo, Number: n.PRNumber}
+	isMerged := ctx.mergedPRs[pk] || ctx.mergedNums[n.PRNumber]
+
+	// If PR is merged, drop earlier pending notifications for that PR
+	if isMerged && n.Trigger != notify.TriggerPRMerged {
+		return true
+	}
+
+	// If PR was previously in queue and is no longer in current queue,
+	// it is merged or closed. Drop earlier pending notifications.
+	if len(ctx.prevPRs) > 0 {
+		if _, inCurr := ctx.findCurrPR(n); !inCurr && ctx.wasInPrev(n) {
+			return n.Trigger != notify.TriggerPRMerged
+		}
+	}
+
+	// If PR matches lastClosedPR, drop pending notifications
+	if ctx.lastClosed != nil && notificationMatchesPR(*ctx.lastClosed, n) {
+		return true
+	}
+
+	// Check current PR state in queue
+	if pr, ok := ctx.findCurrPR(n); ok {
+		if n.Trigger == notify.TriggerCIFailed && pr.Checks.IsPassing() {
+			return true
+		}
+		if n.Trigger == notify.TriggerConflict && !pr.MergeStatus.HasConflict() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m Model) syncNotificationsWithQueue() Model {
+	if len(m.notifications) == 0 {
+		return m
+	}
+
+	ctx := queueSyncContext{
+		currPRs:    make(map[model.PRKey]model.PullRequest, len(m.queue.Authored)+len(m.queue.Inbox)),
+		prevPRs:    make(map[model.PRKey]model.PullRequest, len(m.prevQueue.Authored)+len(m.prevQueue.Inbox)),
+		mergedPRs:  make(map[model.PRKey]bool),
+		mergedNums: make(map[int]bool),
+		lastClosed: m.lastClosedPR,
+	}
+
+	for _, pr := range m.queue.Authored {
+		ctx.currPRs[pr.Key()] = pr
+	}
+	for _, pr := range m.queue.Inbox {
+		ctx.currPRs[pr.Key()] = pr
+	}
+
+	for _, pr := range m.prevQueue.Authored {
+		ctx.prevPRs[pr.Key()] = pr
+	}
+	for _, pr := range m.prevQueue.Inbox {
+		ctx.prevPRs[pr.Key()] = pr
+	}
+
+	for _, n := range m.notifications {
+		if n.Trigger == notify.TriggerPRMerged {
+			ctx.mergedPRs[model.PRKey{Repo: n.Repo, Number: n.PRNumber}] = true
+			ctx.mergedNums[n.PRNumber] = true
+		}
+	}
+
+	m.notifications = slices.DeleteFunc(m.notifications, ctx.shouldDrop)
+	return m.clampNotificationCursor()
 }
 
 func notificationURL(n notify.Notification) string {
