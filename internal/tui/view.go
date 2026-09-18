@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -292,6 +293,21 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 	return rows
 }
 
+func (m Model) isFocused(pr model.PullRequest) bool {
+	return m.IsFocused(pr.Key())
+}
+
+func (m Model) partitionFocused(indices []int, list []score.Scored) {
+	sort.SliceStable(indices, func(i, j int) bool {
+		iFocused := m.isFocused(list[indices[i]].PR)
+		jFocused := m.isFocused(list[indices[j]].PR)
+		if iFocused != jFocused {
+			return iFocused
+		}
+		return false
+	})
+}
+
 func (m Model) buildInboxDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
 	stackCat := make(map[string]model.InboxCategory)
 	for _, item := range list {
@@ -321,6 +337,10 @@ func (m Model) buildInboxDisplayRows(list []score.Scored, refTime time.Time) []d
 			staleIndices = append(staleIndices, i)
 		}
 	}
+
+	m.partitionFocused(attentionIndices, list)
+	m.partitionFocused(blockedIndices, list)
+	m.partitionFocused(staleIndices, list)
 
 	displayRows := make([]displayRow, 0, len(list)+3)
 	if len(attentionIndices) > 0 {
@@ -389,6 +409,13 @@ func (m Model) buildMineDisplayRows(list []score.Scored, refTime time.Time) []di
 			staleIndices = append(staleIndices, i)
 		}
 	}
+
+	m.partitionFocused(actionIndices, list)
+	m.partitionFocused(queuedIndices, list)
+	m.partitionFocused(readyIndices, list)
+	m.partitionFocused(reviewIndices, list)
+	m.partitionFocused(draftIndices, list)
+	m.partitionFocused(staleIndices, list)
 
 	displayRows := make([]displayRow, 0, len(list)+6)
 	if len(actionIndices) > 0 {
@@ -532,7 +559,11 @@ func (m Model) View() string {
 
 			stackPrefix := dRow.stackPrefix
 			numText := numStyle.Render(fmt.Sprintf("(#%d)", item.PR.Number))
-			fullTitle := stackPrefix + item.PR.Title
+			title := item.PR.Title
+			if m.isFocused(item.PR) {
+				title = "★ " + title
+			}
+			fullTitle := stackPrefix + title
 			var titleText string
 			if isSelected {
 				titleText = fmt.Sprintf("%s %s", selectedRowStyle.Render(fullTitle), numText)
@@ -623,7 +654,7 @@ func (m Model) View() string {
 
 	// Help bar
 	b.WriteString("\n")
-	helpText := "enter: details • d: diff • ↑/↓: navigate • space/e: expand • tab: switch • o: open • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
+	helpText := "enter: details • d: diff • ↑/↓: navigate • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
 	if m.IsNotificationFocused() {
 		helpText = "enter/o: open • ↑/↓: select • x: dismiss • esc: back to PRs • q: quit"
 	}

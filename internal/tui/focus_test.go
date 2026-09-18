@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -220,4 +221,240 @@ func TestModel_FocusPersistence(t *testing.T) {
 		assert.Len(t, m.FocusItems(), 1)
 		assert.Equal(t, targetKey, m.FocusItems()[0].PR.Key())
 	})
+}
+
+func TestModel_FocusedPR_SectionPinning(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+
+	t.Run("inbox tab pins focused PR to top of category section", func(t *testing.T) {
+		t.Parallel()
+
+		pr1 := model.PullRequest{
+			Number:            101,
+			Title:             "Alpha PR One",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			Mergeable:         "MERGEABLE",
+			MergeStateStatus:  "CLEAN",
+			MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqDone: 2},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-4 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		pr2 := model.PullRequest{
+			Number:            102,
+			Title:             "Beta PR Two",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "bob",
+			Mergeable:         "MERGEABLE",
+			MergeStateStatus:  "CLEAN",
+			MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqDone: 2},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+
+		q := model.Queue{Inbox: []model.PullRequest{pr1, pr2}}
+
+		// Without focus, pr1 is ranked above pr2 by score
+		mUnfocused := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
+		viewUnfocused := mUnfocused.View()
+		idxPr1Unfocused := strings.Index(viewUnfocused, "Alpha PR One")
+		idxPr2Unfocused := strings.Index(viewUnfocused, "Beta PR Two")
+		require.True(t, idxPr1Unfocused >= 0 && idxPr2Unfocused >= 0)
+		assert.Less(t, idxPr1Unfocused, idxPr2Unfocused, "originally PR 101 comes before PR 102")
+
+		// With PR 102 focused, PR 102 pins to top of NEEDS YOUR ATTENTION section
+		mFocused := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithActiveTab(tui.TabInbox),
+			tui.WithFocusedPRs([]model.PRKey{pr2.Key()}),
+		)
+		viewFocused := mFocused.View()
+		idxDividerFocused := strings.Index(viewFocused, "NEEDS YOUR ATTENTION")
+		idxPr1Focused := strings.Index(viewFocused, "Alpha PR One")
+		idxPr2Focused := strings.Index(viewFocused, "Beta PR Two")
+		require.True(t, idxDividerFocused >= 0 && idxPr1Focused >= 0 && idxPr2Focused >= 0)
+		assert.Less(t, idxDividerFocused, idxPr2Focused, "divider must appear before items")
+		assert.Less(t, idxPr2Focused, idxPr1Focused, "focused PR 102 must pin above unfocused PR 101 in section")
+
+		// Navigating to top of list selects the pinned focused PR
+		mNav, _ := sendRune(mFocused, 'g')
+		assert.Equal(t, 102, mNav.(tui.Model).SelectedPR().Number, "top of visible list should be pinned focused PR")
+	})
+
+	t.Run("mine tab pins focused PR to top of category section", func(t *testing.T) {
+		t.Parallel()
+
+		pr1 := model.PullRequest{
+			Number:            201,
+			Title:             "Mine Action PR One",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			ReviewDecision:    "CHANGES_REQUESTED",
+			UpdatedAt:         now.Add(-2 * time.Hour),
+		}
+		pr2 := model.PullRequest{
+			Number:            202,
+			Title:             "Mine Action PR Two",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			ReviewDecision:    "CHANGES_REQUESTED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+		}
+
+		q := model.Queue{Authored: []model.PullRequest{pr1, pr2}}
+
+		// Without focus, pr1 is ranked above pr2 by score
+		mUnfocused := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithActiveTab(tui.TabMine))
+		viewUnfocused := mUnfocused.View()
+		idxPr1Unfocused := strings.Index(viewUnfocused, "Mine Action PR One")
+		idxPr2Unfocused := strings.Index(viewUnfocused, "Mine Action PR Two")
+		require.True(t, idxPr1Unfocused >= 0 && idxPr2Unfocused >= 0)
+		assert.Less(t, idxPr1Unfocused, idxPr2Unfocused, "originally PR 201 comes before PR 202")
+
+		// With PR 202 focused, PR 202 pins to top of ACTION REQUIRED section
+		mFocused := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithActiveTab(tui.TabMine),
+			tui.WithFocusedPRs([]model.PRKey{pr2.Key()}),
+		)
+		viewFocused := mFocused.View()
+		idxDividerFocused := strings.Index(viewFocused, "ACTION REQUIRED")
+		idxPr1Focused := strings.Index(viewFocused, "Mine Action PR One")
+		idxPr2Focused := strings.Index(viewFocused, "Mine Action PR Two")
+		require.True(t, idxDividerFocused >= 0 && idxPr1Focused >= 0 && idxPr2Focused >= 0)
+		assert.Less(t, idxDividerFocused, idxPr2Focused, "divider must appear before items")
+		assert.Less(t, idxPr2Focused, idxPr1Focused, "focused PR 202 must pin above unfocused PR 201 in section")
+
+		// Navigating to top of list selects the pinned focused PR
+		mNav, _ := sendRune(mFocused, 'g')
+		assert.Equal(t, 202, mNav.(tui.Model).SelectedPR().Number, "top of visible list should be pinned focused PR")
+	})
+
+	t.Run("stably preserves score order within focused and unfocused partitions", func(t *testing.T) {
+		t.Parallel()
+
+		makePR := func(num int, title string, hoursAgo int) model.PullRequest {
+			return model.PullRequest{
+				Number:            num,
+				Title:             title,
+				RepoOwner:         "org",
+				RepoName:          "repo",
+				RepoNameWithOwner: "org/repo",
+				Author:            "alice",
+				Mergeable:         "MERGEABLE",
+				MergeStateStatus:  "CLEAN",
+				MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+				Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqDone: 2},
+				TimelineItems: []model.TimelineItem{
+					{
+						Type:         model.TimelineItemReviewRequested,
+						CreatedAt:    now.Add(-time.Duration(hoursAgo) * time.Hour),
+						ReviewerUser: "kalverra",
+					},
+				},
+			}
+		}
+
+		pr1 := makePR(101, "PR Rank 1", 6)
+		pr2 := makePR(102, "PR Rank 2", 4)
+		pr3 := makePR(103, "PR Rank 3", 2)
+		pr4 := makePR(104, "PR Rank 4", 1)
+
+		q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, pr3, pr4}}
+
+		// Focus PR 2 and PR 4 (both in CategoryAttention)
+		mFocused := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithActiveTab(tui.TabInbox),
+			tui.WithFocusedPRs([]model.PRKey{pr2.Key(), pr4.Key()}),
+		)
+
+		view := mFocused.View()
+		idx1 := strings.Index(view, "PR Rank 1")
+		idx2 := strings.Index(view, "PR Rank 2")
+		idx3 := strings.Index(view, "PR Rank 3")
+		idx4 := strings.Index(view, "PR Rank 4")
+
+		require.True(t, idx1 >= 0 && idx2 >= 0 && idx3 >= 0 && idx4 >= 0)
+		// Focused items (2, 4) appear before unfocused items (1, 3)
+		assert.Less(t, idx2, idx4, "focused PR Rank 2 should precede focused PR Rank 4")
+		assert.Less(t, idx4, idx1, "focused PR Rank 4 should precede unfocused PR Rank 1")
+		assert.Less(t, idx1, idx3, "unfocused PR Rank 1 should precede unfocused PR Rank 3")
+	})
+}
+
+func TestModel_FocusedPR_StarPrefix(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	pr1 := model.PullRequest{
+		Number:            101,
+		Title:             "Alpha PR One",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "alice",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqDone: 2},
+		TimelineItems: []model.TimelineItem{
+			{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-4 * time.Hour), ReviewerUser: "kalverra"},
+		},
+	}
+	pr2 := model.PullRequest{
+		Number:            102,
+		Title:             "Beta PR Two",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "bob",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqDone: 2},
+		TimelineItems: []model.TimelineItem{
+			{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+		},
+	}
+	q := model.Queue{Inbox: []model.PullRequest{pr1, pr2}}
+
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithActiveTab(tui.TabInbox),
+		tui.WithFocusedPRs([]model.PRKey{pr2.Key()}),
+	)
+
+	view := m.View()
+
+	// Focused PR has star prefix
+	assert.Contains(t, view, "★ Beta PR Two")
+	// Unfocused PR does not have star prefix
+	assert.NotContains(t, view, "★ Alpha PR One")
+	assert.Contains(t, view, "Alpha PR One")
+
+	// Help bar displays 'f: focus'
+	assert.Contains(t, view, "f: focus")
 }
