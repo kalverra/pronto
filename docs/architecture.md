@@ -24,6 +24,30 @@ The two modes are independent today: a TUI and a daemon running side by side
 each poll GitHub on their own 60s cadence and each write the same
 `queue.json` snapshot, last writer winning. See [Known gaps](#known-gaps).
 
+### TUI overview
+
+The interactive Bubbletea interface (`internal/tui`) organizes pull requests
+into three views, defaulting to the Focus tab:
+
+1. **Focus (`1`)**: Unified view of user-starred PRs across both review and
+   authored queues, partitioned by category dividers in triage priority order
+   (`Needs Your Attention`, `Action Required`, `Merge Queue`, `Ready to Merge`,
+   `In Review`, `Blocked`, `Drafts`, `Stale`).
+2. **Mine (`2`)**: Authored PRs tracked across review and merge lifecycle stages.
+3. **Inbox (`3`)**: Incoming review requests and assigned PRs ranked by score.
+
+Key interactions and focus behaviors:
+
+- **Tab switching**: `1`/`2`/`3` jump directly to tabs; `tab` and `shift+tab`
+  cycle forward and backward.
+- **Focus toggling (`f`)**: Toggles focus mode for the selected PR. Focused PRs
+  display a `★ ` prefix in their title and pin to the top of their respective
+  category sections in Mine and Inbox views.
+- **Persistence**: Focused PR keys (`model.PRKey`) are saved to `focus.json`
+  via `cache.Store` on change and reloaded on startup so focus state survives
+  session restarts. Closed or removed PRs are automatically pruned from the
+  active focus set.
+
 ### Architecture
 
 ```mermaid
@@ -74,6 +98,7 @@ flowchart TB
     tui --> graphql
     tui --> model
     tui --> score
+    tui --> cache
     cli --> graphql
     cli --> score
 ```
@@ -140,14 +165,15 @@ edit the source packages, never the generated files.
 `internal/cache` is a file-backed `Store` under `PRONTO_CACHE_DIR` (default
 `os.UserCacheDir()/pronto`). Every write is a temp file + `rename`, so readers
 never see a partial file, and every read is miss-tolerant: corrupt, absent, or
-schema-mismatched data returns `ok=false`, never an error. Three artifact
-kinds, three lifetimes:
+schema-mismatched data returns `ok=false`, never an error. Four artifact
+kinds, four lifetimes:
 
 | Artifact                                      | File                            | Lifetime                                                                     |
 | --------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
 | Viewer identity (login + org-qualified teams) | `identity.json`                 | `identityTTL`, 24h                                                           |
 | Per-PR hydrated state                         | `prs/<owner>_<repo>_<num>.json` | reuse gated by `canReuse`; files pruned after `defaultCacheRetention`, 14d   |
 | Queue snapshot                                | `queue.json`                    | no TTL in the daemon; the TUI treats it as stale past `SnapshotFreshFor`, 5m |
+| Focused PR keys                               | `focus.json`                    | persistent user state (no TTL, loaded on TUI startup)                        |
 
 Fetching is two-phase. **Discovery** runs light GitHub searches (authored,
 review-requested, assigned) and dedupes by `(repo, number)`, authored winning.
