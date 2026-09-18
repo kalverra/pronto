@@ -164,6 +164,10 @@ func StartupModel(ctx context.Context, src source.Source, store cache.Store, opt
 		}
 	}
 	if store != nil {
+		opts = append(opts, WithStore(store))
+		if keys, _, ok := store.Focus(ctx); ok {
+			opts = append(opts, WithFocusedPRs(keys))
+		}
 		if q, savedAt, ok := store.Queue(ctx); ok {
 			m := New(q, opts...)
 			m.src = src

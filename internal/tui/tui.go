@@ -18,6 +18,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/browser"
 	"github.com/rs/zerolog"
 
+	"github.com/kalverra/pronto/internal/cache"
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
@@ -59,6 +60,7 @@ type Model struct {
 	scrollInbox  int
 	modalOpen    bool
 	detailsOpen  bool
+	focusedKeys  map[model.PRKey]bool
 	focusItems   []score.Scored
 	inboxItems   []score.Scored
 	mineItems    []score.Scored
@@ -66,6 +68,7 @@ type Model struct {
 
 	// Refresh machinery; zero-valued for statically constructed models.
 	src                   source.Source
+	store                 cache.Store
 	ctx                   context.Context
 	loading               bool
 	refreshing            bool
@@ -490,10 +493,47 @@ func closePRCmd(ctx context.Context, closer ClosePRFunc, pr model.PullRequest, c
 	}
 }
 
+// SaveFocusMsg reports the outcome of saving focus state to cache store.
+type SaveFocusMsg struct {
+	Err error
+}
+
+func saveFocusCmd(ctx context.Context, store cache.Store, keys []model.PRKey) tea.Cmd {
+	return func() tea.Msg {
+		if store == nil {
+			return SaveFocusMsg{}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		err := store.SaveFocus(ctx, keys)
+		return SaveFocusMsg{Err: err}
+	}
+}
+
 // WithActiveTab sets the initial active tab.
 func WithActiveTab(tab Tab) Option {
 	return func(m *Model) {
 		m.activeTab = tab
+	}
+}
+
+// WithStore sets the cache store for persistence.
+func WithStore(store cache.Store) Option {
+	return func(m *Model) {
+		m.store = store
+	}
+}
+
+// WithFocusedPRs sets the initially focused PR keys.
+func WithFocusedPRs(keys []model.PRKey) Option {
+	return func(m *Model) {
+		if m.focusedKeys == nil {
+			m.focusedKeys = make(map[model.PRKey]bool)
+		}
+		for _, k := range keys {
+			m.focusedKeys[k] = true
+		}
 	}
 }
 
@@ -506,6 +546,7 @@ func New(q model.Queue, opts ...Option) Model {
 		height:          24,
 		stacksCollapsed: true,
 		expandedStacks:  make(map[string]bool),
+		focusedKeys:     make(map[model.PRKey]bool),
 		logger:          zerolog.Nop(),
 	}
 
@@ -594,6 +635,8 @@ func (m Model) applyQueue(q model.Queue) Model {
 	m.queue = q
 	m.mineItems = score.RankMine(authoredPRs, m.now, score.DefaultMineWeights())
 
+	m = m.rebuildFocusItems()
+
 	m = m.clampTabView(TabFocus)
 	m = m.clampTabView(TabMine)
 	m = m.clampTabView(TabInbox)
@@ -603,6 +646,55 @@ func (m Model) applyQueue(q model.Queue) Model {
 	m = m.clampNotificationCursor()
 
 	return m
+}
+
+func (m Model) rebuildFocusItems() Model {
+	if len(m.inboxItems) == 0 && len(m.mineItems) == 0 {
+		if len(m.focusItems) > 0 {
+			var filtered []score.Scored
+			for _, it := range m.focusItems {
+				if m.focusedKeys[it.PR.Key()] {
+					filtered = append(filtered, it)
+				}
+			}
+			m.focusItems = filtered
+		}
+		return m
+	}
+	var items []score.Scored
+	seen := make(map[model.PRKey]bool)
+	for _, it := range m.inboxItems {
+		k := it.PR.Key()
+		if m.focusedKeys[k] && !seen[k] {
+			items = append(items, it)
+			seen[k] = true
+		}
+	}
+	for _, it := range m.mineItems {
+		k := it.PR.Key()
+		if m.focusedKeys[k] && !seen[k] {
+			items = append(items, it)
+			seen[k] = true
+		}
+	}
+	m.focusItems = items
+	return m
+}
+
+func (m Model) focusedKeysList() []model.PRKey {
+	keys := make([]model.PRKey, 0, len(m.focusedKeys))
+	for k, focused := range m.focusedKeys {
+		if focused {
+			keys = append(keys, k)
+		}
+	}
+	slices.SortFunc(keys, func(a, b model.PRKey) int {
+		if a.Repo != b.Repo {
+			return strings.Compare(a.Repo, b.Repo)
+		}
+		return a.Number - b.Number
+	})
+	return keys
 }
 
 // Init initializes the Bubbletea model.
@@ -677,26 +769,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case DiffReadyMsg:
-		if msg.Err != nil {
-			m.viewErr = msg.Err
-			m.viewErrPR = &msg.PR
-			return m, nil
-		}
-		if len(msg.Args) == 0 {
-			m.viewErr = errors.New("diff ready but no command arguments")
-			m.viewErrPR = &msg.PR
-			return m, nil
-		}
-		// #nosec G204 -- arguments constructed internally for diff tool.
-		//nolint:noctx // Interactive process managed by Bubbletea ExecProcess.
-		c := exec.Command(msg.Args[0], msg.Args[1:]...)
-		c.Env = ViewPREnv()
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			return ViewPRMsg{
-				PR:  msg.PR,
-				Err: err,
-			}
-		})
+		return m.handleDiffReadyMsg(msg)
 
 	case ViewPRMsg:
 		if msg.Err != nil {
@@ -709,16 +782,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ClosePRMsg:
-		m.closingPR = nil
+		return m.handleClosePRMsg(msg)
+
+	case SaveFocusMsg:
 		if msg.Err != nil {
-			m.closeErr = msg.Err
-			m.closeErrPR = &msg.PR
-			return m, nil
+			m.logger.Warn().Err(msg.Err).Msg("failed to persist focus state")
 		}
-		m.closeErr = nil
-		m.closeErrPR = nil
-		m = m.removePR(msg.PR)
-		m.lastClosedPR = &msg.PR
 		return m, nil
 
 	case NotificationMsg:
@@ -732,6 +801,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
+	return m, nil
+}
+
+func (m Model) handleDiffReadyMsg(msg DiffReadyMsg) (tea.Model, tea.Cmd) {
+	if msg.Err != nil {
+		m.viewErr = msg.Err
+		m.viewErrPR = &msg.PR
+		return m, nil
+	}
+	if len(msg.Args) == 0 {
+		m.viewErr = errors.New("diff ready but no command arguments")
+		m.viewErrPR = &msg.PR
+		return m, nil
+	}
+	// #nosec G204 -- arguments constructed internally for diff tool.
+	//nolint:noctx // Interactive process managed by Bubbletea ExecProcess.
+	c := exec.Command(msg.Args[0], msg.Args[1:]...)
+	c.Env = ViewPREnv()
+	return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return ViewPRMsg{
+			PR:  msg.PR,
+			Err: err,
+		}
+	})
+}
+
+func (m Model) handleClosePRMsg(msg ClosePRMsg) (tea.Model, tea.Cmd) {
+	m.closingPR = nil
+	if msg.Err != nil {
+		m.closeErr = msg.Err
+		m.closeErrPR = &msg.PR
+		return m, nil
+	}
+	m.closeErr = nil
+	m.closeErrPR = nil
+	wasFocused := m.IsFocused(msg.PR.Key())
+	m = m.removePR(msg.PR)
+	m.lastClosedPR = &msg.PR
+	if wasFocused && m.store != nil {
+		return m, saveFocusCmd(m.ctx, m.store, m.focusedKeysList())
+	}
 	return m, nil
 }
 
@@ -769,6 +879,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDiffKey()
 	case "v":
 		return m.handleViewKey()
+	case "f":
+		return m.handleToggleFocusKey()
 	case "q":
 		return m.teaQuit()
 	case "n":
@@ -805,6 +917,39 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) handleToggleFocusKey() (tea.Model, tea.Cmd) {
+	if m.IsNotificationFocused() {
+		return m, nil
+	}
+	selected := m.SelectedPR()
+	if selected == nil {
+		return m, nil
+	}
+	key := selected.Key()
+	newKeys := make(map[model.PRKey]bool, len(m.focusedKeys))
+	for k, v := range m.focusedKeys {
+		if v {
+			newKeys[k] = true
+		}
+	}
+	if newKeys[key] {
+		delete(newKeys, key)
+	} else {
+		newKeys[key] = true
+	}
+	m.focusedKeys = newKeys
+	m = m.rebuildFocusItems()
+	m = m.clampTabView(TabFocus)
+	m = m.clampTabView(TabMine)
+	m = m.clampTabView(TabInbox)
+
+	var cmd tea.Cmd
+	if m.store != nil {
+		cmd = saveFocusCmd(m.ctx, m.store, m.focusedKeysList())
+	}
+	return m, cmd
 }
 
 func (m Model) handleTabKey(key string) (tea.Model, tea.Cmd) {
@@ -1560,10 +1705,20 @@ func (m Model) removePR(target model.PullRequest) Model {
 		return p.Number == target.Number
 	}
 
+	newKeys := make(map[model.PRKey]bool, len(m.focusedKeys))
+	for k, v := range m.focusedKeys {
+		if v {
+			newKeys[k] = true
+		}
+	}
+	delete(newKeys, target.Key())
+
 	newInbox := make([]model.PullRequest, 0, len(m.queue.Inbox))
 	for _, pr := range m.queue.Inbox {
 		if !matches(pr) {
 			newInbox = append(newInbox, pr)
+		} else {
+			delete(newKeys, pr.Key())
 		}
 	}
 
@@ -1571,9 +1726,12 @@ func (m Model) removePR(target model.PullRequest) Model {
 	for _, pr := range m.queue.Authored {
 		if !matches(pr) {
 			newAuthored = append(newAuthored, pr)
+		} else {
+			delete(newKeys, pr.Key())
 		}
 	}
 
+	m.focusedKeys = newKeys
 	m.queue.Inbox = newInbox
 	m.queue.Authored = newAuthored
 	return m.applyQueue(m.queue)
@@ -1623,6 +1781,22 @@ func (m Model) IsDetailsOpen() bool {
 	return m.detailsOpen
 }
 
+// IsFocused reports whether a pull request key is currently focused.
+func (m Model) IsFocused(key model.PRKey) bool {
+	return m.focusedKeys[key]
+}
+
+// FocusedKeys returns a copy of the currently focused PR keys.
+func (m Model) FocusedKeys() map[model.PRKey]bool {
+	keys := make(map[model.PRKey]bool, len(m.focusedKeys))
+	for k, v := range m.focusedKeys {
+		if v {
+			keys[k] = true
+		}
+	}
+	return keys
+}
+
 // FocusItems returns the scored pull requests in the focus tab.
 func (m Model) FocusItems() []score.Scored {
 	return m.focusItems
@@ -1632,6 +1806,12 @@ func (m Model) FocusItems() []score.Scored {
 func WithFocusItems(items []score.Scored) Option {
 	return func(m *Model) {
 		m.focusItems = items
+		if m.focusedKeys == nil {
+			m.focusedKeys = make(map[model.PRKey]bool)
+		}
+		for _, item := range items {
+			m.focusedKeys[item.PR.Key()] = true
+		}
 	}
 }
 
