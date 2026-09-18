@@ -145,15 +145,22 @@ func TestModel_Refresh_TriggersNotifierAndBanner(t *testing.T) {
 	assert.Equal(t, notify.TriggerCIPassed, mod2.LastNotification().Trigger)
 	assert.Contains(t, mod2.View(), "CI Passed")
 
-	// Navigation past bottom focuses the notification banner
-	navUpdated, _ := mod2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	// 'n' focuses the notification banner
+	navUpdated, _ := mod2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	navMod := navUpdated.(tui.Model)
 	assert.True(t, navMod.IsNotificationFocused())
 
-	// Esc dismisses the notification banner
+	// Esc unfocuses the notification banner without removing it
 	escUpdated, _ := navMod.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	escMod := escUpdated.(tui.Model)
-	assert.Nil(t, escMod.LastNotification())
+	assert.False(t, escMod.IsNotificationFocused())
+	assert.NotNil(t, escMod.LastNotification())
+
+	// Re-focus and dismiss with 'x'
+	refocused, _ := escMod.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	xUpdated, _ := refocused.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	xMod := xUpdated.(tui.Model)
+	assert.Nil(t, xMod.LastNotification())
 }
 
 func TestModel_Notification_BannerColorsAndPrefix(t *testing.T) {
@@ -229,15 +236,21 @@ func TestModel_Notification_BannerColorsAndPrefix(t *testing.T) {
 	})
 }
 
-func TestModel_Notification_ToggleFocusShortcut(t *testing.T) {
+func TestModel_Notification_FocusAndEscape(t *testing.T) {
 	t.Parallel()
 
+	// 1. When notifications list is empty, 'n' does nothing
 	q := model.Queue{
 		Authored: []model.PullRequest{
 			{Number: 1, Title: "Feature", RepoNameWithOwner: "kalverra/pronto"},
 		},
 	}
 	m := tui.New(q)
+	assert.False(t, m.IsNotificationFocused())
+	mNoOp, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	assert.False(t, mNoOp.(tui.Model).IsNotificationFocused())
+
+	// 2. When notifications exist, 'n' toggles focus
 	updated, _ := m.Update(tui.NotificationMsg{
 		Notifications: []notify.Notification{
 			{
@@ -248,36 +261,139 @@ func TestModel_Notification_ToggleFocusShortcut(t *testing.T) {
 			},
 		},
 	})
-	mod := updated.(tui.Model)
-	require.NotNil(t, mod.LastNotification())
-	assert.False(t, mod.IsNotificationFocused())
+	mWithNote := updated.(tui.Model)
+	assert.False(t, mWithNote.IsNotificationFocused())
 
 	// Press 'n' to focus
-	modFocused, _ := mod.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	mFocused := modFocused.(tui.Model)
+	mFocusedRaw, _ := mWithNote.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mFocused := mFocusedRaw.(tui.Model)
 	assert.True(t, mFocused.IsNotificationFocused())
 
 	// Press 'n' again to unfocus
-	modUnfocused, _ := mFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	mUnfocused := modUnfocused.(tui.Model)
+	mUnfocusedRaw, _ := mFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mUnfocused := mUnfocusedRaw.(tui.Model)
 	assert.False(t, mUnfocused.IsNotificationFocused())
+	assert.Len(t, mUnfocused.Notifications(), 1, "unfocusing with 'n' must not clear notifications")
+
+	// Press 'n' to re-focus, then 'esc' to unfocus without clearing notifications
+	mRefocusedRaw, _ := mUnfocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mRefocused := mRefocusedRaw.(tui.Model)
+	assert.True(t, mRefocused.IsNotificationFocused())
+
+	mEscRaw, _ := mRefocused.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mEsc := mEscRaw.(tui.Model)
+	assert.False(t, mEsc.IsNotificationFocused(), "esc must exit notification focus")
+	assert.Len(t, mEsc.Notifications(), 1, "esc must not clear notification list")
+
+	// Press 'esc' when not focused does not clear notifications
+	mEscAgainRaw, _ := mEsc.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mEscAgain := mEscAgainRaw.(tui.Model)
+	assert.False(t, mEscAgain.IsNotificationFocused())
+	assert.Len(t, mEscAgain.Notifications(), 1)
 }
 
-func TestModel_Notification_NavigateDownToFocus(t *testing.T) {
+func TestModel_Notification_CursorNavigation(t *testing.T) {
 	t.Parallel()
 
 	q := model.Queue{
-		Authored: []model.PullRequest{
-			{Number: 1, Title: "Feature 1", RepoNameWithOwner: "kalverra/pronto"},
-			{Number: 2, Title: "Feature 2", RepoNameWithOwner: "kalverra/pronto"},
+		Inbox: []model.PullRequest{
+			{Number: 1, Title: "PR 1", RepoNameWithOwner: "kalverra/pronto"},
+			{Number: 2, Title: "PR 2", RepoNameWithOwner: "kalverra/pronto"},
 		},
 	}
 	m := tui.New(q)
-	// Switch to Mine tab
-	mTab, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	mod := mTab.(tui.Model)
+	updated, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{PRNumber: 1, Title: "Note 1"},
+			{PRNumber: 2, Title: "Note 2"},
+			{PRNumber: 3, Title: "Note 3"},
+		},
+	})
+	m3 := updated.(tui.Model)
+	require.Len(t, m3.Notifications(), 3)
+	assert.Equal(t, 0, m3.NotificationCursor())
 
-	updated, _ := mod.Update(tui.NotificationMsg{
+	// Focus notifications
+	mFocRaw, _ := m3.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mFoc := mFocRaw.(tui.Model)
+	assert.True(t, mFoc.IsNotificationFocused())
+	assert.Equal(t, 0, mFoc.NotificationCursor())
+
+	// 'j' moves cursor down
+	mjRaw, _ := mFoc.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mj := mjRaw.(tui.Model)
+	assert.Equal(t, 1, mj.NotificationCursor())
+	assert.Equal(t, 0, mj.Cursor(), "table cursor must remain unchanged")
+
+	// 'down' moves cursor down to last item
+	mDownRaw, _ := mj.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mDown := mDownRaw.(tui.Model)
+	assert.Equal(t, 2, mDown.NotificationCursor())
+
+	// 'j' at bottom clamps to len-1 (2)
+	mClampBottomRaw, _ := mDown.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mClampBottom := mClampBottomRaw.(tui.Model)
+	assert.Equal(t, 2, mClampBottom.NotificationCursor())
+
+	// 'k' moves cursor up
+	mkRaw, _ := mClampBottom.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	mk := mkRaw.(tui.Model)
+	assert.Equal(t, 1, mk.NotificationCursor())
+
+	// 'up' moves cursor up to first item
+	mUpRaw, _ := mk.Update(tea.KeyMsg{Type: tea.KeyUp})
+	mUp := mUpRaw.(tui.Model)
+	assert.Equal(t, 0, mUp.NotificationCursor())
+
+	// 'k' at top clamps to 0
+	mClampTopRaw, _ := mUp.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	mClampTop := mClampTopRaw.(tui.Model)
+	assert.Equal(t, 0, mClampTop.NotificationCursor())
+
+	// 'G' / 'end' moves to bottom
+	mGRaw, _ := mClampTop.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	mG := mGRaw.(tui.Model)
+	assert.Equal(t, 2, mG.NotificationCursor())
+
+	// 'g' / 'home' moves to top
+	mgRaw, _ := mG.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	mg := mgRaw.(tui.Model)
+	assert.Equal(t, 0, mg.NotificationCursor())
+
+	// Unfocused table cursor navigation: 'j' on table does not jump into notifications
+	mUnfocusedRaw, _ := mg.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mUnfoc := mUnfocusedRaw.(tui.Model)
+	assert.False(t, mUnfoc.IsNotificationFocused())
+	assert.Equal(t, 0, mUnfoc.Cursor())
+
+	mTableNavRaw, _ := mUnfoc.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mTableNav := mTableNavRaw.(tui.Model)
+	assert.Equal(t, 1, mTableNav.Cursor())
+	assert.False(t, mTableNav.IsNotificationFocused())
+
+	// At bottom of table, 'j' stays in table and does not focus notifications
+	mTableBottomRaw, _ := mTableNav.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mTableBottom := mTableBottomRaw.(tui.Model)
+	assert.Equal(t, 1, mTableBottom.Cursor())
+	assert.False(t, mTableBottom.IsNotificationFocused())
+}
+
+func TestModel_Notification_OpenSelectedURL(t *testing.T) {
+	t.Parallel()
+
+	var openedURL string
+	q := model.Queue{
+		Authored: []model.PullRequest{
+			{Number: 1, Title: "Feature", RepoNameWithOwner: "kalverra/pronto"},
+		},
+	}
+	m := tui.New(q, tui.WithOpener(func(rawURL string) error {
+		openedURL = rawURL
+		return nil
+	}))
+
+	// PR 1 added first, then PR 2 added. Feed is newest-first: index 0 is PR 2, index 1 is PR 1.
+	updated, _ := m.Update(tui.NotificationMsg{
 		Notifications: []notify.Notification{
 			{
 				Trigger:  notify.TriggerCIFailed,
@@ -285,29 +401,114 @@ func TestModel_Notification_NavigateDownToFocus(t *testing.T) {
 				Title:    "CI Failed (#1)",
 				URL:      "https://github.com/kalverra/pronto/pull/1",
 			},
+			{
+				Trigger:  notify.TriggerConflict,
+				PRNumber: 2,
+				Title:    "Merge Conflict (#2)",
+				URL:      "https://github.com/kalverra/pronto/pull/2",
+			},
 		},
 	})
-	mWithNote := updated.(tui.Model)
-	assert.Equal(t, 0, mWithNote.Cursor())
-	assert.False(t, mWithNote.IsNotificationFocused())
+	mod := updated.(tui.Model)
+	require.Len(t, mod.Notifications(), 2)
+	assert.Equal(t, 2, mod.Notifications()[0].PRNumber)
+	assert.Equal(t, 1, mod.Notifications()[1].PRNumber)
 
-	// Move down to row 1 (last row in table) - should stay in table, not clear notification
-	mRow1, _ := mWithNote.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	modRow1 := mRow1.(tui.Model)
-	assert.Equal(t, 1, modRow1.Cursor())
-	assert.False(t, modRow1.IsNotificationFocused())
-	assert.NotNil(t, modRow1.LastNotification(), "navigating within table must not clear notification")
+	// Focus notifications
+	modF, _ := mod.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mF := modF.(tui.Model)
+	require.True(t, mF.IsNotificationFocused())
 
-	// Move down past bottom row -> focuses notification banner
-	mNoteFocus, _ := modRow1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	modNoteFocus := mNoteFocus.(tui.Model)
-	assert.True(t, modNoteFocus.IsNotificationFocused(), "moving down past last row must focus notification banner")
+	// Move to index 1 (PR 1 CIFailed)
+	mNext, _ := mF.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mAt1 := mNext.(tui.Model)
+	assert.Equal(t, 1, mAt1.NotificationCursor())
 
-	// Move up from focused notification -> returns to last row in PR table
-	mUp, _ := modNoteFocus.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	modUp := mUp.(tui.Model)
-	assert.False(t, modUp.IsNotificationFocused())
-	assert.Equal(t, 1, modUp.Cursor())
+	// Press Enter -> opens PR 1 checks URL, not index 0 (PR 2)
+	_, cmd := mAt1.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	cmd()
+	assert.Equal(t, "https://github.com/kalverra/pronto/pull/1/checks", openedURL)
+
+	// Test 'o' on index 0 (PR 2 conflict)
+	mAt0, _ := mAt1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	assert.Equal(t, 0, mAt0.(tui.Model).NotificationCursor())
+	openedURL = ""
+	_, cmdOpen := mAt0.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	require.NotNil(t, cmdOpen)
+	cmdOpen()
+	assert.Equal(t, "https://github.com/kalverra/pronto/pull/2", openedURL)
+}
+
+func TestModel_Notification_DismissSelected(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	stalePR := model.PullRequest{
+		Number:            10,
+		Title:             "Old Feature",
+		RepoNameWithOwner: "kalverra/pronto",
+		UpdatedAt:         now.Add(-40 * 24 * time.Hour),
+	}
+	q := model.Queue{
+		Authored: []model.PullRequest{stalePR},
+	}
+	m := tui.New(q, tui.WithNow(now))
+
+	// Notifications added newest-first: index 0 is Note 3, index 1 is Note 2, index 2 is Note 1.
+	updated, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{PRNumber: 1, Title: "Note 1"},
+			{PRNumber: 2, Title: "Note 2"},
+			{PRNumber: 3, Title: "Note 3"},
+		},
+	})
+	m3 := updated.(tui.Model)
+	require.Len(t, m3.Notifications(), 3)
+	assert.Equal(t, 3, m3.Notifications()[0].PRNumber)
+	assert.Equal(t, 2, m3.Notifications()[1].PRNumber)
+	assert.Equal(t, 1, m3.Notifications()[2].PRNumber)
+
+	// Focus notifications
+	mFocRaw, _ := m3.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mFoc := mFocRaw.(tui.Model)
+	require.True(t, mFoc.IsNotificationFocused())
+
+	// Move cursor to index 1 (Note 2)
+	mNavRaw, _ := mFoc.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mAt1 := mNavRaw.(tui.Model)
+	assert.Equal(t, 1, mAt1.NotificationCursor())
+
+	// Press 'x' to dismiss Note 2
+	mDismiss1Raw, _ := mAt1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	mDismiss1 := mDismiss1Raw.(tui.Model)
+	require.Len(t, mDismiss1.Notifications(), 2)
+	assert.Equal(t, 3, mDismiss1.Notifications()[0].PRNumber)
+	assert.Equal(t, 1, mDismiss1.Notifications()[1].PRNumber)
+	assert.Equal(t, 1, mDismiss1.NotificationCursor(), "cursor should stay at 1 pointing to Note 1")
+	assert.True(t, mDismiss1.IsNotificationFocused())
+
+	// Dismiss Note 1 at index 1 -> cursor clamps to 0 (Note 3)
+	mDismiss2Raw, _ := mDismiss1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	mDismiss2 := mDismiss2Raw.(tui.Model)
+	require.Len(t, mDismiss2.Notifications(), 1)
+	assert.Equal(t, 3, mDismiss2.Notifications()[0].PRNumber)
+	assert.Equal(t, 0, mDismiss2.NotificationCursor(), "cursor should clamp to 0")
+	assert.True(t, mDismiss2.IsNotificationFocused())
+
+	// Dismiss last remaining notification -> list empty, unfocuses
+	mDismiss3Raw, _ := mDismiss2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	mDismiss3 := mDismiss3Raw.(tui.Model)
+	assert.Empty(t, mDismiss3.Notifications())
+	assert.False(t, mDismiss3.IsNotificationFocused())
+
+	// In PR table (not notification focused), 'x' triggers PR close confirmation
+	// Switch to Mine tab so Authored PR 10 is selected
+	mMineRaw, _ := mDismiss3.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	mMine := mMineRaw.(tui.Model)
+	mClosePRRaw, _ := mMine.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	mClosePR := mClosePRRaw.(tui.Model)
+	assert.NotNil(t, mClosePR.ConfirmingClosePR(), "x when unfocused must trigger stale PR close confirmation")
 }
 
 func TestModel_Notification_EnterLinksToAppropriateURL(t *testing.T) {

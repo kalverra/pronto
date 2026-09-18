@@ -758,14 +758,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m.teaQuit()
 	case "n":
-		if m.LastNotification() != nil {
-			m.notificationFocused = !m.notificationFocused
+		if len(m.notifications) == 0 {
 			return m, nil
 		}
+		m.notificationFocused = !m.notificationFocused
+		if m.notificationFocused {
+			m = m.clampNotificationCursor()
+		}
+		return m, nil
 	case "esc":
-		m.notificationFocused = false
-		if len(m.notifications) > 0 {
-			m.notifications = nil
+		if m.notificationFocused {
+			m.notificationFocused = false
 			return m, nil
 		}
 	case "tab", "shift+tab", "1", "2":
@@ -775,7 +778,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		return m.handleOpenKey()
 	case "x":
-		return m.handleCloseStaleKey()
+		return m.handleDismissNotificationKey()
 	case " ", "e":
 		return m.handleToggleStackKey()
 	case "E":
@@ -867,24 +870,48 @@ func (m Model) handleCloseStaleKey() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleDismissNotificationKey() (tea.Model, tea.Cmd) {
+	if !m.IsNotificationFocused() {
+		return m.handleCloseStaleKey()
+	}
+	if len(m.notifications) == 0 {
+		m.notificationFocused = false
+		return m, nil
+	}
+	m = m.clampNotificationCursor()
+	m.notifications = slices.Delete(m.notifications, m.notificationCursor, m.notificationCursor+1)
+	if len(m.notifications) == 0 {
+		m.notificationFocused = false
+		m.notificationCursor = 0
+		return m, nil
+	}
+	m = m.clampNotificationCursor()
+	return m, nil
+}
+
+func (m Model) openNotificationAtCursor() (tea.Model, tea.Cmd) {
+	if len(m.notifications) == 0 {
+		return m, nil
+	}
+	m = m.clampNotificationCursor()
+	targetURL := notificationURL(m.notifications[m.notificationCursor])
+	if targetURL == "" {
+		return m, nil
+	}
+	opener := m.openURL
+	if opener == nil {
+		opener = defaultOpenURL
+	}
+	return m, openURLCmd(opener, targetURL)
+}
+
 func (m Model) teaQuit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
 func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 	if m.IsNotificationFocused() {
-		if m.LastNotification() == nil {
-			return m, nil
-		}
-		targetURL := notificationURL(*m.LastNotification())
-		if targetURL == "" {
-			return m, nil
-		}
-		opener := m.openURL
-		if opener == nil {
-			opener = defaultOpenURL
-		}
-		return m, openURLCmd(opener, targetURL)
+		return m.openNotificationAtCursor()
 	}
 	if m.detailsOpen {
 		m.detailsOpen = false
@@ -924,18 +951,7 @@ func (m Model) handleViewKey() (tea.Model, tea.Cmd) {
 
 func (m Model) handleOpenKey() (tea.Model, tea.Cmd) {
 	if m.IsNotificationFocused() {
-		if m.LastNotification() == nil {
-			return m, nil
-		}
-		targetURL := notificationURL(*m.LastNotification())
-		if targetURL == "" {
-			return m, nil
-		}
-		opener := m.openURL
-		if opener == nil {
-			opener = defaultOpenURL
-		}
-		return m, openURLCmd(opener, targetURL)
+		return m.openNotificationAtCursor()
 	}
 	selected := m.SelectedPR()
 	if selected == nil || selected.URL == "" {
@@ -991,43 +1007,38 @@ func (m Model) handleToggleAllStacksKey() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleNavKey(key string) (Model, bool) {
+	if m.IsNotificationFocused() {
+		switch key {
+		case "j", "down":
+			m.notificationCursor = min(len(m.notifications)-1, m.notificationCursor+1)
+			return m, true
+		case "k", "up":
+			m.notificationCursor = max(0, m.notificationCursor-1)
+			return m, true
+		case "g", "home":
+			m.notificationCursor = 0
+			return m, true
+		case "G", "end":
+			m.notificationCursor = max(0, len(m.notifications)-1)
+			return m, true
+		case "pgdown", "ctrl+d", "pgup", "ctrl+u":
+			return m, true
+		}
+		return m, false
+	}
+
 	switch key {
 	case "j", "down":
-		if m.notificationFocused {
-			return m, true
-		}
-		vis := m.visibleItemIndices(m.activeTab)
-		cursor := m.Cursor()
-		lastVis := -1
-		if len(vis) > 0 {
-			lastVis = vis[len(vis)-1]
-		}
-		if (len(vis) == 0 || cursor == lastVis) && m.LastNotification() != nil {
-			m.notificationFocused = true
-			return m, true
-		}
 		return m.moveCursor(1), true
 	case "k", "up":
-		if m.notificationFocused {
-			m.notificationFocused = false
-			return m, true
-		}
 		return m.moveCursor(-1), true
 	case "pgdown", "ctrl+d":
-		if m.notificationFocused {
-			return m, true
-		}
 		visRows := m.VisibleRows()
 		return m.moveCursor(max(1, visRows)), true
 	case "pgup", "ctrl+u":
-		if m.notificationFocused {
-			m.notificationFocused = false
-			return m, true
-		}
 		visRows := m.VisibleRows()
 		return m.moveCursor(-max(1, visRows)), true
 	case "g", "home":
-		m.notificationFocused = false
 		vis := m.visibleItemIndices(m.activeTab)
 		if len(vis) > 0 {
 			return m.setCursor(vis[0]), true
