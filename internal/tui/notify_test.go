@@ -144,7 +144,7 @@ func TestModel_Refresh_TriggersNotifierAndBanner(t *testing.T) {
 
 	require.NotNil(t, mod2.LastNotification())
 	assert.Equal(t, notify.TriggerCIPassed, mod2.LastNotification().Trigger)
-	assert.Contains(t, mod2.View(), "[CI PASS]")
+	assert.Contains(t, mod2.View(), "CI PASS")
 
 	// 'n' focuses the notification banner
 	navUpdated, _ := mod2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
@@ -189,8 +189,9 @@ func TestModel_Notification_BannerColorsAndPrefix(t *testing.T) {
 		})
 		mod := updated.(tui.Model)
 		view := mod.View()
-		assert.Contains(t, view, "[CI FAIL]")
-		assert.Contains(t, view, "CI failed for Feature (kalverra/pronto#1)")
+		assert.Contains(t, view, "CI FAIL")
+		assert.Contains(t, view, "Feature")
+		assert.Contains(t, view, "kalverra/pronto#1")
 		assert.NotContains(t, view, "PRonto:")
 		// Must NOT use green color #3fb950 (63;185;80)
 		assert.NotContains(t, view, "63;185;80")
@@ -212,8 +213,9 @@ func TestModel_Notification_BannerColorsAndPrefix(t *testing.T) {
 		})
 		mod := updated.(tui.Model)
 		view := mod.View()
-		assert.Contains(t, view, "[CONFLICT]")
-		assert.Contains(t, view, "Merge conflict in Feature (kalverra/pronto#1)")
+		assert.Contains(t, view, "CONFLICT")
+		assert.Contains(t, view, "Feature")
+		assert.Contains(t, view, "kalverra/pronto#1")
 		assert.NotContains(t, view, "63;185;80")
 	})
 
@@ -234,8 +236,9 @@ func TestModel_Notification_BannerColorsAndPrefix(t *testing.T) {
 		})
 		mod := updated.(tui.Model)
 		view := mod.View()
-		assert.Contains(t, view, "[CHANGES REQ]")
-		assert.Contains(t, view, "@alice Changes requested")
+		assert.Contains(t, view, "CHANGES REQ")
+		assert.Contains(t, view, "alice")
+		assert.Contains(t, view, "#1")
 		assert.NotContains(t, view, "63;185;80")
 	})
 }
@@ -1103,7 +1106,7 @@ func TestModel_Notification_ViewRenderBetweenTabsAndTable(t *testing.T) {
 
 	// Assert order: Tabs -> Notifications -> PR Table
 	idxTabs := strings.Index(view, "Inbox")
-	idxNotifs := strings.Index(view, "── NOTIFICATIONS (5) ──")
+	idxNotifs := strings.Index(view, "NOTIFICATIONS (5)")
 	idxTable := strings.Index(view, "TITLE")
 	require.NotEqual(t, -1, idxTabs, "tabs must appear in view")
 	require.NotEqual(t, -1, idxNotifs, "notifications header must appear in view")
@@ -1112,31 +1115,30 @@ func TestModel_Notification_ViewRenderBetweenTabsAndTable(t *testing.T) {
 	assert.Less(t, idxNotifs, idxTable, "notifications must render before table")
 
 	// Assert badges
-	assert.Contains(t, view, "[CI FAIL]")
-	assert.Contains(t, view, "[CI PASS]")
-	assert.Contains(t, view, "[CONFLICT]")
-	assert.Contains(t, view, "[APPROVED]")
-	assert.Contains(t, view, "[MERGED]")
+	assert.Contains(t, view, "CI FAIL")
+	assert.Contains(t, view, "CI PASS")
+	assert.Contains(t, view, "CONFLICT")
+	assert.Contains(t, view, "APPROVED")
+	assert.Contains(t, view, "MERGED")
 
 	// Assert PR reference, messages, and relative age timestamps
 	assert.Contains(t, view, "kalverra/pronto#1")
-	assert.Contains(t, view, "CI failed for Feature")
+	assert.Contains(t, view, "Feature")
 	assert.Contains(t, view, "2m ago")
 
 	assert.Contains(t, view, "kalverra/pronto#2")
-	assert.Contains(t, view, "Checks passed")
 	assert.Contains(t, view, "10m ago")
 
 	assert.Contains(t, view, "kalverra/pronto#3")
-	assert.Contains(t, view, "Merge conflict in Bugfix")
+	assert.Contains(t, view, "Bugfix")
 	assert.Contains(t, view, "45s ago")
 
 	assert.Contains(t, view, "kalverra/pronto#4")
-	assert.Contains(t, view, "@alice approved")
+	assert.Contains(t, view, "alice")
 	assert.Contains(t, view, "5m ago")
 
 	assert.Contains(t, view, "kalverra/pronto#5")
-	assert.Contains(t, view, "Merged: Feature")
+	assert.Contains(t, view, "Feature")
 	assert.Contains(t, view, "1h ago")
 }
 
@@ -1151,8 +1153,9 @@ func TestModel_Notification_EmptyView(t *testing.T) {
 	m := tui.New(q)
 	view := m.View()
 
-	assert.Contains(t, view, "── NOTIFICATIONS (0) ──")
-	assert.Contains(t, view, "  No recent notifications")
+	assert.Contains(t, view, "🔔 0")
+	assert.NotContains(t, view, "NOTIFICATIONS")
+	assert.NotContains(t, view, "No recent notifications")
 }
 
 func TestModel_Notification_ViewFocusIndicator(t *testing.T) {
@@ -1221,24 +1224,24 @@ func TestModel_Notification_VisibleRowsAccounting(t *testing.T) {
 	m := tui.New(q)
 	// Base height = 24.
 	// Base chrome = 10.
-	// 0 notifications: notificationsHeight = 1 + max(1, 0) + 1 = 3.
-	// Total chrome = 10 + 3 = 13.
-	// VisibleRows() = 24 - 13 = 11.
-	assert.Equal(t, 11, m.VisibleRows())
+	// 0 notifications: takes 0 lines. Total chrome = 10.
+	// VisibleRows() = 24 - 10 = 14.
+	assert.Equal(t, 14, m.VisibleRows())
 
-	// 1 notification: notificationsHeight = 1 + max(1, 1) + 1 = 3.
-	// VisibleRows() = 24 - 13 = 11.
+	// 1 notification: notificationsHeight = 1 + 3 = 4 (top border + 1 row + bottom border + newline).
+	// Total chrome = 10 + 4 = 14.
+	// VisibleRows() = 24 - 14 = 10.
 	updated1, _ := m.Update(tui.NotificationMsg{
 		Notifications: []notify.Notification{
 			{PRNumber: 1, Title: "Note 1"},
 		},
 	})
 	m1 := updated1.(tui.Model)
-	assert.Equal(t, 11, m1.VisibleRows())
+	assert.Equal(t, 10, m1.VisibleRows())
 
-	// 5 notifications: notificationsHeight = 1 + 5 + 1 = 7.
-	// Total chrome = 10 + 7 = 17.
-	// VisibleRows() = 24 - 17 = 7.
+	// 5 notifications: notificationsHeight = 5 + 3 = 8.
+	// Total chrome = 10 + 8 = 18.
+	// VisibleRows() = 24 - 18 = 6.
 	updated5, _ := m1.Update(tui.NotificationMsg{
 		Notifications: []notify.Notification{
 			{PRNumber: 2, Title: "Note 2"},
@@ -1249,5 +1252,5 @@ func TestModel_Notification_VisibleRowsAccounting(t *testing.T) {
 	})
 	m5 := updated5.(tui.Model)
 	require.Len(t, m5.Notifications(), 5)
-	assert.Equal(t, 7, m5.VisibleRows())
+	assert.Equal(t, 6, m5.VisibleRows())
 }

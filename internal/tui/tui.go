@@ -95,6 +95,7 @@ type Model struct {
 	notificationCursor    int
 	prevQueue             model.Queue
 	notificationFocused   bool
+	hideNotifs            bool
 	viewPR                ViewPRFunc
 	viewErr               error
 	viewErrPR             *model.PullRequest
@@ -811,10 +812,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.notifications) == 0 {
 			return m, nil
 		}
-		m.notificationFocused = !m.notificationFocused
-		if m.notificationFocused {
+		if m.hideNotifs {
+			m.hideNotifs = false
+			m.notificationFocused = true
 			m = m.clampNotificationCursor()
+			return m, nil
 		}
+		if !m.notificationFocused {
+			m.notificationFocused = true
+			m = m.clampNotificationCursor()
+			return m, nil
+		}
+		m.notificationFocused = false
+		m.hideNotifs = true
 		return m, nil
 	case "esc":
 		if m.notificationFocused {
@@ -1583,7 +1593,14 @@ func (m Model) VisibleRows() int {
 	}
 	// Chrome lines: margins (2), tabs (2), table headers & border (3), scroll indicator (1), help bar (2) = 10 lines
 	chrome := 10
-	notificationsHeight := 1 + max(1, len(m.notifications)) + 1
+	var notificationsHeight int
+	if len(m.notifications) > 0 {
+		if m.hideNotifs {
+			notificationsHeight = 2
+		} else {
+			notificationsHeight = len(m.notifications) + 3
+		}
+	}
 	chrome += notificationsHeight
 	if m.statusBannerShown() {
 		chrome += 2
@@ -1812,6 +1829,11 @@ func (m Model) LastNotification() *notify.Notification {
 // IsNotificationFocused reports whether the notification banner currently has focus.
 func (m Model) IsNotificationFocused() bool {
 	return m.notificationFocused && len(m.notifications) > 0
+}
+
+// HideNotifs reports whether the notification banner is currently collapsed.
+func (m Model) HideNotifs() bool {
+	return m.hideNotifs
 }
 
 func (m Model) currentTime() time.Time {

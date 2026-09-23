@@ -382,7 +382,10 @@ func Rank(
 ) []Scored {
 	scored := make([]Scored, 0, len(prs))
 	for _, pr := range prs {
-		if pr.IsDraft {
+		// Drafts are excluded from inbox ranking — except members of a stack,
+		// which must stay present so collapsed stack rows render the full
+		// ribbon and diff roll-up.
+		if pr.IsDraft && !pr.IsPartOfStack() {
 			continue
 		}
 		b := Explain(pr, now, viewer, teams, idx, w)

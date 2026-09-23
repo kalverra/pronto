@@ -757,7 +757,7 @@ func TestModel_TriggerEventRendersPopupAndBanner(t *testing.T) {
 	next2 := updated2.(tui.Model)
 	require.NotNil(t, next2.LastNotification())
 	assert.Equal(t, 42, next2.LastNotification().PRNumber)
-	assert.Contains(t, next2.View(), "[CI PASS]")
+	assert.Contains(t, next2.View(), "CI PASS")
 }
 
 func TestModel_ManualRefreshKey_DaemonModeSendsQueueRefresh(t *testing.T) {

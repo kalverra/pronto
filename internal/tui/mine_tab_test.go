@@ -67,12 +67,12 @@ func TestModel_MineCategoryDividers(t *testing.T) {
 	mMine, _ := sendKey(m, tea.KeyTab)
 	view := mMine.(tui.Model).View()
 
-	assert.Contains(t, view, "── ACTION REQUIRED (1) ──")
-	assert.Contains(t, view, "── MERGE QUEUE (1) ──")
-	assert.Contains(t, view, "── READY TO MERGE (1) ──")
-	assert.Contains(t, view, "── IN REVIEW (1) ──")
-	assert.Contains(t, view, "── DRAFTS (1) ──")
-	assert.Contains(t, view, "── STALE (1) ──")
+	assert.Contains(t, view, "▌ ACTION REQUIRED")
+	assert.Contains(t, view, "▌ MERGE QUEUE")
+	assert.Contains(t, view, "▌ READY TO MERGE")
+	assert.Contains(t, view, "▌ IN REVIEW")
+	assert.Contains(t, view, "▌ DRAFTS")
+	assert.Contains(t, view, "▌ STALE")
 }
 
 func TestModel_MineStackedPRInMergeQueueNotDegraded(t *testing.T) {
@@ -120,7 +120,7 @@ func TestModel_MineStackedPRInMergeQueueNotDegraded(t *testing.T) {
 	mMine, _ := sendKey(m, tea.KeyTab)
 	view := mMine.View()
 
-	assert.Contains(t, view, "── MERGE QUEUE (1) ──")
-	assert.Contains(t, view, "── ACTION REQUIRED (1) ──")
+	assert.Contains(t, view, "▌ MERGE QUEUE")
+	assert.Contains(t, view, "▌ ACTION REQUIRED")
 	assert.Contains(t, view, "QUEUED")
 }

@@ -47,6 +47,17 @@ Key interactions and focus behaviors:
   via `cache.Store` on change and reloaded on startup so focus state survives
   session restarts. Closed or removed PRs are automatically pruned from the
   active focus set.
+- **Stack folding (`space`/`e`, `E`)**: PRs sharing a stack (branch
+  dependency chain) collapse by default into a single table row: the root
+  PR's title plus a stack pill (`⎘ 6 PRs [2..7]`), an ordered micro-status
+  ribbon — one colored glyph per PR in the stack (`●` review, `✖` CI
+  failing, `◌` CI running, `✓` passing, `○` draft; packed tight at 7–10 PRs,
+  an aggregate badge above 10) — and the summed diff roll-up. `space` toggles
+  the fold under the cursor: the row becomes a full-width banner and children
+  indent beneath it with tree connectors (`├─ #709 [2/7]`). A stack renders
+  in the most-urgent category of its members, so draft children stay visible
+  in the collapsed roll-up (`score.Rank` keeps stack drafts even though it
+  excludes standalone drafts from the inbox).
 
 ### Architecture
 
