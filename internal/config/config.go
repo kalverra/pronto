@@ -21,16 +21,6 @@ const (
 	ViewCustom    = "custom"
 )
 
-// Supported PR diff viewer names.
-const (
-	DiffDifftastic = "difftastic"
-	DiffZed        = "zed"
-	DiffVSCode     = "vscode"
-	DiffTerminal   = "terminal"
-	DiffCustom     = "custom"
-	DiffWeb        = "web"
-)
-
 // NotificationConfig specifies configuration for PR event notifications.
 type NotificationConfig struct {
 	Popups bool              `json:"popups" mapstructure:"popups" toml:"popups"`
@@ -50,8 +40,6 @@ type ServerConfig struct {
 type Config struct {
 	PRView        string             `json:"pr_view"         mapstructure:"pr_view"         toml:"pr_view"`
 	PRViewCommand string             `json:"pr_view_command" mapstructure:"pr_view_command" toml:"pr_view_command"`
-	PRDiff        string             `json:"pr_diff"         mapstructure:"pr_diff"         toml:"pr_diff"`
-	PRDiffCommand string             `json:"pr_diff_command" mapstructure:"pr_diff_command" toml:"pr_diff_command"`
 	Notifications NotificationConfig `json:"notifications"   mapstructure:"notifications"   toml:"notifications"`
 	Server        ServerConfig       `json:"server"          mapstructure:"server"          toml:"server"`
 }
@@ -91,25 +79,16 @@ func Path() string {
 	return filepath.Join(Dir(), "pronto.toml")
 }
 
-// Validate checks that the Config has a valid view name, diff name, commands if custom, and valid notification triggers.
+// Validate checks that the Config has a valid view name, command if custom, and valid notification triggers.
 func (c *Config) Validate() error {
 	if c.PRView == "" {
 		c.PRView = ViewCondensed
 	}
-	if c.PRDiff == "" {
-		c.PRDiff = DiffDifftastic
-	}
 	if viewSpec := spec("pr_view"); !validValue(viewSpec.Valid, c.PRView) {
 		return fmt.Errorf("unknown pr_view: %q", c.PRView)
 	}
-	if diffSpec := spec("pr_diff"); !validValue(diffSpec.Valid, c.PRDiff) {
-		return fmt.Errorf("unknown pr_diff: %q", c.PRDiff)
-	}
 	if c.PRView == ViewCustom && strings.TrimSpace(c.PRViewCommand) == "" {
 		return errors.New("pr_view 'custom' requires pr_view_command")
-	}
-	if c.PRDiff == DiffCustom && strings.TrimSpace(c.PRDiffCommand) == "" {
-		return errors.New("pr_diff 'custom' requires pr_diff_command")
 	}
 	for trigger := range c.Notifications.Sounds {
 		if !validValue(spec("notifications.sounds").Valid, trigger) {

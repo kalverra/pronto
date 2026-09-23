@@ -28,8 +28,6 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 	wantEnv := map[string]string{
 		"pr_view":                    "PRONTO_PR_VIEW",
 		"pr_view_command":            "PRONTO_PR_VIEW_COMMAND",
-		"pr_diff":                    "PRONTO_PR_DIFF",
-		"pr_diff_command":            "PRONTO_PR_DIFF_COMMAND",
 		"notifications.popups":       "PRONTO_NOTIFICATIONS_POPUPS",
 		"notifications.sound":        "PRONTO_NOTIFICATIONS_SOUND",
 		"server.poll_interval":       "PRONTO_POLL_INTERVAL",
@@ -48,9 +46,13 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 		assert.Contains(t, got, key, "spec missing for key %s", key)
 	}
 
+	// Diff configuration was removed entirely.
+	for _, key := range []string{"pr_diff", "pr_diff_command", "diff.scan_root", "diff.repos"} {
+		assert.NotContains(t, got, key, "removed diff key must not have a spec: %s", key)
+	}
+
 	// Defaults must match LoadFile behavior.
 	assert.Equal(t, config.ViewCondensed, got["pr_view"].Default)
-	assert.Equal(t, config.DiffDifftastic, got["pr_diff"].Default)
 	assert.Equal(t, true, got["notifications.popups"].Default)
 	assert.Equal(t, false, got["notifications.sound"].Default)
 	assert.Empty(t, got["pr_view_command"].Default)
@@ -65,13 +67,6 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 			config.ViewWeb, config.ViewCustom,
 		},
 		got["pr_view"].Valid,
-	)
-	assert.ElementsMatch(t,
-		[]string{
-			config.DiffDifftastic, config.DiffZed, config.DiffVSCode,
-			config.DiffTerminal, config.DiffCustom, config.DiffWeb,
-		},
-		got["pr_diff"].Valid,
 	)
 }
 
@@ -102,14 +97,4 @@ func TestSpecs_TriggerValuesMatchNotifyVocabulary(t *testing.T) {
 		assert.True(t, events.ValidTypes[events.Type(trigger)],
 			"trigger %q should be a valid event type", trigger)
 	}
-}
-
-func TestLoad_PRDiffEnvOverride(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("PRONTO_CONFIG_DIR", tmpDir)
-	t.Setenv("PRONTO_PR_DIFF", "zed")
-
-	cfg, err := config.Load()
-	require.NoError(t, err)
-	assert.Equal(t, config.DiffZed, cfg.PRDiff)
 }

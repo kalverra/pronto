@@ -797,7 +797,7 @@ func (m Model) View() string {
 
 	// Help bar
 	b.WriteString("\n")
-	helpText := "enter: details • d: diff • ↑/↓: navigate • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
+	helpText := "enter: details • ↑/↓: navigate • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
 	if m.IsNotificationFocused() {
 		helpText = "enter/o: open • ↑/↓: select • x: dismiss • esc: back to PRs • q: quit"
 	}
@@ -1192,7 +1192,7 @@ func (m Model) renderDetailsModal() string {
 	b.WriteString(
 		lipgloss.NewStyle().
 			Faint(true).
-			Render("d: diff • v: gh pr view • o: browser • ?: why score • esc/q/enter: close"),
+			Render("v: gh pr view • o: browser • ?: why score • esc/q/enter: close"),
 	)
 
 	return modalBoxStyle.Render(b.String())

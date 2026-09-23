@@ -184,7 +184,7 @@ func TestModel_HelpBarIncludesView(t *testing.T) {
 	m := tui.New(q, tui.WithNow(now))
 	view := m.View()
 	assert.Contains(t, view, "enter: details")
-	assert.Contains(t, view, "d: diff")
+	assert.NotContains(t, view, "d: diff", "diff key was removed")
 }
 
 func TestViewPREnv_InteractivePagerWithoutF(t *testing.T) {
@@ -218,71 +218,6 @@ func TestViewPREnv_CustomProntoPager(t *testing.T) {
 	}
 
 	assert.Equal(t, "custom-pager", ghPager)
-}
-
-func TestModel_ViewPR_DiffReadyMsg_Exec(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	pr := model.PullRequest{
-		Number:            101,
-		Title:             "Diff PR",
-		RepoNameWithOwner: "org/repo",
-		UpdatedAt:         now.Add(-1 * time.Hour),
-	}
-	q := model.Queue{
-		Inbox: []model.PullRequest{pr},
-	}
-
-	m := tui.New(q, tui.WithNow(now))
-
-	msg := tui.DiffReadyMsg{
-		PR: pr,
-		Args: []string{
-			"difft", "--skip-unchanged", "/tmp/fake-base", "/tmp/fake-head",
-		},
-	}
-
-	m2, cmd := m.Update(msg)
-	require.NotNil(t, cmd)
-	model2 := m2.(tui.Model)
-	require.NoError(t, model2.ViewErr())
-
-	// ExecProcess yields an execMsg cmd without blocking execution
-	execMsg := cmd()
-	require.NotNil(t, execMsg)
-}
-
-func TestModel_ViewPR_DiffReadyMsg_ErrorBanner(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	pr := model.PullRequest{
-		Number:            101,
-		Title:             "Diff PR",
-		RepoNameWithOwner: "org/repo",
-		UpdatedAt:         now.Add(-1 * time.Hour),
-	}
-	q := model.Queue{
-		Inbox: []model.PullRequest{pr},
-	}
-
-	m := tui.New(q, tui.WithNow(now))
-
-	msg := tui.DiffReadyMsg{
-		PR:  pr,
-		Err: errors.New("tarball download failed: 500 internal server error"),
-	}
-
-	m2, cmd := m.Update(msg)
-	assert.Nil(t, cmd)
-
-	model2 := m2.(tui.Model)
-	require.Error(t, model2.ViewErr())
-	assert.Contains(t, model2.ViewErr().Error(), "tarball download failed")
-	require.NotNil(t, model2.ViewErrPR())
-	assert.Equal(t, 101, model2.ViewErrPR().Number)
-	assert.Contains(t, model2.View(), "failed to view #101: tarball download failed")
 }
 
 func TestModel_DetailModal_CIDuration(t *testing.T) {

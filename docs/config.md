@@ -15,8 +15,6 @@ environment variables override file values.
 | -------- | --- | ---- | ------- | -------------- | ----------- |
 | `pr_view` | `PRONTO_PR_VIEW` | string | `"condensed"` | `condensed`, `terminal`, `vscode`, `web`, `custom` | Viewer used to display a pull request. |
 | `pr_view_command` | `PRONTO_PR_VIEW_COMMAND` | string | `""` | `—` | Command template run for pr_view = "custom"; {url} is substituted with the PR URL. |
-| `pr_diff` | `PRONTO_PR_DIFF` | string | `"difftastic"` | `difftastic`, `zed`, `vscode`, `terminal`, `custom`, `web` | Viewer used to display a pull request diff. |
-| `pr_diff_command` | `PRONTO_PR_DIFF_COMMAND` | string | `""` | `—` | Command template run for pr_diff = "custom"; {url} is substituted with the PR URL. |
 | `notifications.popups` | `PRONTO_NOTIFICATIONS_POPUPS` | bool | true | `—` | Whether desktop notification popups are enabled. |
 | `notifications.sound` | `PRONTO_NOTIFICATIONS_SOUND` | bool | false | `—` | Whether notification sounds are enabled. |
 | `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Audio file paths per notification trigger. |
@@ -42,8 +40,6 @@ Resolution order mirrors internal/logging:
 ```toml
 pr_view = "condensed"
 pr_view_command = ""
-pr_diff = "difftastic"
-pr_diff_command = ""
 notifications.popups = true
 notifications.sound = false
 [notifications.sounds]

@@ -96,7 +96,6 @@ type Model struct {
 	prevQueue             model.Queue
 	notificationFocused   bool
 	viewPR                ViewPRFunc
-	diffPR                ViewPRFunc
 	viewErr               error
 	viewErrPR             *model.PullRequest
 	eventsCh              <-chan events.Event
@@ -313,14 +312,6 @@ type ViewPRMsg struct {
 	Err error
 }
 
-// DiffReadyMsg indicates that a diff has been materialized and is ready to
-// launch; Args holds the fully constructed argv for the diff tool.
-type DiffReadyMsg struct {
-	PR   model.PullRequest
-	Args []string
-	Err  error
-}
-
 // SpinnerTickMsg advances the CI spinner animation frame.
 type SpinnerTickMsg struct{}
 
@@ -375,42 +366,6 @@ func WithPRViewer(viewer ViewPRFunc) Option {
 	return func(m *Model) {
 		m.viewPR = viewer
 	}
-}
-
-// WithPRDiffer sets a custom viewer for interactive PR diff viewing.
-func WithPRDiffer(differ ViewPRFunc) Option {
-	return func(m *Model) {
-		m.diffPR = differ
-	}
-}
-
-func defaultDiffPR(pr model.PullRequest) tea.Cmd {
-	target := pr.URL
-	if target == "" {
-		if pr.RepoNameWithOwner != "" && pr.Number > 0 {
-			target = pr.Key().String()
-		} else if pr.Number > 0 {
-			target = strconv.Itoa(pr.Number)
-		}
-	}
-	if target == "" {
-		return func() tea.Msg {
-			return ViewPRMsg{
-				PR:  pr,
-				Err: errors.New("cannot diff PR: missing URL and repo info"),
-			}
-		}
-	}
-	// #nosec G204 -- target is PR URL or repo#number.
-	//nolint:noctx // Interactive terminal pager process managed by Bubbletea ExecProcess.
-	c := exec.Command("gh", "pr", "diff", target)
-	c.Env = ViewPREnv()
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return ViewPRMsg{
-			PR:  pr,
-			Err: err,
-		}
-	})
 }
 
 func defaultViewPR(pr model.PullRequest) tea.Cmd {
@@ -590,9 +545,6 @@ func New(q model.Queue, opts ...Option) Model {
 	if m.viewPR == nil {
 		m.viewPR = defaultViewPR
 	}
-	if m.diffPR == nil {
-		m.diffPR = defaultDiffPR
-	}
 
 	return m.applyQueue(q)
 }
@@ -768,9 +720,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OpenURLMsg:
 		return m, nil
 
-	case DiffReadyMsg:
-		return m.handleDiffReadyMsg(msg)
-
 	case ViewPRMsg:
 		if msg.Err != nil {
 			m.viewErr = msg.Err
@@ -802,29 +751,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
-}
-
-func (m Model) handleDiffReadyMsg(msg DiffReadyMsg) (tea.Model, tea.Cmd) {
-	if msg.Err != nil {
-		m.viewErr = msg.Err
-		m.viewErrPR = &msg.PR
-		return m, nil
-	}
-	if len(msg.Args) == 0 {
-		m.viewErr = errors.New("diff ready but no command arguments")
-		m.viewErrPR = &msg.PR
-		return m, nil
-	}
-	// #nosec G204 -- arguments constructed internally for diff tool.
-	//nolint:noctx // Interactive process managed by Bubbletea ExecProcess.
-	c := exec.Command(msg.Args[0], msg.Args[1:]...)
-	c.Env = ViewPREnv()
-	return m, tea.ExecProcess(c, func(err error) tea.Msg {
-		return ViewPRMsg{
-			PR:  msg.PR,
-			Err: err,
-		}
-	})
 }
 
 func (m Model) handleClosePRMsg(msg ClosePRMsg) (tea.Model, tea.Cmd) {
@@ -875,8 +801,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return m.handleEnterKey()
-	case "d":
-		return m.handleDiffKey()
 	case "v":
 		return m.handleViewKey()
 	case "f":
@@ -1012,8 +936,6 @@ func (m Model) handleDetailsKey(key string) (tea.Model, tea.Cmd) {
 	case "esc", "q", "enter":
 		m.detailsOpen = false
 		return m, nil
-	case "d":
-		return m.handleDiffKey()
 	case "v":
 		return m.handleViewKey()
 	case "o":
@@ -1096,18 +1018,6 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 	}
 	m.detailsOpen = true
 	return m, nil
-}
-
-func (m Model) handleDiffKey() (tea.Model, tea.Cmd) {
-	selected := m.SelectedPR()
-	if selected == nil {
-		return m, nil
-	}
-	differ := m.diffPR
-	if differ == nil {
-		differ = defaultDiffPR
-	}
-	return m, differ(*selected)
 }
 
 func (m Model) handleViewKey() (tea.Model, tea.Cmd) {

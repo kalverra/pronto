@@ -192,6 +192,15 @@ reuse age — it cannot have changed. Fields that are stable for a given head OI
 (`createdAt`, diff sizes, file list) are recovered from cache even on a
 hydration miss, so the query only asks for the fresh half.
 
+### PR viewing
+
+`internal/prview` resolves the `pr_view` viewer: `condensed` (default, no
+external viewer), `terminal` (`gh pr view`), `vscode` (`open-pull-request-webview`
+URI), `web`, or `custom` (user command template). Diff viewing was removed —
+the `o` key opens the PR in the browser, whose `/files` tab is the diff view;
+`gh`-based diffing and local materialization never matched the real estate
+they cost.
+
 ### Profiling
 
 `internal/profiling` is the single wiring surface for pprof and the Go 1.27

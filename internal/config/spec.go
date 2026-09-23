@@ -45,21 +45,6 @@ var Specs = []KeySpec{
 		Doc:     "Command template run for pr_view = \"custom\"; {url} is substituted with the PR URL.",
 	},
 	{
-		Key:     "pr_diff",
-		Env:     "PRONTO_PR_DIFF",
-		Type:    "string",
-		Default: DiffDifftastic,
-		Valid:   []string{DiffDifftastic, DiffZed, DiffVSCode, DiffTerminal, DiffCustom, DiffWeb},
-		Doc:     "Viewer used to display a pull request diff.",
-	},
-	{
-		Key:     "pr_diff_command",
-		Env:     "PRONTO_PR_DIFF_COMMAND",
-		Type:    "string",
-		Default: "",
-		Doc:     "Command template run for pr_diff = \"custom\"; {url} is substituted with the PR URL.",
-	},
-	{
 		Key:     "notifications.popups",
 		Env:     "PRONTO_NOTIFICATIONS_POPUPS",
 		Type:    "bool",

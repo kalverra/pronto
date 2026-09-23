@@ -26,7 +26,6 @@ func TestLoad_Defaults(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 	assert.Equal(t, config.ViewCondensed, cfg.PRView)
-	assert.Equal(t, config.DiffDifftastic, cfg.PRDiff)
 	assert.Empty(t, cfg.PRViewCommand)
 }
 

@@ -21,19 +21,19 @@ run = "go run ./cmd/pronto --debug"
 description = "Run all tests"
 run = "go test ./... -timeout 30s -cover"
 
-[tasks.test_pretty]
+[tasks."test:pretty"]
 description = "Run all tests with pretty output"
 run = "go tool gotestsum -- ./... -timeout 30s -cover"
 
-[tasks.test_find_slow]
+[tasks."test:find-slow"]
 description = "Find slow tests"
 run = "go test -json -count=1 ./... | go tool gotestsum tool slowest --threshold 200ms"
 
-[tasks.test_thorough]
+[tasks."test:thorough"]
 description = "Run all tests many times to look for flakes"
 run = "go test -count=100 -timeout 3m ./..."
 
-[tasks.test_thorough_pretty]
+[tasks."test:thorough:pretty"]
 description = "Run all tests many times to look for flakes"
 run = "go tool gotestsum -- ./... -count=100 -timeout 3m"
 
@@ -41,11 +41,11 @@ run = "go tool gotestsum -- ./... -count=100 -timeout 3m"
 description = "Run all tests with -race"
 run = "go test -count=5 -timeout 2m -race ./..."
 
-[tasks.race_thorough]
+[tasks."race:thorough"]
 description = "Run all tests with -race many times"
 run = "go test -count=50 -timeout 2m -race ./..."
 
-[tasks.race_thorough_pretty]
+[tasks."race:thorough:pretty"]
 description = "Run all tests with -race many times"
 run = "go tool gotestsum -- ./... -count=50 -timeout 2m -race"
 

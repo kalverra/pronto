@@ -1,8 +1,6 @@
 package prview_test
 
 import (
-	"context"
-	"errors"
 	"net/url"
 	"testing"
 
@@ -12,7 +10,6 @@ import (
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/prview"
-	"github.com/kalverra/pronto/internal/tui"
 )
 
 func TestBuildTerminalArgs(t *testing.T) {
@@ -73,68 +70,6 @@ func TestBuildVSCodeArgs(t *testing.T) {
 	})
 }
 
-func TestBuildDifftasticArgs(t *testing.T) {
-	t.Parallel()
-
-	args := prview.BuildDifftasticArgs("/tmp/base", "/tmp/head")
-	assert.Equal(t, []string{"difft", "--skip-unchanged", "/tmp/base", "/tmp/head"}, args)
-}
-
-func TestZedViewer_MultiDiffDirs(t *testing.T) {
-	t.Parallel()
-
-	fake := &fakeMaterializer{
-		diff: &prview.MaterializedDiff{
-			BaseDir: "/cache/diffs/org-repo-42/base",
-			HeadDir: "/cache/diffs/org-repo-42/head",
-			Files:   []string{"main.go", "internal/auth.go"},
-		},
-	}
-	viewer := prview.ZedViewer(fake)
-
-	pr := model.PullRequest{
-		Number:            42,
-		URL:               "https://github.com/org/repo/pull/42",
-		RepoNameWithOwner: "org/repo",
-	}
-	msg := viewer(pr)()
-
-	ready, ok := msg.(tui.DiffReadyMsg)
-	require.True(t, ok)
-	require.NoError(t, ready.Err)
-	assert.Equal(t, []string{
-		"zed", "--diff",
-		"/cache/diffs/org-repo-42/base", "/cache/diffs/org-repo-42/head",
-	}, ready.Args)
-}
-
-func TestZedViewer_MaterializeError(t *testing.T) {
-	t.Parallel()
-
-	fake := &fakeMaterializer{err: errors.New("compare API returned 500")}
-	viewer := prview.ZedViewer(fake)
-
-	pr := model.PullRequest{
-		Number:            42,
-		RepoNameWithOwner: "org/repo",
-	}
-	msg := viewer(pr)()
-
-	ready, ok := msg.(tui.DiffReadyMsg)
-	require.True(t, ok)
-	require.Error(t, ready.Err)
-	assert.Contains(t, ready.Err.Error(), "compare API returned 500")
-}
-
-type fakeMaterializer struct {
-	diff *prview.MaterializedDiff
-	err  error
-}
-
-func (f *fakeMaterializer) Materialize(_ context.Context, _ model.PullRequest) (*prview.MaterializedDiff, error) {
-	return f.diff, f.err
-}
-
 func TestResolveViewer(t *testing.T) {
 	t.Parallel()
 
@@ -166,9 +101,9 @@ func TestResolveViewer(t *testing.T) {
 		assert.Nil(t, viewer)
 	})
 
-	t.Run("difftastic rejected as view", func(t *testing.T) {
+	t.Run("diff names rejected as view", func(t *testing.T) {
 		t.Parallel()
-		cfg := config.Config{PRView: config.DiffDifftastic}
+		cfg := config.Config{PRView: "difftastic"}
 		_, err := prview.ResolveViewer(cfg)
 		require.Error(t, err)
 	})
@@ -177,39 +112,6 @@ func TestResolveViewer(t *testing.T) {
 		t.Parallel()
 		cfg := config.Config{PRView: "unknown"}
 		_, err := prview.ResolveViewer(cfg)
-		require.Error(t, err)
-	})
-}
-
-func TestResolveDiffViewer(t *testing.T) {
-	t.Parallel()
-
-	diffs := []string{
-		config.DiffDifftastic,
-		config.DiffZed,
-		config.DiffTerminal,
-		config.DiffVSCode,
-		config.DiffWeb,
-		config.DiffCustom,
-	}
-
-	for _, d := range diffs {
-		t.Run(d, func(t *testing.T) {
-			t.Parallel()
-			cfg := config.Config{
-				PRDiff:        d,
-				PRDiffCommand: "echo {url}",
-			}
-			differ, err := prview.ResolveDiffViewer(cfg)
-			require.NoError(t, err)
-			assert.NotNil(t, differ)
-		})
-	}
-
-	t.Run("unknown diff", func(t *testing.T) {
-		t.Parallel()
-		cfg := config.Config{PRDiff: "unknown"}
-		_, err := prview.ResolveDiffViewer(cfg)
 		require.Error(t, err)
 	})
 }

@@ -106,13 +106,8 @@ func runRootTUI(cmd *cobra.Command, src source.Source) error {
 	if err != nil {
 		return fmt.Errorf("resolve pr viewer: %w", err)
 	}
-	differ, err := prview.ResolveDiffViewer(cfg)
-	if err != nil {
-		return fmt.Errorf("resolve pr differ: %w", err)
-	}
 	opts := []tui.Option{
 		tui.WithPRViewer(viewer),
-		tui.WithPRDiffer(differ),
 		tui.WithNotificationConfig(cfg.Notifications),
 		tui.WithLogger(logger),
 	}

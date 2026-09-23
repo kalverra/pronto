@@ -1,4 +1,4 @@
-## Intent
+# AGENTS
 
 Create an maintain a simple CLI + TUI tool for a clean interface of PR statuses.
 
@@ -40,8 +40,8 @@ mise run test
 mise run race
 
 # Thorough checks for finding flakes/races
-mise run test_thorough
-mise run race_thorough
+mise run test:thorough
+mise run race:thorough
 
 # Regenerate reference docs (docs/events.md, config.md, model.md) and
 # the wire schema (internal/events/schema.json)
