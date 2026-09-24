@@ -3,6 +3,8 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"github.com/muesli/termenv"
 
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/notify"
@@ -21,13 +24,10 @@ var (
 
 	activeTabStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#ffffff")).
-			Background(lipgloss.Color("#30363d")).
-			Padding(0, 1)
+			Foreground(lipgloss.Color("#58a6ff"))
 
 	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#8b949e")).
-				Padding(0, 1)
+				Foreground(lipgloss.Color("#8b949e"))
 
 	tabSeparatorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("238"))
@@ -41,8 +41,35 @@ var (
 				Foreground(lipgloss.Color("#ffffff"))
 
 	unselectedRowStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#e6edf3"))
+
+	selectedNumStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#79c0ff"))
+
+	selectedRangeTagStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#e6edf3"))
+
+	selectedUpdatedStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#e6edf3"))
+
+	selectedRepoStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#e6edf3"))
+
+	selectedAuthorStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#ffffff"))
+
+	selectedDiffAddStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#3fb950"))
+
+	selectedDiffDelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#f85149"))
 
 	authorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("244"))
@@ -74,12 +101,6 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("#58a6ff"))
 
-	progressBarFilledStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#58a6ff"))
-
-	progressBarEmptyStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("238"))
-
 	tableBorderStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("238"))
 
@@ -105,7 +126,7 @@ var (
 
 	badgeDraftStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#8b949e"))
+			Foreground(lipgloss.Color("#b1bac4"))
 
 	ciPassStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -151,6 +172,7 @@ var (
 	accentGreen    = lipgloss.Color("#3fb950")
 	accentBlue     = lipgloss.Color("#58a6ff")
 	accentCharcoal = lipgloss.Color("#6e7681")
+	selectedRowBg  = lipgloss.Color("#21262d")
 )
 
 type rowKind int
@@ -191,16 +213,142 @@ func (m Model) buildDisplayRows(tab Tab) []displayRow {
 
 	refTime := m.refTime()
 
-	switch tab {
-	case TabFocus:
-		return m.buildFocusDisplayRows(list, refTime)
-	case TabInbox:
-		return m.buildInboxDisplayRows(list, refTime)
-	case TabMine:
-		return m.buildMineDisplayRows(list, refTime)
+	switch m.sortStrategy {
+	case SortRepo:
+		return m.buildRepoDisplayRows(list)
+	case SortUpdated:
+		return m.buildUpdatedDisplayRows(list)
+	case SortScore:
+		return m.buildScoreDisplayRows(list)
+	case SortAction:
+		fallthrough
 	default:
-		return nil
+		switch tab {
+		case TabFocus:
+			return m.buildFocusDisplayRows(list, refTime)
+		case TabInbox:
+			return m.buildInboxDisplayRows(list, refTime)
+		case TabMine:
+			return m.buildMineDisplayRows(list, refTime)
+		default:
+			return nil
+		}
 	}
+}
+
+func (m Model) partitionFocusedWithStacks(indices []int, list []score.Scored) {
+	stackFocused := make(map[string]bool)
+	for _, idx := range indices {
+		pr := list[idx].PR
+		if pr.IsPartOfStack() && m.isFocused(pr) {
+			stackFocused[pr.StackKey()] = true
+		}
+	}
+
+	sort.SliceStable(indices, func(i, j int) bool {
+		prI := list[indices[i]].PR
+		prJ := list[indices[j]].PR
+		iFoc := m.isFocused(prI) || (prI.IsPartOfStack() && stackFocused[prI.StackKey()])
+		jFoc := m.isFocused(prJ) || (prJ.IsPartOfStack() && stackFocused[prJ.StackKey()])
+		if iFoc != jFoc {
+			return iFoc
+		}
+		return false
+	})
+}
+
+func (m Model) buildRepoDisplayRows(list []score.Scored) []displayRow {
+	repoGroups := make(map[string][]int)
+	for i, item := range list {
+		k := prRepoKey(item.PR)
+		repoGroups[k] = append(repoGroups[k], i)
+	}
+
+	repos := make([]string, 0, len(repoGroups))
+	for r := range repoGroups {
+		repos = append(repos, r)
+	}
+	slices.Sort(repos)
+
+	var displayRows []displayRow
+	for _, repo := range repos {
+		indices := repoGroups[repo]
+		m.partitionFocusedWithStacks(indices, list)
+
+		displayRows = append(displayRows, displayRow{
+			kind:          rowDivider,
+			dividerTitle:  strings.ToUpper(repo),
+			dividerCount:  len(indices),
+			dividerAccent: accentBlue,
+		})
+		displayRows = append(displayRows, m.buildCategoryDisplayRows(list, indices)...)
+	}
+	return displayRows
+}
+
+func (m Model) buildUpdatedDisplayRows(list []score.Scored) []displayRow {
+	stackUpdated := make(map[string]time.Time)
+	stackFocused := make(map[string]bool)
+	for _, item := range list {
+		if item.PR.IsPartOfStack() {
+			k := item.PR.StackKey()
+			if t, ok := stackUpdated[k]; !ok || item.PR.UpdatedAt.After(t) {
+				stackUpdated[k] = item.PR.UpdatedAt
+			}
+			if m.isFocused(item.PR) {
+				stackFocused[k] = true
+			}
+		}
+	}
+
+	indices := make([]int, len(list))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	sort.SliceStable(indices, func(i, j int) bool {
+		prI := list[indices[i]].PR
+		prJ := list[indices[j]].PR
+
+		// 1. Focused first (stack-aware)
+		iFoc := m.isFocused(prI) || (prI.IsPartOfStack() && stackFocused[prI.StackKey()])
+		jFoc := m.isFocused(prJ) || (prJ.IsPartOfStack() && stackFocused[prJ.StackKey()])
+		if iFoc != jFoc {
+			return iFoc
+		}
+
+		// 2. If same stack, preserve position order
+		if prI.IsPartOfStack() && prJ.IsPartOfStack() && prI.StackKey() == prJ.StackKey() {
+			return prI.Stack.Position < prJ.Stack.Position
+		}
+
+		// 3. Effective UpdatedAt descending
+		timeI := prI.UpdatedAt
+		if prI.IsPartOfStack() {
+			timeI = stackUpdated[prI.StackKey()]
+		}
+		timeJ := prJ.UpdatedAt
+		if prJ.IsPartOfStack() {
+			timeJ = stackUpdated[prJ.StackKey()]
+		}
+
+		if !timeI.Equal(timeJ) {
+			return timeI.After(timeJ)
+		}
+
+		return prI.Number < prJ.Number
+	})
+
+	return m.buildCategoryDisplayRows(list, indices)
+}
+
+func (m Model) buildScoreDisplayRows(list []score.Scored) []displayRow {
+	indices := make([]int, len(list))
+	for i := range indices {
+		indices[i] = i
+	}
+	m.partitionFocusedWithStacks(indices, list)
+	return m.buildCategoryDisplayRows(list, indices)
 }
 
 func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []displayRow {
@@ -235,7 +383,7 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 
 		if totalInCat <= 1 {
 			meta := fmt.Sprintf("%s %s",
-				styleStackTag.Render("⎘"),
+				styleStackTag.Render("[STACK]"),
 				styleRangeTag.Render(fmt.Sprintf("[%d/%d]", pr.Stack.Position, pr.Stack.Size)),
 			)
 			rows = append(rows, displayRow{
@@ -678,13 +826,17 @@ func (m Model) View() string {
 	list := m.activeList()
 	switch {
 	case m.loading:
+		spin := lipgloss.NewStyle().Foreground(lipgloss.Color("#58a6ff")).Render(m.spinnerChar())
 		if m.loadingTotal > 0 {
-			b.WriteString("  Fetching pull requests…\n")
-			barWidth := min(30, max(10, m.width-20))
-			bar := renderProgressBar(m.loadingLoaded, m.loadingTotal, barWidth)
-			fmt.Fprintf(&b, "  %s %d/%d\n\n", bar, m.loadingLoaded, m.loadingTotal)
+			fmt.Fprintf(
+				&b,
+				"  %s Fetching pull requests (%d of %d hydrated)…\n\n",
+				spin,
+				m.loadingLoaded,
+				m.loadingTotal,
+			)
 		} else {
-			b.WriteString("  Fetching pull requests…\n\n")
+			fmt.Fprintf(&b, "  %s Fetching pull requests…\n\n", spin)
 		}
 	case len(list) == 0:
 		b.WriteString("  No pull requests in this view.\n\n")
@@ -723,14 +875,65 @@ func (m Model) View() string {
 
 	// Help bar
 	b.WriteString("\n")
-	helpText := "enter: details • ↑/↓: navigate • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
-	if m.IsNotificationFocused() {
+	helpText := "enter: details • ↑/↓: navigate • s: sort • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
+	if m.loading {
+		helpText = "q: quit • ?: help"
+	} else if m.IsNotificationFocused() {
 		helpText = "enter/o: open • ↑/↓: select • x: dismiss • esc: back to PRs • q: quit"
 	}
 	b.WriteString(renderHelp(helpText))
 	b.WriteString("\n")
 
 	return appStyle.Render(b.String())
+}
+
+func computeMaxNumAndStackWidth(displayRows []displayRow, list []score.Scored) (int, int) {
+	maxNumWidth := 0
+	maxStackWidth := 0
+	for _, dRow := range displayRows {
+		if dRow.kind != rowItem || dRow.isChildInStack {
+			continue
+		}
+		pr := list[dRow.itemIndex].PR
+		numStr := fmt.Sprintf("#%d", pr.Number)
+		if len(numStr) > maxNumWidth {
+			maxNumWidth = len(numStr)
+		}
+
+		if dRow.isCollapsedStack && dRow.stackGroup != nil {
+			stackMeta := formatCollapsedStackMeta(len(dRow.stackGroup.PRs), false)
+			if w := lipgloss.Width(stackMeta); w > maxStackWidth {
+				maxStackWidth = w
+			}
+		} else if dRow.stackPrefix != "" {
+			if w := lipgloss.Width(dRow.stackPrefix); w > maxStackWidth {
+				maxStackWidth = w
+			}
+		}
+	}
+	return maxNumWidth, maxStackWidth
+}
+
+func (m Model) buildTableRowCols(
+	dRow displayRow,
+	item score.Scored,
+	isSelected, hasAuthor bool,
+	refTime time.Time,
+	maxNumWidth, maxStackWidth int,
+) []string {
+	var rowCols []string
+	switch {
+	case dRow.isCollapsedStack && dRow.stackGroup != nil:
+		rowCols = m.collapsedStackRowCols(dRow.stackGroup, item.PR, isSelected, refTime, maxNumWidth, maxStackWidth)
+	case dRow.isChildInStack:
+		rowCols = m.childStackRowCols(dRow, item.PR, isSelected, refTime)
+	default:
+		rowCols = m.itemRowCols(dRow, item.PR, isSelected, refTime, maxNumWidth, maxStackWidth)
+	}
+	if hasAuthor {
+		rowCols = append(rowCols, renderAuthor(item.PR, isSelected))
+	}
+	return rowCols
 }
 
 // renderPRTable renders the PR list table with left-aligned columns and progressive width budgeting.
@@ -747,29 +950,7 @@ func (m Model) renderPRTable(
 	}
 
 	visibleRows := displayRows[scroll:end]
-	maxNumWidth := 0
-	maxStackWidth := 0
-	for _, dRow := range displayRows {
-		if dRow.kind != rowItem || dRow.isChildInStack {
-			continue
-		}
-		pr := list[dRow.itemIndex].PR
-		numStr := fmt.Sprintf("#%d", pr.Number)
-		if len(numStr) > maxNumWidth {
-			maxNumWidth = len(numStr)
-		}
-
-		if dRow.isCollapsedStack && dRow.stackGroup != nil {
-			stackMeta := formatCollapsedStackMeta(len(dRow.stackGroup.PRs))
-			if w := lipgloss.Width(stackMeta); w > maxStackWidth {
-				maxStackWidth = w
-			}
-		} else if dRow.stackPrefix != "" {
-			if w := lipgloss.Width(dRow.stackPrefix); w > maxStackWidth {
-				maxStackWidth = w
-			}
-		}
-	}
+	maxNumWidth, maxStackWidth := computeMaxNumAndStackWidth(displayRows, list)
 
 	var rows [][]string
 	for _, dRow := range visibleRows {
@@ -780,20 +961,7 @@ func (m Model) renderPRTable(
 
 		item := list[dRow.itemIndex]
 		isSelected := dRow.itemIndex == cursor && !m.IsNotificationFocused()
-
-		var rowCols []string
-		switch {
-		case dRow.isCollapsedStack && dRow.stackGroup != nil:
-			rowCols = m.collapsedStackRowCols(dRow.stackGroup, item.PR, isSelected, refTime, maxNumWidth, maxStackWidth)
-		case dRow.isChildInStack:
-			rowCols = m.childStackRowCols(dRow, item.PR, isSelected, refTime)
-		default:
-			rowCols = m.itemRowCols(dRow, item.PR, isSelected, refTime, maxNumWidth, maxStackWidth)
-		}
-		if hasAuthor {
-			rowCols = append(rowCols, renderAuthor(item.PR))
-		}
-		rows = append(rows, rowCols)
+		rows = append(rows, m.buildTableRowCols(dRow, item, isSelected, hasAuthor, refTime, maxNumWidth, maxStackWidth))
 	}
 
 	totalWidth := max(20, m.width-4)
@@ -834,6 +1002,12 @@ func (m Model) renderPRTable(
 		}
 		if row == table.HeaderRow {
 			return s.Bold(true).Foreground(lipgloss.Color("245"))
+		}
+		if row >= 0 && row < len(visibleRows) {
+			dRow := visibleRows[row]
+			if dRow.kind == rowItem && dRow.itemIndex == cursor && !m.IsNotificationFocused() {
+				s = s.Background(selectedRowBg)
+			}
 		}
 		return s
 	})
@@ -976,7 +1150,8 @@ func computeTableColumnWidths(totalWidth int, hasAuthor bool, rows [][]string) t
 }
 
 // rewriteSpecialRowLines replaces the placeholder table lines for category
-// dividers and expanded stack banners with their full-width rendered forms.
+// dividers and expanded stack banners with their full-width rendered forms,
+// and ensures seamless background highlight for the selected row.
 func (m Model) rewriteSpecialRowLines(
 	lines []string,
 	visibleRows []displayRow,
@@ -1003,17 +1178,81 @@ func (m Model) rewriteSpecialRowLines(
 		case dRow.kind == rowStackBanner && dRow.stackGroup != nil:
 			rootPR := list[dRow.itemIndex].PR
 			bannerSelected := dRow.itemIndex == cursor && !m.IsNotificationFocused()
-			lines[lineIdx] = renderStackBanner(rootPR, dRow.stackGroup.PRs, bannerSelected, tblWidth)
+			banner := renderStackBanner(rootPR, dRow.stackGroup.PRs, bannerSelected, tblWidth)
+			if bannerSelected {
+				banner = applyRowBackground(banner, selectedRowBg)
+			}
+			lines[lineIdx] = banner
+		case dRow.kind == rowItem:
+			if dRow.itemIndex == cursor && !m.IsNotificationFocused() {
+				lines[lineIdx] = applyRowBackground(lines[lineIdx], selectedRowBg)
+			}
 		}
 	}
 }
 
-func formatCollapsedStackMeta(count int) string {
+// applyRowBackground ensures that a row highlighted with bg does not lose its background
+// when inner ANSI styling sequences reset character attributes with \x1b[0m.
+func applyRowBackground(line string, bg lipgloss.TerminalColor) string {
+	sample := lipgloss.NewStyle().Background(bg).Render(" ")
+	idx := strings.Index(sample, " ")
+	var bgSeq string
+	if idx > 0 {
+		bgSeq = sample[:idx]
+	} else {
+		// When default renderer is in Ascii mode (e.g. tests), construct escape sequence via TrueColor renderer
+		r := lipgloss.NewRenderer(io.Discard)
+		r.SetColorProfile(termenv.TrueColor)
+		s := r.NewStyle().Background(bg).Render(" ")
+		if i := strings.Index(s, " "); i > 0 {
+			bgSeq = s[:i]
+		}
+	}
+	if bgSeq == "" {
+		return line
+	}
+
+	// Strip any trailing reset sequences so we don't end with a background sequence before EOL
+	trimmed := line
+	for {
+		if after, ok := strings.CutSuffix(trimmed, "\x1b[0m"); ok {
+			trimmed = after
+			continue
+		}
+		if after, ok := strings.CutSuffix(trimmed, "\x1b[m"); ok {
+			trimmed = after
+			continue
+		}
+		break
+	}
+
+	// Normalize any resets that are already followed by bgSeq
+	trimmed = strings.ReplaceAll(trimmed, "\x1b[0m"+bgSeq, "\x1b[0m")
+	trimmed = strings.ReplaceAll(trimmed, "\x1b[m"+bgSeq, "\x1b[m")
+	trimmed = strings.ReplaceAll(trimmed, "\x1b[49m", bgSeq)
+
+	// Re-apply bgSeq after every reset within the line
+	trimmed = strings.ReplaceAll(trimmed, "\x1b[0m", "\x1b[0m"+bgSeq)
+	trimmed = strings.ReplaceAll(trimmed, "\x1b[m", "\x1b[m"+bgSeq)
+
+	if !strings.HasPrefix(trimmed, bgSeq) {
+		trimmed = bgSeq + trimmed
+	}
+
+	// Always close with reset at end of line
+	return trimmed + "\x1b[0m"
+}
+
+func formatCollapsedStackMeta(count int, isSelected bool) string {
 	prCountStr := fmt.Sprintf("%d PRs", count)
 	if count == 1 {
 		prCountStr = "1 PR"
 	}
-	return fmt.Sprintf("%s %s", styleStackTag.Render("⎘"), prCountStr)
+	rangeStyle := styleRangeTag
+	if isSelected {
+		rangeStyle = selectedRangeTagStyle
+	}
+	return fmt.Sprintf("%s %s", styleStackTag.Render("[STACK]"), rangeStyle.Render(prCountStr))
 }
 
 // collapsedStackRowCols renders the single collapsed stack row: a micro-status
@@ -1038,7 +1277,7 @@ func (m Model) collapsedStackRowCols(
 		totalDels += prItem.Deletions
 	}
 
-	stackMeta := formatCollapsedStackMeta(len(sg.PRs))
+	stackMeta := formatCollapsedStackMeta(len(sg.PRs), isSelected)
 	padStack := ""
 	if maxStackWidth > lipgloss.Width(stackMeta) {
 		padStack = strings.Repeat(" ", maxStackWidth-lipgloss.Width(stackMeta))
@@ -1055,7 +1294,11 @@ func (m Model) collapsedStackRowCols(
 	if maxNumWidth > len(numStr) {
 		padNum = strings.Repeat(" ", maxNumWidth-len(numStr))
 	}
-	numText := numStyle.Render(numStr) + padNum
+	numSt := numStyle
+	if isSelected {
+		numSt = selectedNumStyle
+	}
+	numText := numSt.Render(numStr) + padNum
 
 	titleStyle := unselectedRowStyle
 	if isSelected {
@@ -1066,29 +1309,38 @@ func (m Model) collapsedStackRowCols(
 	var updatedText string
 	if !root.UpdatedAt.IsZero() {
 		d := max(refTime.Sub(root.UpdatedAt), 0)
-		updatedText = updatedStyle.Render(humanAge(d))
+		upStyle := updatedStyle
+		if isSelected {
+			upStyle = selectedUpdatedStyle
+		}
+		updatedText = upStyle.Render(humanAge(d))
 	}
 
 	repo := root.RepoName
 	if repo == "" {
 		repo = root.RepoNameWithOwner
 	}
+	rpStyle := repoStyle
+	if isSelected {
+		rpStyle = selectedRepoStyle
+	}
 
 	return []string{
 		prefix,
 		titleText,
 		RenderMicroStatusRibbon(sg.PRs),
-		RenderDiffRollup(totalAdds, totalDels),
+		renderDiffSize(totalAdds, totalDels, isSelected),
 		RenderMicroCIRibbon(sg.PRs),
 		updatedText,
-		repoStyle.Render(repo),
+		rpStyle.Render(repo),
 	}
 }
 
 // childStackRowCols renders a single PR row inside an expanded stack.
 func (m Model) childStackRowCols(dRow displayRow, pr model.PullRequest, isSelected bool, refTime time.Time) []string {
 	prefix := "   "
-	if isSelected && !dRow.isStackRoot {
+	childSelected := isSelected && !dRow.isStackRoot
+	if childSelected {
 		prefix = cursorStyle.Render("❯  ")
 	}
 
@@ -1098,7 +1350,7 @@ func (m Model) childStackRowCols(dRow displayRow, pr model.PullRequest, isSelect
 	}
 	fullTitle := dRow.stackPrefix + title
 	titleStyle := unselectedRowStyle
-	if isSelected && !dRow.isStackRoot {
+	if childSelected {
 		titleStyle = selectedRowStyle
 	}
 	titleText := titleStyle.Render(fullTitle)
@@ -1106,25 +1358,30 @@ func (m Model) childStackRowCols(dRow displayRow, pr model.PullRequest, isSelect
 	var updatedText string
 	if !pr.UpdatedAt.IsZero() {
 		d := max(refTime.Sub(pr.UpdatedAt), 0)
-		updatedText = updatedStyle.Render(humanAge(d))
+		upStyle := updatedStyle
+		if childSelected {
+			upStyle = selectedUpdatedStyle
+		}
+		updatedText = upStyle.Render(humanAge(d))
 	}
 
 	repo := pr.RepoName
 	if repo == "" {
 		repo = pr.RepoNameWithOwner
 	}
+	rpStyle := repoStyle
+	if childSelected {
+		rpStyle = selectedRepoStyle
+	}
 
 	return []string{
 		prefix,
 		titleText,
 		RenderChildStatusBadge(pr),
-		fmt.Sprintf("%s %s",
-			styleAdd.Render("+"+FormatDiff(pr.Additions)),
-			styleDel.Render("-"+FormatDiff(pr.Deletions)),
-		),
-		m.renderCIBadge(pr.Checks, refTime),
+		renderDiffSize(pr.Additions, pr.Deletions, childSelected),
+		m.renderCIBadge(pr.Checks, refTime, childSelected),
 		updatedText,
-		repoStyle.Render(repo),
+		rpStyle.Render(repo),
 	}
 }
 
@@ -1146,7 +1403,11 @@ func (m Model) itemRowCols(
 	if maxNumWidth > len(numStr) {
 		padNum = strings.Repeat(" ", maxNumWidth-len(numStr))
 	}
-	numText := numStyle.Render(numStr) + padNum
+	numSt := numStyle
+	if isSelected {
+		numSt = selectedNumStyle
+	}
+	numText := numSt.Render(numStr) + padNum
 
 	title := pr.Title
 	if m.isFocused(pr) {
@@ -1174,8 +1435,8 @@ func (m Model) itemRowCols(
 	}
 
 	statusBadge := renderStatusBadge(pr)
-	sizeText := renderDiffSize(pr.Additions, pr.Deletions)
-	ciBadge := m.renderCIBadge(pr.Checks, refTime)
+	sizeText := renderDiffSize(pr.Additions, pr.Deletions, isSelected)
+	ciBadge := m.renderCIBadge(pr.Checks, refTime, isSelected)
 	if pr.Partial {
 		statusBadge = ciRunningStyle.Render(m.spinnerChar() + " LOADING")
 		sizeText = faintStyle.Render("…")
@@ -1185,12 +1446,20 @@ func (m Model) itemRowCols(
 	var updatedText string
 	if !pr.UpdatedAt.IsZero() {
 		d := max(refTime.Sub(pr.UpdatedAt), 0)
-		updatedText = updatedStyle.Render(humanAge(d))
+		upStyle := updatedStyle
+		if isSelected {
+			upStyle = selectedUpdatedStyle
+		}
+		updatedText = upStyle.Render(humanAge(d))
 	}
 
 	repo := pr.RepoName
 	if repo == "" {
 		repo = pr.RepoNameWithOwner
+	}
+	rpStyle := repoStyle
+	if isSelected {
+		rpStyle = selectedRepoStyle
 	}
 
 	return []string{
@@ -1200,7 +1469,7 @@ func (m Model) itemRowCols(
 		sizeText,
 		ciBadge,
 		updatedText,
-		repoStyle.Render(repo),
+		rpStyle.Render(repo),
 	}
 }
 
@@ -1216,15 +1485,33 @@ func (m Model) renderTabBar(contentWidth int) string {
 		return inactiveTabStyle.Render(title)
 	}
 
-	sep := tabSeparatorStyle.Render("│")
-	tabs := lipgloss.JoinHorizontal(
-		lipgloss.Top,
+	sep := tabSeparatorStyle.Render("|")
+	tabs := strings.Join([]string{
 		renderTab(TabFocus, tabFocusTitle),
-		sep,
 		renderTab(TabMine, tabMineTitle),
-		sep,
 		renderTab(TabInbox, tabInboxTitle),
-	)
+	}, "  "+sep+"  ")
+
+	var refreshBadge string
+	if m.isRefreshingVisual() {
+		spin := lipgloss.NewStyle().Foreground(lipgloss.Color("#58a6ff")).Render(m.spinnerChar())
+		if m.loadingTotal > 0 && m.loadingLoaded < m.loadingTotal {
+			refreshBadge = spin + " " + faintStyle.Render(
+				fmt.Sprintf("refreshing (%d/%d)", m.loadingLoaded, m.loadingTotal),
+			)
+		} else {
+			refreshBadge = spin + " " + faintStyle.Render("refreshing…")
+		}
+	} else if m.loading {
+		spin := lipgloss.NewStyle().Foreground(lipgloss.Color("#58a6ff")).Render(m.spinnerChar())
+		if m.loadingTotal > 0 && m.loadingLoaded < m.loadingTotal {
+			refreshBadge = spin + " " + faintStyle.Render(
+				fmt.Sprintf("loading (%d/%d)", m.loadingLoaded, m.loadingTotal),
+			)
+		} else {
+			refreshBadge = spin + " " + faintStyle.Render("loading…")
+		}
+	}
 
 	var notifBadge string
 	if len(m.notifications) == 0 {
@@ -1238,8 +1525,20 @@ func (m Model) renderTabBar(contentWidth int) string {
 		notifBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#d29922")).Render(alertText)
 	}
 
+	sortBadge := faintStyle.Render(
+		"sort: ",
+	) + lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#a371f7")).
+		Render(m.sortStrategy.String())
 	rightHelp := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("[?] Help")
-	rightPart := notifBadge + "  " + sep + "  " + rightHelp
+
+	var rightElements []string
+	if refreshBadge != "" {
+		rightElements = append(rightElements, refreshBadge)
+	}
+	rightElements = append(rightElements, notifBadge, sortBadge, rightHelp)
+	rightPart := strings.Join(rightElements, "  "+sep+"  ")
 
 	tabsWidth := lipgloss.Width(tabs)
 	rightWidth := lipgloss.Width(rightPart)
@@ -1282,15 +1581,6 @@ func (m Model) renderStatusBanner() string {
 		}
 		return errorBannerStyle.Render(fmt.Sprintf(
 			"⚠ refresh failed: %s — data from %s ago", m.fetchErr, humanAge(time.Since(m.lastFetch))))
-	case !m.loading && m.loadingTotal > 0 && m.loadingLoaded < m.loadingTotal:
-		barWidth := min(20, max(8, m.width-40))
-		bar := renderProgressBar(m.loadingLoaded, m.loadingTotal, barWidth)
-		return faintStyle.Render(fmt.Sprintf(
-			"refreshing… %s %d/%d", bar, m.loadingLoaded, m.loadingTotal))
-	case m.refreshing:
-		return faintStyle.Render("refreshing…")
-	case m.staleSnapshot:
-		return faintStyle.Render("stale data — refreshing…")
 	case m.notifyHint() != "":
 		return faintStyle.Render(m.notifyHint())
 	default:
@@ -1349,9 +1639,10 @@ func (m Model) renderNotificationsArea() string {
 	var rows strings.Builder
 	innerWidth := max(10, width-4)
 	for i, n := range m.notifications {
+		isSelected := m.IsNotificationFocused() && i == m.notificationCursor
 		prefix := "  "
-		if m.IsNotificationFocused() && i == m.notificationCursor {
-			prefix = cursorStyle.Render("> ")
+		if isSelected {
+			prefix = cursorStyle.Render("❯ ")
 		}
 
 		badge := notificationBadge(n)
@@ -1362,14 +1653,27 @@ func (m Model) renderNotificationsArea() string {
 			d := max(m.currentTime().Sub(n.SubmittedAt), 0)
 			age = humanAge(d)
 		}
-		ts := faintStyle.Render("· " + age + " ago")
+
+		tsStyle := faintStyle
+		if isSelected {
+			tsStyle = selectedUpdatedStyle
+		}
+		ts := tsStyle.Render("· " + age + " ago")
 
 		var rowParts []string
 		if ref != "" {
-			rowParts = append(rowParts, repoStyle.Render(ref))
+			rpStyle := repoStyle
+			if isSelected {
+				rpStyle = selectedRepoStyle
+			}
+			rowParts = append(rowParts, rpStyle.Render(ref))
 		}
 		if details != "" {
-			rowParts = append(rowParts, details)
+			dStyle := unselectedRowStyle
+			if isSelected {
+				dStyle = selectedRowStyle
+			}
+			rowParts = append(rowParts, dStyle.Render(details))
 		}
 		rowParts = append(rowParts, ts)
 
@@ -1378,14 +1682,12 @@ func (m Model) renderNotificationsArea() string {
 
 		padLen := max(innerWidth-lipgloss.Width(innerContent), 0)
 
-		rowLine := borderStyle.Render(
-			"│",
-		) + " " + innerContent + strings.Repeat(
-			" ",
-			padLen,
-		) + " " + borderStyle.Render(
-			"│",
-		)
+		innerRow := " " + innerContent + strings.Repeat(" ", padLen) + " "
+		if isSelected {
+			innerRow = applyRowBackground(innerRow, selectedRowBg)
+		}
+
+		rowLine := borderStyle.Render("│") + innerRow + borderStyle.Render("│")
 		rows.WriteString(rowLine)
 		rows.WriteString("\n")
 	}
@@ -1522,31 +1824,6 @@ func humanAge(d time.Duration) string {
 // FormatCIDuration formats a CI duration with second precision, e.g. "45s", "14m12s", "1h2m3s".
 func FormatCIDuration(d time.Duration) string {
 	return max(0, d).Truncate(time.Second).String()
-}
-
-func renderProgressBar(loaded, total, barWidth int) string {
-	if total <= 0 || barWidth <= 0 {
-		return ""
-	}
-	ratio := float64(loaded) / float64(total)
-	if ratio < 0 {
-		ratio = 0
-	} else if ratio > 1 {
-		ratio = 1
-	}
-	filled := int(ratio * float64(barWidth))
-	empty := barWidth - filled
-
-	var b strings.Builder
-	b.WriteString("[")
-	if filled > 0 {
-		b.WriteString(progressBarFilledStyle.Render(strings.Repeat("█", filled)))
-	}
-	if empty > 0 {
-		b.WriteString(progressBarEmptyStyle.Render(strings.Repeat("░", empty)))
-	}
-	b.WriteString("]")
-	return b.String()
 }
 
 func (m Model) renderModal() string {
@@ -1712,7 +1989,7 @@ func (m Model) renderDetailsModal() string {
 	// CI Checks
 	if pr.Checks.Total > 0 || pr.Checks.ReqTotal > 0 {
 		b.WriteString("\n")
-		ciTitle := "CI Checks: " + m.renderCIBadge(pr.Checks, refTime)
+		ciTitle := "CI Checks: " + m.renderCIBadge(pr.Checks, refTime, false)
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render(ciTitle))
 		b.WriteString("\n")
 		durationSuffix := ""
@@ -1729,7 +2006,7 @@ func (m Model) renderDetailsModal() string {
 
 	// Changed Files & Diffstat
 	b.WriteString("\n")
-	sizeText := renderDiffSize(pr.Additions, pr.Deletions)
+	sizeText := renderDiffSize(pr.Additions, pr.Deletions, false)
 	filesTitle := fmt.Sprintf("Files Changed: %s across %d files", sizeText, pr.ChangedFiles)
 	b.WriteString(lipgloss.NewStyle().Bold(true).Render(filesTitle))
 	b.WriteString("\n")
@@ -1761,27 +2038,70 @@ func (m Model) spinnerChar() string {
 	return spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 }
 
-func (m Model) renderCIBadge(summary model.ChecksSummary, refTime time.Time) string {
-	badge := summary.BadgeWithSpinner(m.spinnerChar())
+func formatColoredCIBadge(c model.ChecksSummary, spinner string) string {
+	if c.HasRequiredChecks {
+		succeeded := c.Succeeded()
+		if c.ReqFailed > 0 {
+			var parts []string
+			if succeeded > 0 {
+				parts = append(parts, ciPassStyle.Render(fmt.Sprintf("✓ %d", succeeded)))
+				parts = append(parts, ciFailStyle.Render(fmt.Sprintf("✗ %d req", c.ReqFailed)))
+			} else {
+				parts = append(parts, ciFailStyle.Render(fmt.Sprintf("✗ %d req failed", c.ReqFailed)))
+			}
+			if c.ReqRunning > 0 {
+				parts = append(parts, ciRunningStyle.Render(fmt.Sprintf("(%d %s)", c.ReqRunning, spinner)))
+			}
+			return strings.Join(parts, "  ")
+		}
+		if c.ReqRunning > 0 {
+			return ciRunningStyle.Render(fmt.Sprintf("%d/%d req (%d %s)", c.ReqDone, c.ReqTotal, c.ReqRunning, spinner))
+		}
+		if c.ReqTotal > 0 && c.ReqDone == c.ReqTotal {
+			return ciPassStyle.Render(fmt.Sprintf("✓ %d/%d", c.ReqDone, c.ReqTotal))
+		}
+		return ciNeutralStyle.Render(fmt.Sprintf("%d/%d req", c.ReqDone, c.ReqTotal))
+	}
+
+	if c.Total == 0 {
+		return ""
+	}
+	succeeded := c.Succeeded()
+	if c.Failed > 0 {
+		var parts []string
+		if succeeded > 0 {
+			parts = append(parts, ciPassStyle.Render(fmt.Sprintf("✓ %d", succeeded)))
+			parts = append(parts, ciFailStyle.Render(fmt.Sprintf("✗ %d", c.Failed)))
+		} else {
+			parts = append(parts, ciFailStyle.Render(fmt.Sprintf("✗ %d failed", c.Failed)))
+		}
+		if c.Running > 0 {
+			parts = append(parts, ciRunningStyle.Render(fmt.Sprintf("(%d %s)", c.Running, spinner)))
+		}
+		return strings.Join(parts, "  ")
+	}
+	if c.Running > 0 {
+		return ciRunningStyle.Render(fmt.Sprintf("%d/%d (%d %s)", c.Done, c.Total, c.Running, spinner))
+	}
+	if c.Done == c.Total {
+		return ciPassStyle.Render(fmt.Sprintf("✓ %d/%d", c.Done, c.Total))
+	}
+	return ciNeutralStyle.Render(fmt.Sprintf("%d/%d", c.Done, c.Total))
+}
+
+func (m Model) renderCIBadge(summary model.ChecksSummary, refTime time.Time, isSelected bool) string {
+	badge := formatColoredCIBadge(summary, m.spinnerChar())
 	if badge == "" {
 		return ""
 	}
-	text := strings.TrimPrefix(badge, "CI: ")
-	var renderedBadge string
-	switch {
-	case summary.IsFailing():
-		renderedBadge = ciFailStyle.Render(text)
-	case summary.IsRunning():
-		renderedBadge = ciRunningStyle.Render(text)
-	case summary.IsPassing():
-		renderedBadge = ciPassStyle.Render(text)
-	default:
-		renderedBadge = ciNeutralStyle.Render(text)
-	}
 	if d, ok := summary.Duration(refTime); ok {
-		return renderedBadge + "  " + ciDurationStyle.Render(FormatCIDuration(d))
+		durStyle := ciDurationStyle
+		if isSelected {
+			durStyle = selectedUpdatedStyle
+		}
+		return badge + "  " + durStyle.Render(FormatCIDuration(d))
 	}
-	return renderedBadge
+	return badge
 }
 
 func renderStatusBadge(pr model.PullRequest) string {
@@ -1839,20 +2159,30 @@ func renderMergeBadge(status model.MergeStatus) string {
 	}
 }
 
-func renderAuthor(pr model.PullRequest) string {
+func renderAuthor(pr model.PullRequest, isSelected bool) string {
 	if pr.Author == "" {
 		return ""
 	}
-	authorText := authorStyle.Render("@" + pr.Author)
+	style := authorStyle
+	if isSelected {
+		style = selectedAuthorStyle
+	}
+	authorText := style.Render("@" + pr.Author)
 	if pr.IsAuthorBot() {
 		return authorText + " " + botBadgeStyle.Render("BOT")
 	}
 	return authorText
 }
 
-func renderDiffSize(additions, deletions int) string {
-	add := diffAddStyle.Render("+" + FormatDiff(additions))
-	del := diffDelStyle.Render("-" + FormatDiff(deletions))
+func renderDiffSize(additions, deletions int, isSelected bool) string {
+	addStyle := diffAddStyle
+	delStyle := diffDelStyle
+	if isSelected {
+		addStyle = selectedDiffAddStyle
+		delStyle = selectedDiffDelStyle
+	}
+	add := addStyle.Render("+" + FormatDiff(additions))
+	del := delStyle.Render("-" + FormatDiff(deletions))
 	return fmt.Sprintf("%s %s", add, del)
 }
 

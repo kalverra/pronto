@@ -110,6 +110,7 @@ func resolveTUISource(
 	cmd *cobra.Command,
 	injected source.Source,
 	cfg config.Config,
+	injectedStore cache.Store,
 	loggers ...zerolog.Logger,
 ) (source.Source, cache.Store, func(), error) {
 	debug := false
@@ -122,14 +123,17 @@ func resolveTUISource(
 	} else {
 		logger, _ = resolveLogger(debug)
 	}
+	store := injectedStore
+	if store == nil {
+		store = defaultStore()
+	}
 	if injected != nil {
 		if ds, ok := injected.(interface{ IsDaemon() bool }); ok && ds.IsDaemon() {
-			return injected, defaultStore(), nil, nil
+			return injected, store, nil, nil
 		}
 	}
 
 	socketPath := resolveSocketPath(cmd)
-	store := defaultStore()
 
 	// 1. Check if an external daemon is already running and answers ping.
 	if c := tryDaemonClient(ctx, socketPath, 500*time.Millisecond); c != nil {
@@ -142,9 +146,13 @@ func resolveTUISource(
 		underlyingSrc = injected
 	} else {
 		var srcErr error
-		underlyingSrc, store, srcErr = defaultSource(debug)
+		var defaultStoreRef cache.Store
+		underlyingSrc, defaultStoreRef, srcErr = defaultSource(debug)
 		if srcErr != nil {
 			return nil, nil, nil, srcErr
+		}
+		if injectedStore == nil {
+			store = defaultStoreRef
 		}
 	}
 

@@ -103,6 +103,7 @@ type Model struct {
 
 	stacksCollapsed bool
 	expandedStacks  map[string]bool
+	sortStrategy    SortStrategy
 }
 
 // Option configures a Model.
@@ -251,6 +252,13 @@ func WithNotifierFactory(factory NotifierFactory) Option {
 func WithLogger(logger zerolog.Logger) Option {
 	return func(m *Model) {
 		m.logger = logger
+	}
+}
+
+// WithSortStrategy sets the initial sorting strategy.
+func WithSortStrategy(s SortStrategy) Option {
+	return func(m *Model) {
+		m.sortStrategy = s
 	}
 }
 
@@ -682,7 +690,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SpinnerTickMsg:
-		if !m.hasRunningCI() && !m.hasPartialPRs() {
+		if !m.hasRunningCI() && !m.hasPartialPRs() && !m.isRefreshingVisual() && !m.loading {
 			return m, nil
 		}
 		if !m.nowInjected {
@@ -849,6 +857,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleToggleStackKey()
 	case "E":
 		return m.handleToggleAllStacksKey()
+	case "s":
+		return m.handleCycleSortKey(1)
+	case "S":
+		return m.handleCycleSortKey(-1)
 	case "?":
 		if len(m.activeList()) > 0 {
 			m.modalOpen = true
@@ -856,6 +868,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	return m, nil
+}
+
+func (m Model) handleCycleSortKey(delta int) (tea.Model, tea.Cmd) {
+	if m.IsNotificationFocused() {
+		return m, nil
+	}
+	m.sortStrategy = m.sortStrategy.Next(delta)
+	m = m.clampTabView(m.activeTab)
 	return m, nil
 }
 
@@ -1109,6 +1130,14 @@ func (m Model) handleNavKey(key string) (Model, bool) {
 	if m.IsNotificationFocused() {
 		switch key {
 		case "j", "down":
+			if m.notificationCursor >= len(m.notifications)-1 {
+				m.notificationFocused = false
+				vis := m.visibleItemIndices(m.activeTab)
+				if len(vis) > 0 {
+					m = m.setCursor(vis[0])
+				}
+				return m, true
+			}
 			m.notificationCursor = min(len(m.notifications)-1, m.notificationCursor+1)
 			return m, true
 		case "k", "up":
@@ -1130,6 +1159,15 @@ func (m Model) handleNavKey(key string) (Model, bool) {
 	case "j", "down":
 		return m.moveCursor(1), true
 	case "k", "up":
+		if len(m.notifications) > 0 && !m.hideNotifs {
+			vis := m.visibleItemIndices(m.activeTab)
+			cursor := m.Cursor()
+			if len(vis) == 0 || cursor == vis[0] {
+				m.notificationFocused = true
+				m.notificationCursor = len(m.notifications) - 1
+				return m, true
+			}
+		}
 		return m.moveCursor(-1), true
 	case "pgdown", "ctrl+d":
 		visRows := m.VisibleRows()
@@ -1700,6 +1738,11 @@ func (m Model) IsDetailsOpen() bool {
 	return m.detailsOpen
 }
 
+// SortStrategy returns the active sorting strategy.
+func (m Model) SortStrategy() SortStrategy {
+	return m.sortStrategy
+}
+
 // IsFocused reports whether a pull request key is currently focused.
 func (m Model) IsFocused(key model.PRKey) bool {
 	return m.focusedKeys[key]
@@ -1762,6 +1805,11 @@ func (m Model) IsLoading() bool {
 // IsRefreshing reports whether a background or manual refresh is in flight.
 func (m Model) IsRefreshing() bool {
 	return m.refreshing
+}
+
+// isRefreshingVisual reports whether the model should display a refresh indicator.
+func (m Model) isRefreshingVisual() bool {
+	return m.refreshing || m.staleSnapshot || (!m.loading && m.loadingTotal > 0 && m.loadingLoaded < m.loadingTotal)
 }
 
 // StaleSnapshot reports whether the startup snapshot was stale enough to

@@ -478,10 +478,9 @@ func TestView_LoadingWithProgressBar(t *testing.T) {
 	require.True(t, ok)
 
 	view := next.View()
-	assert.Contains(t, view, "Fetching pull requests…")
+	assert.Contains(t, view, "Fetching pull requests")
 	assert.Contains(t, view, "12/24")
-	assert.Contains(t, view, "[")
-	assert.Contains(t, view, "]")
+	assert.NotContains(t, view, "█", "loading view must use spinner and counts without block progress bar")
 }
 
 func TestModel_QueueLoadedAfterInitialFetchArmsNoTick(t *testing.T) {
@@ -899,7 +898,7 @@ func TestView_InFlightFetchShowsBannerProgressBar(t *testing.T) {
 	t.Parallel()
 
 	// Fresh snapshot, not stale, not refreshing: progress events alone must
-	// surface the banner bar during any background fetch.
+	// surface the spinner during any background fetch.
 	m := tui.New(makeTestQueue())
 
 	updated, _ := m.Update(tui.EventMsg{
@@ -914,7 +913,7 @@ func TestView_InFlightFetchShowsBannerProgressBar(t *testing.T) {
 	view := next.View()
 	assert.Contains(t, view, "refreshing")
 	assert.Contains(t, view, "4/9")
-	assert.Contains(t, view, "█", "banner must render a progress bar while a fetch streams")
+	assert.NotContains(t, view, "█", "refresh indicator must use a compact spinner, not a chunky progress bar")
 }
 
 func TestView_CompletedFetchHidesBannerProgressBar(t *testing.T) {
@@ -930,7 +929,7 @@ func TestView_CompletedFetchHidesBannerProgressBar(t *testing.T) {
 	require.True(t, ok)
 
 	assert.NotContains(t, next.View(), "9/9",
-		"completed fetch must clear the banner bar")
+		"completed fetch must clear the refresh indicator")
 }
 
 func TestModel_FetchProgressEventUpdatesLoadingProgress(t *testing.T) {
@@ -971,6 +970,65 @@ func TestView_StaleSnapshotBannerShowsProgressBar(t *testing.T) {
 
 	view := next.View()
 	assert.Contains(t, view, "refreshing")
-	assert.Contains(t, view, "4/9", "status banner must show fetch counts")
-	assert.Contains(t, view, "█", "status banner must render a progress bar")
+	assert.Contains(t, view, "4/9", "top header must show fetch counts")
+	assert.NotContains(t, view, "█", "must not render a chunky progress bar")
+}
+
+func TestSpinnerTick_AdvancesWhileLoadingOrRefreshing(t *testing.T) {
+	t.Parallel()
+
+	// 1. Loading model advances spinner frame on tick
+	mLoading := tui.StartupModel(context.Background(), &scriptedSource{}, nil)
+	require.True(t, mLoading.IsLoading())
+	require.Zero(t, mLoading.SpinnerFrame())
+
+	updated, _ := mLoading.Update(tui.SpinnerTickMsg{})
+	nextLoading, ok := updated.(tui.Model)
+	require.True(t, ok)
+	assert.Equal(t, 1, nextLoading.SpinnerFrame(), "loading model must advance spinner frame on tick")
+
+	// 2. Refreshing model advances spinner frame on tick
+	q := makeTestQueue()
+	mRefreshing := tui.New(q)
+	updatedRef, _ := mRefreshing.Update(tui.EventMsg{
+		Type:    events.TypeFetchProgress,
+		Payload: events.FetchProgressPayload{Loaded: 2, Total: 10},
+	})
+	nextRef, ok := updatedRef.(tui.Model)
+	require.True(t, ok)
+	require.Zero(t, nextRef.SpinnerFrame())
+
+	updatedRef2, _ := nextRef.Update(tui.SpinnerTickMsg{})
+	nextRef2, ok := updatedRef2.(tui.Model)
+	require.True(t, ok)
+	assert.Equal(t, 1, nextRef2.SpinnerFrame(), "refreshing model must advance spinner frame on tick")
+}
+
+func TestView_LoadingStateShowsSpinnerAndMinimalHelp(t *testing.T) {
+	t.Parallel()
+
+	m := tui.StartupModel(context.Background(), &scriptedSource{}, nil)
+	require.True(t, m.IsLoading())
+
+	view := m.View()
+	assert.Contains(t, view, "Fetching pull requests…")
+	assert.Contains(t, view, "⠋", "loading body must show animated spinner frame")
+	assert.NotContains(t, view, "█")
+	// Minimal help text during initial loading
+	assert.Contains(t, view, "q: quit")
+	assert.NotContains(t, view, "enter: details")
+	assert.NotContains(t, view, "x: close stale")
+}
+
+func TestView_LoadingStateWithProgress(t *testing.T) {
+	t.Parallel()
+
+	m := tui.StartupModel(context.Background(), &scriptedSource{}, nil)
+	updated, _ := m.Update(tui.FetchProgressMsg{Loaded: 3, Total: 10})
+	next := updated.(tui.Model)
+
+	view := next.View()
+	assert.Contains(t, view, "3 of 10")
+	assert.Contains(t, view, "⠋")
+	assert.NotContains(t, view, "█")
 }

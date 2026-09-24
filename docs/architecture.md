@@ -50,7 +50,7 @@ Key interactions and focus behaviors:
 - **Stack folding (`space`/`e`, `E`)**: PRs sharing a stack (branch
   dependency chain) collapse by default into a single table row. All PRs
   display `#<number>` at the start of the title column followed by any stack
-  metadata (`⎘ 6 PRs` for collapsed stacks, `⎘ [pos/size]` for singleton
+  metadata (`[STACK] 6 PRs` for collapsed stacks, `[STACK] [pos/size]` for singleton
   stack members in a section) and the PR title, aligning PR numbers and the
   start of PR titles neatly across stacked and standalone items. Collapsed stacks include
   ordered micro-status ribbons for both general review status in the STATUS
@@ -61,7 +61,12 @@ Key interactions and focus behaviors:
   and children indent beneath it with tree connectors (`├─ #709 [2/7]`). A stack
   renders in the most-urgent category of its members, so draft children stay
   visible in the collapsed roll-up (`score.Rank` keeps stack drafts even though
-  it excludes standalone drafts from the inbox).
+- **Sorting strategies (`s`, `S`)**: Toggles the display ordering across 4
+  strategies: Action status (default category grouping), Repository (grouped
+  alphabetically with repo section dividers), Recently Updated (ordered
+  by `UpdatedAt` descending), and Priority Score (pure global priority score
+  ranking without category dividers). Stacks remain contiguous and the currently
+  selected PR stays anchored across sort toggles.
 
 ### Architecture
 
@@ -232,7 +237,12 @@ Two delivery backends, selected by `notifications.mode` (default `native`):
   through the `UserNotifications` framework: Pronto-branded banners, click to
   open the PR (no action buttons), thread grouping per PR, and image
   attachments. Clicks relaunch the helper with empty stdin (responder mode),
-  which handles the pending response and exits.
+  which runs a Dock-less `NSApplication` (UserNotifications only delivers the
+  pending response during app launch), opens the notification's link, and
+  exits. The detector picks links per trigger: CI failed → first failed
+  check's details URL (required checks only when configured; falls back to
+  the PR's Checks tab), CI passed → Checks tab, review → the review anchor,
+  conflict/merged → the PR.
   The Swift source and Info.plist are embedded in the pronto binary, so any
   install — source checkout, `go install`, or Homebrew — can build the helper
   with `pronto notify setup` (needs only the free Xcode command line tools;

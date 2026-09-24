@@ -779,3 +779,81 @@ func TestComputeChecksSummary_Timestamps(t *testing.T) {
 		assert.Equal(t, t4, *summary.CompletedAt)
 	})
 }
+
+func TestComputeChecksSummary_FailedURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		required []string
+		checks   []model.ContextCheck
+		rollup   model.CheckRollup
+		want     string
+	}{
+		{
+			name: "no failures",
+			checks: []model.ContextCheck{
+				{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", URL: "https://ci/lint"},
+			},
+			want: "",
+		},
+		{
+			name: "first failed check",
+			checks: []model.ContextCheck{
+				{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS", URL: "https://ci/lint"},
+				{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE", URL: "https://ci/test"},
+				{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", URL: "https://ci/e2e"},
+			},
+			want: "https://ci/test",
+		},
+		{
+			name: "status context failure",
+			checks: []model.ContextCheck{
+				{Name: "ci/legacy", Status: "FAILURE", URL: "https://ci/legacy"},
+			},
+			want: "https://ci/legacy",
+		},
+		{
+			name: "skips failed check without url",
+			checks: []model.ContextCheck{
+				{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE"},
+				{Name: "e2e", Status: "COMPLETED", Conclusion: "TIMED_OUT", URL: "https://ci/e2e"},
+			},
+			want: "https://ci/e2e",
+		},
+		{
+			name:     "required failure preferred over optional",
+			required: []string{"test"},
+			checks: []model.ContextCheck{
+				{Name: "optional", Status: "COMPLETED", Conclusion: "FAILURE", URL: "https://ci/optional"},
+				{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE", URL: "https://ci/test"},
+			},
+			want: "https://ci/test",
+		},
+		{
+			name:     "only optional failed under required checks",
+			required: []string{"test"},
+			checks: []model.ContextCheck{
+				{Name: "optional", Status: "COMPLETED", Conclusion: "FAILURE", URL: "https://ci/optional"},
+				{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS", URL: "https://ci/test"},
+			},
+			want: "",
+		},
+		{
+			name: "rollup counts path",
+			checks: []model.ContextCheck{
+				{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE", URL: "https://ci/test"},
+			},
+			rollup: model.CheckRollup{TotalCount: 1, RunCounts: map[string]int{"FAILURE": 1}},
+			want:   "https://ci/test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := model.ComputeChecksSummaryWithRollup(tt.required, tt.checks, tt.rollup)
+			assert.Equal(t, tt.want, got.FailedURL)
+		})
+	}
+}

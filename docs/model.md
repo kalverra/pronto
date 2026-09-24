@@ -20,6 +20,7 @@ ContextCheck represents an individual check run or status context.
 | `Conclusion` | `conclusion` | `string` |  | — |
 | `StartedAt` | `started_at` | `*time.Time` | yes | — |
 | `CompletedAt` | `completed_at` | `*time.Time` | yes | — |
+| `URL` | `url` | `string` | yes | URL links to the check's details (CheckRun detailsUrl or StatusContext targetUrl). |
 
 ## CheckRollup
 
@@ -50,6 +51,7 @@ ChecksSummary summarizes CI check status for a pull request.
 | `Running` | `running` | `int` |  | — |
 | `Done` | `done` | `int` |  | — |
 | `Failed` | `failed` | `int` |  | — |
+| `FailedURL` | `failed_url` | `string` | yes | FailedURL links to the first failed check (required checks only when configured) that has a details URL; empty when none qualifies. |
 
 ## MergeStatus
 
@@ -91,6 +93,7 @@ Review represents a review on a pull request.
 | `State` | `state` | `string` |  | — |
 | `CommitOID` | `commit_oid` | `string` |  | — |
 | `SubmittedAt` | `submitted_at` | `time.Time` |  | — |
+| `URL` | `url` | `string` | yes | URL links to the review on the pull request page. |
 
 ## TimelineItem
 

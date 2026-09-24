@@ -2,12 +2,16 @@ package tui_test
 
 import (
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -337,13 +341,20 @@ func TestModel_Notification_CursorNavigation(t *testing.T) {
 	mDown := mDownRaw.(tui.Model)
 	assert.Equal(t, 2, mDown.NotificationCursor())
 
-	// 'j' at bottom clamps to len-1 (2)
-	mClampBottomRaw, _ := mDown.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	mClampBottom := mClampBottomRaw.(tui.Model)
-	assert.Equal(t, 2, mClampBottom.NotificationCursor())
+	// 'j' at bottom moves down to PRs section
+	mToPRsRaw, _ := mDown.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	mToPRs := mToPRsRaw.(tui.Model)
+	assert.False(t, mToPRs.IsNotificationFocused(), "moving down at bottom of notifications must transition to PRs")
+	assert.Equal(t, 0, mToPRs.Cursor(), "PR cursor must be at top")
+
+	// 'k' at top of PR list moves up into notifications (at bottom notification)
+	mToNotifsRaw, _ := mToPRs.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	mToNotifs := mToNotifsRaw.(tui.Model)
+	assert.True(t, mToNotifs.IsNotificationFocused(), "moving up at top of PRs must transition to notifications")
+	assert.Equal(t, 2, mToNotifs.NotificationCursor(), "notification cursor must land on bottom notification")
 
 	// 'k' moves cursor up
-	mkRaw, _ := mClampBottom.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	mkRaw, _ := mToNotifs.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	mk := mkRaw.(tui.Model)
 	assert.Equal(t, 1, mk.NotificationCursor())
 
@@ -356,6 +367,7 @@ func TestModel_Notification_CursorNavigation(t *testing.T) {
 	mClampTopRaw, _ := mUp.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	mClampTop := mClampTopRaw.(tui.Model)
 	assert.Equal(t, 0, mClampTop.NotificationCursor())
+	assert.True(t, mClampTop.IsNotificationFocused())
 
 	// 'G' / 'end' moves to bottom
 	mGRaw, _ := mClampTop.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
@@ -1202,15 +1214,15 @@ func TestModel_Notification_ViewFocusIndicator(t *testing.T) {
 	focusedView := mFocused.View()
 	// Bottom help bar shows notification hints
 	assert.Contains(t, focusedView, "enter/o: open • ↑/↓: select • x: dismiss • esc: back to PRs • q: quit")
-	// Index 0 has cursor prefix '> '
-	assert.Contains(t, focusedView, "> ")
+	// Index 0 has cursor prefix '❯ '
+	assert.Contains(t, focusedView, "❯ ")
 
 	// Move cursor down to index 1
 	mDownRaw, _ := mFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	mDown := mDownRaw.(tui.Model)
 	assert.Equal(t, 1, mDown.NotificationCursor())
 	downView := mDown.View()
-	assert.Contains(t, downView, "> ")
+	assert.Contains(t, downView, "❯ ")
 }
 
 func TestModel_Notification_VisibleRowsAccounting(t *testing.T) {
@@ -1253,4 +1265,147 @@ func TestModel_Notification_VisibleRowsAccounting(t *testing.T) {
 	m5 := updated5.(tui.Model)
 	require.Len(t, m5.Notifications(), 5)
 	assert.Equal(t, 6, m5.VisibleRows())
+}
+
+func TestModel_Notification_ArrowKeysBoundaryNavigation(t *testing.T) {
+	t.Parallel()
+
+	q := model.Queue{
+		Inbox: []model.PullRequest{
+			{Number: 1, Title: "PR 1", RepoNameWithOwner: "kalverra/pronto"},
+			{Number: 2, Title: "PR 2", RepoNameWithOwner: "kalverra/pronto"},
+		},
+	}
+	m := tui.New(q, tui.WithActiveTab(tui.TabInbox))
+	updated, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{PRNumber: 10, Title: "Note 10"},
+			{PRNumber: 20, Title: "Note 20"},
+		},
+	})
+	mWithNotifs := updated.(tui.Model)
+
+	// Initially at top of PR list (cursor 0, notifications unfocused)
+	assert.False(t, mWithNotifs.IsNotificationFocused())
+	assert.Equal(t, 0, mWithNotifs.Cursor())
+
+	// Up arrow at top of PR list moves up into notifications at bottom item (index 1)
+	mUpToNotifRaw, _ := mWithNotifs.Update(tea.KeyMsg{Type: tea.KeyUp})
+	mUpToNotif := mUpToNotifRaw.(tui.Model)
+	assert.True(t, mUpToNotif.IsNotificationFocused(), "Up arrow at top of PR list must focus notifications")
+	assert.Equal(t, 1, mUpToNotif.NotificationCursor(), "Must land on bottom notification")
+
+	// Down arrow at bottom of notifications moves down into PRs list at top (cursor 0)
+	mDownToPRRaw, _ := mUpToNotif.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mDownToPR := mDownToPRRaw.(tui.Model)
+	assert.False(t, mDownToPR.IsNotificationFocused(), "Down arrow at bottom of notifications must transition to PRs")
+	assert.Equal(t, 0, mDownToPR.Cursor(), "Must land on top PR")
+
+	// Up arrow moves back to bottom of notifications
+	mBackUpRaw, _ := mDownToPR.Update(tea.KeyMsg{Type: tea.KeyUp})
+	mBackUp := mBackUpRaw.(tui.Model)
+	assert.True(t, mBackUp.IsNotificationFocused())
+	assert.Equal(t, 1, mBackUp.NotificationCursor())
+
+	// Up arrow inside notifications moves to item 0
+	mToTopNotifRaw, _ := mBackUp.Update(tea.KeyMsg{Type: tea.KeyUp})
+	mToTopNotif := mToTopNotifRaw.(tui.Model)
+	assert.True(t, mToTopNotif.IsNotificationFocused())
+	assert.Equal(t, 0, mToTopNotif.NotificationCursor())
+
+	// Up arrow at top of notifications clamps to 0 and stays focused
+	mClampTopRaw, _ := mToTopNotif.Update(tea.KeyMsg{Type: tea.KeyUp})
+	mClampTop := mClampTopRaw.(tui.Model)
+	assert.True(t, mClampTop.IsNotificationFocused())
+	assert.Equal(t, 0, mClampTop.NotificationCursor())
+
+	// If notifications are hidden, Up arrow at top of PR list does NOT focus notifications
+	mHiddenRaw, _ := mWithNotifs.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})             // focus
+	mHidden2Raw, _ := mHiddenRaw.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) // hide
+	mHidden := mHidden2Raw.(tui.Model)
+	assert.False(t, mHidden.IsNotificationFocused())
+
+	mTryUpRaw, _ := mHidden.Update(tea.KeyMsg{Type: tea.KeyUp})
+	mTryUp := mTryUpRaw.(tui.Model)
+	assert.False(t, mTryUp.IsNotificationFocused(), "hidden notifications must not capture up arrow")
+}
+
+func TestModel_Notification_RowHighlightAndColors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	q := model.Queue{
+		Inbox: []model.PullRequest{
+			{Number: 1, Title: "PR 1", RepoNameWithOwner: "smartcontractkit/chainlink"},
+		},
+	}
+	m := tui.New(q, tui.WithNow(now), tui.WithDimensions(120, 30))
+	updated, _ := m.Update(tui.NotificationMsg{
+		Notifications: []notify.Notification{
+			{
+				Trigger:     notify.TriggerConflict,
+				PRNumber:    691,
+				PRTitle:     "feat(cli): add cd verify context resolution",
+				Repo:        "smartcontractkit/infra-griddle-app",
+				SubmittedAt: now.Add(-9 * time.Minute),
+			},
+			{
+				Trigger:     notify.TriggerConflict,
+				PRNumber:    23787,
+				PRTitle:     "chore: bump ci versions",
+				Repo:        "smartcontractkit/chainlink",
+				SubmittedAt: now.Add(-18 * time.Minute),
+			},
+		},
+	})
+	mNotifs := updated.(tui.Model)
+
+	// Unfocused view: no row highlight sequence, no cursor arrow
+	unfocusedView := mNotifs.View()
+	assert.NotContains(t, unfocusedView, "❯ ")
+	assert.NotContains(t, unfocusedView, "> ")
+
+	// Focus notifications: item 0 selected
+	mFocusedRaw, _ := mNotifs.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mFocused := mFocusedRaw.(tui.Model)
+	require.True(t, mFocused.IsNotificationFocused())
+
+	focusedView := mFocused.View()
+	lines := strings.Split(focusedView, "\n")
+
+	var selectedLine, unselectedLine string
+	for _, l := range lines {
+		if strings.Contains(ansi.Strip(l), "chainlink#23787") {
+			selectedLine = l
+		}
+		if strings.Contains(ansi.Strip(l), "infra-griddle-app#691") {
+			unselectedLine = l
+		}
+	}
+	require.NotEmpty(t, selectedLine, "selected notification line must be present")
+	require.NotEmpty(t, unselectedLine, "unselected notification line must be present")
+
+	// 1. Arrow indicator ❯ present on selected line, absent on unselected
+	assert.Contains(t, selectedLine, "❯ ")
+	assert.NotContains(t, unselectedLine, "❯ ")
+
+	// 2. Selected notification row has background highlight sequence (#21262d)
+	bg := lipgloss.Color("#21262d")
+	sample := lipgloss.NewStyle().Background(bg).Render(" ")
+	idx := strings.Index(sample, " ")
+	var bgSeq string
+	if idx > 0 {
+		bgSeq = sample[:idx]
+	} else {
+		r := lipgloss.NewRenderer(io.Discard)
+		r.SetColorProfile(termenv.TrueColor)
+		s := r.NewStyle().Background(bg).Render(" ")
+		if i := strings.Index(s, " "); i > 0 {
+			bgSeq = s[:i]
+		}
+	}
+	require.NotEmpty(t, bgSeq)
+
+	assert.Contains(t, selectedLine, bgSeq, "selected notification row must have continuous background sequence")
+	assert.NotContains(t, unselectedLine, bgSeq, "unselected notification row must not have background sequence")
 }

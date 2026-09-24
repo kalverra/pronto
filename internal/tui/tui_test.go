@@ -1398,13 +1398,13 @@ func TestModel_StackGrouping(t *testing.T) {
 	assert.Contains(t, view, "▌ NEEDS YOUR ATTENTION")
 
 	// 2. Folder banner + tree connectors rendered in Title column
-	assert.Contains(t, view, "⎘ STACK (3 PRs · #101..#103)")
+	assert.Contains(t, view, "[STACK] (3 PRs · #101..#103)")
 	assert.Contains(t, view, "├─ #101 [1/3] Alpha base migration")
 	assert.Contains(t, view, "├─ #102 [2/3] Alpha middle endpoint")
 	assert.Contains(t, view, "╰─ #103 [3/3] Alpha top UI")
 
-	// 3. Solo stack member rendered with #number and stack pill ⎘ [2/2]
-	assert.Contains(t, view, "#300  ⎘ [2/2]  Solo stack PR")
+	// 3. Solo stack member rendered with #number and stack pill [STACK] [2/2]
+	assert.Contains(t, view, "#300  [STACK] [2/2]  Solo stack PR")
 	assert.NotContains(t, view, "╶ [2/2]")
 
 	// 4. Standalone PR does not have tree connector
@@ -1637,7 +1637,7 @@ func TestModel_PRStacks_CollapsedByDefault(t *testing.T) {
 	view := m.View()
 
 	// Bottom PR visible via collapsed stack pill with root title
-	assert.Contains(t, view, "⎘ 3 PRs")
+	assert.Contains(t, view, "[STACK] 3 PRs")
 	assert.NotContains(t, view, "[1..3]")
 	assert.Contains(t, view, "Alpha base")
 	// Child PRs hidden
@@ -1699,13 +1699,13 @@ func TestModel_PRStacks_ToggleExpandAndCollapse(t *testing.T) {
 	)
 
 	// Initial: collapsed
-	assert.Contains(t, m.View(), "⎘ 3 PRs")
+	assert.Contains(t, m.View(), "[STACK] 3 PRs")
 	assert.NotContains(t, m.View(), "[1..3]")
 
 	// Press space: expands stack
 	mExpanded, _ := sendKey(m, tea.KeySpace)
 	viewExp := mExpanded.(tui.Model).View()
-	assert.Contains(t, viewExp, "⎘ STACK (3 PRs · #101..#103)")
+	assert.Contains(t, viewExp, "[STACK] (3 PRs · #101..#103)")
 	assert.Contains(t, viewExp, "├─ #101 [1/3] Alpha base")
 	assert.Contains(t, viewExp, "├─ #102 [2/3] Alpha middle")
 	assert.Contains(t, viewExp, "╰─ #103 [3/3] Alpha top")
@@ -1713,7 +1713,7 @@ func TestModel_PRStacks_ToggleExpandAndCollapse(t *testing.T) {
 	// Press space again: collapses stack
 	mCollapsed, _ := sendKey(mExpanded, tea.KeySpace)
 	viewCol := mCollapsed.(tui.Model).View()
-	assert.Contains(t, viewCol, "⎘ 3 PRs")
+	assert.Contains(t, viewCol, "[STACK] 3 PRs")
 	assert.NotContains(t, viewCol, "[1..3]")
 	assert.NotContains(t, viewCol, "Alpha middle")
 
@@ -1774,7 +1774,7 @@ func TestModel_PRStacks_ToggleAllKey(t *testing.T) {
 
 	// Initial: both collapsed
 	view := m.View()
-	assert.Contains(t, view, "⎘ 2 PRs")
+	assert.Contains(t, view, "[STACK] 2 PRs")
 	assert.NotContains(t, view, "[1..2]")
 	assert.Contains(t, view, "Alpha 1")
 	assert.Contains(t, view, "Beta 1")
@@ -1784,8 +1784,8 @@ func TestModel_PRStacks_ToggleAllKey(t *testing.T) {
 	// Press 'E': expands all stacks
 	mAllExp, _ := sendRune(m, 'E')
 	viewAllExp := mAllExp.(tui.Model).View()
-	assert.Contains(t, viewAllExp, "⎘ STACK (2 PRs · #101..#102)")
-	assert.Contains(t, viewAllExp, "⎘ STACK (2 PRs · #201..#202)")
+	assert.Contains(t, viewAllExp, "[STACK] (2 PRs · #101..#102)")
+	assert.Contains(t, viewAllExp, "[STACK] (2 PRs · #201..#202)")
 	assert.Contains(t, viewAllExp, "├─ #101 [1/2] Alpha 1")
 	assert.Contains(t, viewAllExp, "╰─ #102 [2/2] Alpha 2")
 	assert.Contains(t, viewAllExp, "├─ #201 [1/2] Beta 1")
@@ -1794,7 +1794,7 @@ func TestModel_PRStacks_ToggleAllKey(t *testing.T) {
 	// Press 'E' again: collapses all stacks
 	mAllCol, _ := sendRune(mAllExp, 'E')
 	viewAllCol := mAllCol.(tui.Model).View()
-	assert.Contains(t, viewAllCol, "⎘ 2 PRs")
+	assert.Contains(t, viewAllCol, "[STACK] 2 PRs")
 	assert.NotContains(t, viewAllCol, "[1..2]")
 	assert.Contains(t, viewAllCol, "Alpha 1")
 	assert.Contains(t, viewAllCol, "Beta 1")

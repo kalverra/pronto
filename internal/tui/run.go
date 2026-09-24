@@ -169,6 +169,8 @@ func StartupModel(ctx context.Context, src source.Source, store cache.Store, opt
 			opts = append(opts, WithFocusedPRs(keys))
 		}
 		if q, savedAt, ok := store.Queue(ctx); ok {
+			q.Authored = filterBogusPRs(q.Authored)
+			q.Inbox = filterBogusPRs(q.Inbox)
 			m := New(q, opts...)
 			m.src = src
 			m.ctx = ctx
@@ -205,4 +207,17 @@ func Run(ctx context.Context, src source.Source, store cache.Store, opts ...Opti
 	}()
 	_, err := program.Run()
 	return err
+}
+
+func filterBogusPRs(prs []model.PullRequest) []model.PullRequest {
+	if len(prs) == 0 {
+		return prs
+	}
+	filtered := make([]model.PullRequest, 0, len(prs))
+	for _, pr := range prs {
+		if pr.Title != "Embedded PR" {
+			filtered = append(filtered, pr)
+		}
+	}
+	return filtered
 }

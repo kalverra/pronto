@@ -772,3 +772,105 @@ func TestDetector_NotificationsHaveSubmittedAt(t *testing.T) {
 		assert.True(t, n.SubmittedAt.After(tBefore), "SubmittedAt must be recent time.Now()")
 	}
 }
+
+func TestDetector_NotificationLinks(t *testing.T) {
+	t.Parallel()
+
+	const prURL = "https://github.com/kalverra/pronto/pull/1"
+	failing := model.ChecksSummary{Total: 1, Done: 1, Failed: 1}
+	passing := model.ChecksSummary{Total: 1, Done: 1}
+	running := model.ChecksSummary{Total: 1, Running: 1}
+
+	tests := []struct {
+		name    string
+		mutate  func(prev, curr *model.PullRequest)
+		trigger notify.Trigger
+		want    string
+	}{
+		{
+			name: "ci failed links failed check",
+			mutate: func(prev, curr *model.PullRequest) {
+				prev.Checks = running
+				curr.Checks = failing
+				curr.Checks.FailedURL = "https://github.com/kalverra/pronto/actions/runs/1/job/2"
+			},
+			trigger: notify.TriggerCIFailed,
+			want:    "https://github.com/kalverra/pronto/actions/runs/1/job/2",
+		},
+		{
+			name: "ci failed without check url links checks tab",
+			mutate: func(prev, curr *model.PullRequest) {
+				prev.Checks = running
+				curr.Checks = failing
+			},
+			trigger: notify.TriggerCIFailed,
+			want:    prURL + "/checks",
+		},
+		{
+			name: "ci passed links checks tab",
+			mutate: func(prev, curr *model.PullRequest) {
+				prev.Checks = running
+				curr.Checks = passing
+			},
+			trigger: notify.TriggerCIPassed,
+			want:    prURL + "/checks",
+		},
+		{
+			name: "review links review",
+			mutate: func(_, curr *model.PullRequest) {
+				curr.LatestReviews = []model.Review{{
+					Author:      "alice",
+					State:       "APPROVED",
+					URL:         prURL + "#pullrequestreview-42",
+					SubmittedAt: time.Now(),
+				}}
+			},
+			trigger: notify.TriggerReviewReceived,
+			want:    prURL + "#pullrequestreview-42",
+		},
+		{
+			name: "review without url links pr",
+			mutate: func(_, curr *model.PullRequest) {
+				curr.LatestReviews = []model.Review{{Author: "alice", State: "APPROVED", SubmittedAt: time.Now()}}
+			},
+			trigger: notify.TriggerReviewReceived,
+			want:    prURL,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			d := notify.NewDetector(nil)
+			prev := makeBasePR(1, "Feature A")
+			curr := prev
+			tt.mutate(&prev, &curr)
+
+			notes, err := d.DetectMineChanges(
+				context.Background(),
+				[]model.PullRequest{prev},
+				[]model.PullRequest{curr},
+			)
+			require.NoError(t, err)
+			require.Len(t, notes, 1)
+			assert.Equal(t, tt.trigger, notes[0].Trigger)
+			assert.Equal(t, tt.want, notes[0].URL)
+		})
+	}
+}
+
+func TestDetector_NotificationLinks_NoPRURL(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil)
+	prev := makeBasePR(1, "Feature A")
+	prev.URL = ""
+	prev.Checks = model.ChecksSummary{Total: 1, Running: 1}
+	curr := prev
+	curr.Checks = model.ChecksSummary{Total: 1, Done: 1}
+
+	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prev}, []model.PullRequest{curr})
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Empty(t, notes[0].URL, "no PR URL must not produce a bare /checks link")
+}

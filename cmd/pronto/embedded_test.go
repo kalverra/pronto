@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/kalverra/pronto/internal/cache"
 	"github.com/kalverra/pronto/internal/client"
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/daemon"
@@ -52,7 +53,7 @@ func TestResolveTUISource_ExistingDaemon_UsesClientMode(t *testing.T) {
 
 	cmd := NewRootCmd(nil, nil, nil)
 	require.NoError(t, cmd.PersistentFlags().Set("socket", socket))
-	src, _, cleanup, err := resolveTUISource(context.Background(), cmd, nil, config.Config{})
+	src, _, cleanup, err := resolveTUISource(context.Background(), cmd, nil, config.Config{}, nil)
 	require.NoError(t, err)
 	if cleanup != nil {
 		defer cleanup()
@@ -71,6 +72,7 @@ func TestResolveTUISource_NoDaemon_StartsEmbeddedDaemon(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "pronto.sock")
+	testStore := cache.NewDiskStore(filepath.Join(dir, "cache"))
 
 	scripted := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{testPR(1, "Embedded PR")}}},
@@ -80,7 +82,7 @@ func TestResolveTUISource_NoDaemon_StartsEmbeddedDaemon(t *testing.T) {
 
 	cmd := NewRootCmd(nil, nil, nil)
 	require.NoError(t, cmd.PersistentFlags().Set("socket", socket))
-	src, _, cleanup, err := resolveTUISource(ctx, cmd, scripted, config.Config{})
+	src, _, cleanup, err := resolveTUISource(ctx, cmd, scripted, config.Config{}, testStore)
 	require.NoError(t, err)
 	if cleanup != nil {
 		defer cleanup()
@@ -122,7 +124,7 @@ func TestResolveTUISource_BindRace_FallsBackToClientMode(t *testing.T) {
 
 	cmd := NewRootCmd(nil, nil, nil)
 	require.NoError(t, cmd.PersistentFlags().Set("socket", socket))
-	src, _, cleanup, err := resolveTUISource(context.Background(), cmd, scripted, config.Config{})
+	src, _, cleanup, err := resolveTUISource(context.Background(), cmd, scripted, config.Config{}, nil)
 	require.NoError(t, err)
 	if cleanup != nil {
 		defer cleanup()
@@ -141,6 +143,7 @@ func TestResolveTUISource_Lifecycle_EmbeddedDaemonStopsWithContext(t *testing.T)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "pronto.sock")
+	testStore := cache.NewDiskStore(filepath.Join(dir, "cache"))
 
 	scripted := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra"}},
@@ -150,7 +153,7 @@ func TestResolveTUISource_Lifecycle_EmbeddedDaemonStopsWithContext(t *testing.T)
 
 	cmd := NewRootCmd(nil, nil, nil)
 	require.NoError(t, cmd.PersistentFlags().Set("socket", socket))
-	src, _, cleanup, err := resolveTUISource(ctx, cmd, scripted, config.Config{})
+	src, _, cleanup, err := resolveTUISource(ctx, cmd, scripted, config.Config{}, testStore)
 	require.NoError(t, err)
 	if cleanup != nil {
 		defer cleanup()

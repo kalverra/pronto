@@ -431,9 +431,9 @@ func TestModel_View_ConsistentOrderedPRDisplay(t *testing.T) {
 	)
 	view := m.View()
 
-	// 1. Collapsed stack: starts with #number, then stack pill ⎘ 2 PRs (consolidated), then title
+	// 1. Collapsed stack: starts with #number, then stack pill [STACK] 2 PRs (consolidated), then title
 	assert.Contains(t, view, "#709")
-	assert.Contains(t, view, "⎘ 2 PRs")
+	assert.Contains(t, view, "[STACK] 2 PRs")
 	assert.NotContains(t, view, "[2..3]")
 	assert.Contains(t, view, "updates to latest go-github")
 
@@ -442,9 +442,9 @@ func TestModel_View_ConsistentOrderedPRDisplay(t *testing.T) {
 	assert.Contains(t, view, "bump ci versions")
 	assert.NotContains(t, view, "bump ci versions (#23787)")
 
-	// 3. Single PR in stack (totalInCat <= 1): starts with #number, then stack pill ⎘ [13/14], then title
+	// 3. Single PR in stack (totalInCat <= 1): starts with #number, then stack pill [STACK] [13/14], then title
 	assert.Contains(t, view, "#23505")
-	assert.Contains(t, view, "⎘ [13/14]")
+	assert.Contains(t, view, "[STACK] [13/14]")
 	assert.Contains(t, view, "integration-tests")
 	assert.NotContains(t, view, "╶ [13/14]")
 	assert.NotContains(t, view, "integration-tests (#23505)")
@@ -532,4 +532,63 @@ func TestModel_View_GutterStrictAlignmentAndBlockerSummary(t *testing.T) {
 
 	// Stack line has chevron gutter indicator
 	assert.Contains(t, line732, "▸")
+}
+
+func TestModel_View_RowSelectionHighlight(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	q := model.Queue{
+		Inbox: []model.PullRequest{
+			{Number: 101, Title: "First PR", RepoNameWithOwner: "org/repo", UpdatedAt: now.Add(-1 * time.Hour)},
+			{Number: 102, Title: "Second PR", RepoNameWithOwner: "org/repo", UpdatedAt: now.Add(-2 * time.Hour)},
+		},
+	}
+
+	m := tui.New(q, tui.WithNow(now), tui.WithDimensions(120, 30), tui.WithActiveTab(tui.TabInbox))
+	view := m.View()
+
+	// Selected row (#101, cursor 0) has cursor indicator, unselected row does not
+	assert.Contains(t, view, "❯   #101")
+	assert.NotContains(t, view, "❯   #102")
+
+	// Moving cursor down moves selection highlight to #102
+	mDown, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	viewDown := mDown.(tui.Model).View()
+	assert.NotContains(t, viewDown, "❯   #101")
+	assert.Contains(t, viewDown, "❯   #102")
+}
+
+func TestModel_View_CICountSemanticColors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-3*time.Minute - 27*time.Second)
+	completed := now
+	q := model.Queue{
+		Inbox: []model.PullRequest{
+			{
+				Number:            101,
+				Title:             "PR with mixed CI",
+				RepoNameWithOwner: "org/repo",
+				Checks: model.ChecksSummary{
+					Total:       14,
+					Done:        14,
+					Failed:      1,
+					StartedAt:   &started,
+					CompletedAt: &completed,
+				},
+				UpdatedAt: now.Add(-1 * time.Hour),
+			},
+		},
+	}
+
+	m := tui.New(q, tui.WithNow(now), tui.WithDimensions(140, 30), tui.WithActiveTab(tui.TabInbox))
+	view := m.View()
+
+	// CI column renders 13 passed and 1 failed with duration 3m27s
+	assert.Contains(t, ansi.Strip(view), "✓ 13  ✗ 1  3m27s")
+	assert.Contains(t, ansi.Strip(view), "✓ 13")
+	assert.Contains(t, ansi.Strip(view), "✗ 1")
+	assert.Contains(t, ansi.Strip(view), "3m27s")
 }

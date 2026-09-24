@@ -12,6 +12,8 @@ type Review struct {
 	State       string    `json:"state"`
 	CommitOID   string    `json:"commit_oid"`
 	SubmittedAt time.Time `json:"submitted_at"`
+	// URL links to the review on the pull request page.
+	URL string `json:"url,omitempty"`
 }
 
 // TimelineItemType distinguishes timeline item kinds.

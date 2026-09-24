@@ -22,8 +22,10 @@
 //
 //  4. Responder (no flag, empty stdin): when the user interacts with a
 //     previously posted notification, macOS relaunches the app. No payload
-//     arrives on stdin, so the process waits briefly for the pending
-//     response: a click opens the PR URL, a dismiss does nothing.
+//     arrives on stdin, so the process runs the NSApplication lifecycle
+//     until the pending response arrives: a click opens the PR URL, a
+//     dismiss does nothing. The response is only delivered as part of app
+//     launch, so a bare run loop without NSApplication never receives it.
 import AppKit
 import Foundation
 import UserNotifications
@@ -51,8 +53,6 @@ struct HelperPayload: Codable {
 final class ResponseDelegate: NSObject, UNUserNotificationCenterDelegate {
     static var current: ResponseDelegate?
 
-    private(set) var handled = false
-
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -60,7 +60,8 @@ final class ResponseDelegate: NSObject, UNUserNotificationCenterDelegate {
     ) {
         defer {
             completionHandler()
-            handled = true
+            // One response per launch; quit once it is handled.
+            DispatchQueue.main.async { NSApp?.terminate(nil) }
         }
         guard let url = response.notification.request.content.userInfo["url"] as? String,
               !url.isEmpty, let target = URL(string: url)
@@ -271,9 +272,22 @@ if !stdinData.isEmpty {
 }
 
 // No payload: assume we were relaunched to deliver a pending notification
-// response. Pump the main run loop until the delegate reports a handled
-// response or a grace deadline expires.
-let deadline = Date().addingTimeInterval(5)
-while !delegate.handled && Date() < deadline {
-    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+// response. UserNotifications hands the response over during app launch, so
+// run a real (Dock-less) NSApplication; the delegate terminates once the
+// response is handled, and a grace timer covers launches without one.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Apple requires the delegate be set before launch finishes.
+        UNUserNotificationCenter.current().delegate = ResponseDelegate.current
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { NSApp.terminate(nil) }
+    }
 }
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+let appDelegate = AppDelegate()
+app.delegate = appDelegate
+app.run()

@@ -4,6 +4,7 @@ fragment FreshFields on PullRequest {
   reviewDecision
   latestReviews(first: 20) {
     nodes {
+      url
       author { login }
       state
       commit { oid }
@@ -46,8 +47,8 @@ fragment FreshFields on PullRequest {
             }
             nodes {
               __typename
-              ... on CheckRun { name status conclusion startedAt completedAt }
-              ... on StatusContext { context state createdAt }
+              ... on CheckRun { name status conclusion startedAt completedAt detailsUrl }
+              ... on StatusContext { context state createdAt targetUrl }
             }
           }
         }

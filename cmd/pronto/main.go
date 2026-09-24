@@ -94,7 +94,7 @@ func runRootTUI(cmd *cobra.Command, src source.Source) error {
 	tuiCtx, cancelTUI := context.WithCancel(cmd.Context())
 	defer cancelTUI()
 
-	s, store, cleanup, err := resolveTUISource(tuiCtx, cmd, src, cfg, logger)
+	s, store, cleanup, err := resolveTUISource(tuiCtx, cmd, src, cfg, nil, logger)
 	if err != nil {
 		return err
 	}

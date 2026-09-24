@@ -430,6 +430,9 @@ func runHelperMode(ctx context.Context, helperPath, mode string) (helperStatus, 
 	return hs, nil
 }
 
+// testNotificationURL is opened when the test banner is clicked.
+const testNotificationURL = "https://github.com/pulls"
+
 // sendTestNotification delivers one notification through the configured
 // channels, so a broken or suppressed backend can be caught without waiting
 // for a real pull request event.
@@ -450,7 +453,10 @@ func sendTestNotification(ctx context.Context, out io.Writer, cfg config.Notific
 	n := notify.Notification{
 		Trigger: notify.TriggerCIPassed,
 		Title:   "pronto notification test",
-		Message: "Notifications are working. Sent by `pronto notify --test`.",
+		Message: "Notifications are working. Click to open your pull requests.",
+		// A URL makes the banner clickable, so the test also exercises
+		// click-to-open in the native helper.
+		URL: testNotificationURL,
 	}
 	if snd, ok := cfg.Sounds[string(notify.TriggerCIPassed)]; ok {
 		n.Sound = snd

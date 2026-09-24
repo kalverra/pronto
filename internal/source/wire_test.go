@@ -182,12 +182,6 @@ func TestHydrateQueries_StaticStructure(t *testing.T) {
 	assert.Contains(t, hydrateFullQuery, "rateLimit")
 }
 
-func TestFreshFields_IncludesCheckTimestamps(t *testing.T) {
-	t.Parallel()
-	assert.Contains(t, freshFragment, "... on CheckRun { name status conclusion startedAt completedAt }")
-	assert.Contains(t, freshFragment, "... on StatusContext { context state createdAt }")
-}
-
 func TestConvertPR_CheckTimestamps(t *testing.T) {
 	t.Parallel()
 
@@ -314,4 +308,63 @@ func TestConvertPR_CheckTimestamps(t *testing.T) {
 		assert.Nil(t, pr.Checks.StartedAt)
 		assert.Nil(t, pr.Checks.CompletedAt)
 	})
+}
+
+func TestFreshFields_IncludesCheckTimestampsAndLinks(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, freshFragment, "... on CheckRun { name status conclusion startedAt completedAt detailsUrl }")
+	assert.Contains(t, freshFragment, "... on StatusContext { context state createdAt targetUrl }")
+	assert.Contains(t, freshFragment, "url\n      author { login }")
+}
+
+func TestConvertPR_LinkURLs(t *testing.T) {
+	t.Parallel()
+
+	freshJSON := `{
+		"latestReviews": {
+			"nodes": [
+				{
+					"url": "https://github.com/acme/repo/pull/1#pullrequestreview-42",
+					"author": {"login": "alice"},
+					"state": "APPROVED",
+					"submittedAt": "2026-09-17T12:00:00Z"
+				}
+			]
+		},
+		"commits": {
+			"nodes": [
+				{
+					"commit": {
+						"statusCheckRollup": {
+							"state": "FAILURE",
+							"contexts": {
+								"nodes": [
+									{
+										"__typename": "StatusContext",
+										"context": "ci/legacy",
+										"state": "FAILURE",
+										"targetUrl": "https://ci.example/legacy/9"
+									},
+									{
+										"__typename": "CheckRun",
+										"name": "test",
+										"status": "COMPLETED",
+										"conclusion": "FAILURE",
+										"detailsUrl": "https://github.com/acme/repo/actions/runs/1/job/2"
+									}
+								]
+							}
+						}
+					}
+				}
+			]
+		}
+	}`
+	var fresh rawFresh
+	require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+	pr := convertPR(rawIdentity{Number: 1}, stableFields{}, fresh, false, convertOpts{})
+	require.Len(t, pr.LatestReviews, 1)
+	assert.Equal(t, "https://github.com/acme/repo/pull/1#pullrequestreview-42", pr.LatestReviews[0].URL)
+	assert.Equal(t, "https://ci.example/legacy/9", pr.Checks.FailedURL)
 }

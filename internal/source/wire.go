@@ -101,6 +101,7 @@ type rawFiles struct {
 
 type rawReviews struct {
 	Nodes []struct {
+		URL    string   `json:"url"`
 		Author rawLogin `json:"author"`
 		State  string   `json:"state"`
 		Commit struct {
@@ -161,6 +162,8 @@ type rawCommits struct {
 						StartedAt   *time.Time `json:"startedAt"`
 						CompletedAt *time.Time `json:"completedAt"`
 						CreatedAt   *time.Time `json:"createdAt"`
+						DetailsURL  string     `json:"detailsUrl"`
+						TargetURL   string     `json:"targetUrl"`
 					} `json:"nodes"`
 				} `json:"contexts"`
 			} `json:"statusCheckRollup"`
@@ -263,7 +266,12 @@ func convertChecks(commits rawCommits) (model.CheckRollup, []model.ContextCheck)
 			t := *node.CompletedAt
 			finalCompletedAt = &t
 		}
+		url := node.DetailsURL
+		if url == "" {
+			url = node.TargetURL
+		}
 		checks = append(checks, model.ContextCheck{
+			URL:         url,
 			Name:        name,
 			Status:      status,
 			Conclusion:  node.Conclusion,
@@ -300,6 +308,7 @@ func convertPR(
 			State:       r.State,
 			CommitOID:   r.Commit.OID,
 			SubmittedAt: r.SubmittedAt,
+			URL:         r.URL,
 		})
 	}
 

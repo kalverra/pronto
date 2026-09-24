@@ -67,7 +67,7 @@ var (
 	styleGlyphFail   = lipgloss.NewStyle().Foreground(accentRed)
 	styleGlyphRun    = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
 	styleGlyphPass   = lipgloss.NewStyle().Foreground(accentGreen)
-	styleGlyphDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e"))
+	styleGlyphDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("#b1bac4"))
 
 	styleStackTag = lipgloss.NewStyle().Foreground(accentViolet).Bold(true)
 	styleRangeTag = lipgloss.NewStyle().Foreground(accentCharcoal)
@@ -297,7 +297,7 @@ func renderStackBanner(rootPR model.PullRequest, prs []PRItem, isSelected bool, 
 	}
 
 	num := numStyle.Render(fmt.Sprintf("#%d", rootPR.Number))
-	tag := styleStackTag.Render("⎘ STACK")
+	tag := styleStackTag.Render("[STACK]")
 
 	firstPR := prs[0]
 	lastPR := prs[len(prs)-1]

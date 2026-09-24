@@ -140,7 +140,7 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 					PRNumber:    currPR.Number,
 					PRTitle:     currPR.Title,
 					Repo:        currPR.RepoNameWithOwner,
-					URL:         currPR.URL,
+					URL:         checksURL(currPR.URL),
 					Author:      currPR.Author,
 					CommitOID:   currPR.HeadRefOID,
 					SubmittedAt: time.Now(),
@@ -164,7 +164,7 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 					PRNumber:    currPR.Number,
 					PRTitle:     currPR.Title,
 					Repo:        currPR.RepoNameWithOwner,
-					URL:         currPR.URL,
+					URL:         failedCheckURL(currPR),
 					Author:      currPR.Author,
 					CommitOID:   currPR.HeadRefOID,
 					SubmittedAt: time.Now(),
@@ -251,6 +251,31 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 	return results, nil
 }
 
+// checksURL links to the PR's Checks tab; empty when the PR URL is unknown.
+func checksURL(prURL string) string {
+	if prURL == "" {
+		return ""
+	}
+	return strings.TrimSuffix(prURL, "/") + "/checks"
+}
+
+// failedCheckURL links to the failed check itself, falling back to the
+// Checks tab when no failed check reported a details URL.
+func failedCheckURL(pr model.PullRequest) string {
+	if pr.Checks.FailedURL != "" {
+		return pr.Checks.FailedURL
+	}
+	return checksURL(pr.URL)
+}
+
+// reviewURL links to the review itself, falling back to the PR.
+func reviewURL(pr model.PullRequest, rev model.Review) string {
+	if rev.URL != "" {
+		return rev.URL
+	}
+	return pr.URL
+}
+
 func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool) []Notification {
 	var results []Notification
 	for _, rev := range currPR.LatestReviews {
@@ -274,7 +299,7 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 			PRNumber:    currPR.Number,
 			PRTitle:     currPR.Title,
 			Repo:        currPR.RepoNameWithOwner,
-			URL:         currPR.URL,
+			URL:         reviewURL(currPR, rev),
 			Author:      rev.Author,
 			ReviewState: rev.State,
 			CommitOID:   rev.CommitOID,

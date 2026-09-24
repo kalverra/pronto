@@ -17,6 +17,8 @@ type ContextCheck struct {
 	Conclusion  string     `json:"conclusion"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	// URL links to the check's details (CheckRun detailsUrl or StatusContext targetUrl).
+	URL string `json:"url,omitempty"`
 }
 
 // CheckRollup captures rollup-level metadata from GitHub statusCheckRollup.
@@ -43,6 +45,10 @@ type ChecksSummary struct {
 	Running int `json:"running"`
 	Done    int `json:"done"`
 	Failed  int `json:"failed"`
+
+	// FailedURL links to the first failed check (required checks only when
+	// configured) that has a details URL; empty when none qualifies.
+	FailedURL string `json:"failed_url,omitempty"`
 }
 
 // Succeeded returns the number of completed checks that succeeded.
@@ -67,13 +73,34 @@ func ComputeChecksSummaryWithRollup(
 	checks []ContextCheck,
 	rollup CheckRollup,
 ) ChecksSummary {
-	if len(requiredContexts) > 0 {
-		return computeRequiredChecksSummary(requiredContexts, checks, rollup.State)
+	var summary ChecksSummary
+	switch {
+	case len(requiredContexts) > 0:
+		summary = computeRequiredChecksSummary(requiredContexts, checks, rollup.State)
+	case rollup.TotalCount > 0 || len(rollup.RunCounts) > 0 || len(rollup.StatusCounts) > 0:
+		summary = aggregateRollupCounts(rollup, checks)
+	default:
+		summary = computeFallbackChecksSummary(checks, rollup.State)
 	}
-	if rollup.TotalCount > 0 || len(rollup.RunCounts) > 0 || len(rollup.StatusCounts) > 0 {
-		return aggregateRollupCounts(rollup, checks)
+	summary.FailedURL = failedCheckURL(requiredContexts, checks)
+	return summary
+}
+
+// failedCheckURL returns the URL of the first failed check that has one,
+// considering only required checks when any are configured.
+func failedCheckURL(requiredContexts []string, checks []ContextCheck) string {
+	for _, c := range checks {
+		if c.URL == "" {
+			continue
+		}
+		if len(requiredContexts) > 0 && !slices.Contains(requiredContexts, c.Name) {
+			continue
+		}
+		if _, failed, _ := classifyCheck(c); failed {
+			return c.URL
+		}
 	}
-	return computeFallbackChecksSummary(checks, rollup.State)
+	return ""
 }
 
 func computeRequiredChecksSummary(requiredContexts []string, checks []ContextCheck, state string) ChecksSummary {

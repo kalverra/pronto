@@ -143,6 +143,7 @@ func TestRun_NotifyTest_DeliversThroughConfiguredNotifier(t *testing.T) {
 	require.Len(t, notes, 1, "--test must deliver exactly one notification")
 	assert.NotEmpty(t, notes[0].Title)
 	assert.NotEmpty(t, notes[0].Message)
+	assert.NotEmpty(t, notes[0].URL, "--test banner must be clickable to exercise click-to-open")
 	assert.Contains(t, notes[0].ImagePath, "ci-passed.png", "--test must attach default image when unconfigured")
 	assert.Contains(t, stdout.String(), "Sent")
 }
