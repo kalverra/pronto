@@ -9,28 +9,6 @@ import (
 	"time"
 )
 
-// defaultNotifyTimeout bounds a single delivery attempt. terminal-notifier can
-// block for ~10s on an unavailable notification service (no GUI session, hung
-// XPC), which would otherwise stall every queued notification behind it.
-const defaultNotifyTimeout = 3 * time.Second
-
-// CommandRunner executes a system command with arguments.
-type CommandRunner func(ctx context.Context, name string, args ...string) error
-
-func defaultRunner(ctx context.Context, name string, args ...string) error {
-	// #nosec G204 -- name and args are restricted to terminal-notifier or osascript.
-	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg != "" {
-			return fmt.Errorf("%w: %s", err, msg)
-		}
-		return err
-	}
-	return nil
-}
-
 // MacNotifier sends macOS notifications using terminal-notifier or osascript.
 type MacNotifier struct {
 	terminalNotifierPath string
@@ -57,6 +35,7 @@ func WithCommandRunner(runner CommandRunner) MacNotifierOption {
 }
 
 // WithSoundEnabled configures whether macOS notifications should play sound.
+// Disabled by default: sound is opt-in, matching notifications.sound.
 func WithSoundEnabled(enabled bool) MacNotifierOption {
 	return func(m *MacNotifier) {
 		m.soundEnabled = enabled
@@ -73,13 +52,12 @@ func WithNotifyTimeout(timeout time.Duration) MacNotifierOption {
 // NewMacNotifier creates an initialized MacNotifier.
 func NewMacNotifier(opts ...MacNotifierOption) *MacNotifier {
 	m := &MacNotifier{
-		soundEnabled: true,
-		timeout:      defaultNotifyTimeout,
+		timeout: defaultNotifyTimeout,
 	}
 	if path, err := exec.LookPath("terminal-notifier"); err == nil {
 		m.terminalNotifierPath = path
 	}
-	m.runner = defaultRunner
+	m.runner = runCommand
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -89,13 +67,22 @@ func NewMacNotifier(opts ...MacNotifierOption) *MacNotifier {
 	return m
 }
 
+// soundName picks the system sound name to pass to a backend: the
+// notification's override if set, otherwise "default".
+func soundName(n Notification) string {
+	if n.Sound != "" {
+		return n.Sound
+	}
+	return "default"
+}
+
 // Notify delivers a desktop notification via terminal-notifier or osascript.
 // Backends are tried in order and every failure is reported, so a caller can
 // log why nothing reached the screen.
 func (m *MacNotifier) Notify(ctx context.Context, n Notification) error {
 	runner := m.runner
 	if runner == nil {
-		runner = defaultRunner
+		runner = runCommand
 	}
 
 	title := sanitizeText(n.Title)
@@ -109,7 +96,7 @@ func (m *MacNotifier) Notify(ctx context.Context, n Notification) error {
 			"-message", message,
 		}
 		if m.soundEnabled {
-			args = append(args, "-sound", "default")
+			args = append(args, "-sound", soundName(n))
 		}
 		imagePath := n.ImagePath
 		if imagePath == "" {
@@ -121,8 +108,8 @@ func (m *MacNotifier) Notify(ctx context.Context, n Notification) error {
 		if n.URL != "" {
 			args = append(args, "-open", n.URL)
 		}
-		if n.Repo != "" && n.PRNumber > 0 {
-			args = append(args, "-group", fmt.Sprintf("pronto-%s-%d", strings.ReplaceAll(n.Repo, "/", "_"), n.PRNumber))
+		if group := prontoGroupID(n.Repo, n.PRNumber); group != "" {
+			args = append(args, "-group", group)
 		}
 		err := m.run(ctx, runner, m.terminalNotifierPath, args...)
 		if err == nil {
@@ -138,7 +125,7 @@ func (m *MacNotifier) Notify(ctx context.Context, n Notification) error {
 		appleScriptString(title),
 	)
 	if m.soundEnabled {
-		script += ` sound name "default"`
+		script += " sound name " + appleScriptString(soundName(n))
 	}
 	if err := m.run(ctx, runner, "osascript", "-e", script); err != nil {
 		errs = append(errs, fmt.Errorf("osascript: %w", err))

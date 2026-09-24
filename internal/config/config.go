@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"github.com/kalverra/pronto/internal/notify"
 )
 
 // Supported PR view names.
@@ -21,8 +23,19 @@ const (
 	ViewCustom    = "custom"
 )
 
+// Supported desktop notification delivery modes. Vocabulary is owned by the
+// notify package; these aliases exist for configuration ergonomics.
+const (
+	// NotifyTerminal delivers notifications via terminal-notifier/osascript.
+	NotifyTerminal = notify.ModeTerminal
+	// NotifyNative delivers notifications via the bundled native macOS
+	// notification helper (UserNotifications framework).
+	NotifyNative = notify.ModeNative
+)
+
 // NotificationConfig specifies configuration for PR event notifications.
 type NotificationConfig struct {
+	Mode   string            `json:"mode"   mapstructure:"mode"   toml:"mode"`
 	Popups bool              `json:"popups" mapstructure:"popups" toml:"popups"`
 	Sound  bool              `json:"sound"  mapstructure:"sound"  toml:"sound"`
 	Sounds map[string]string `json:"sounds" mapstructure:"sounds" toml:"sounds"`
@@ -90,9 +103,21 @@ func (c *Config) Validate() error {
 	if c.PRView == ViewCustom && strings.TrimSpace(c.PRViewCommand) == "" {
 		return errors.New("pr_view 'custom' requires pr_view_command")
 	}
-	for trigger := range c.Notifications.Sounds {
+	if c.Notifications.Mode == "" {
+		c.Notifications.Mode = NotifyNative
+	}
+	if !validValue(spec("notifications.mode").Valid, c.Notifications.Mode) {
+		return fmt.Errorf("unknown notifications.mode: %q", c.Notifications.Mode)
+	}
+	for trigger, sound := range c.Notifications.Sounds {
 		if !validValue(spec("notifications.sounds").Valid, trigger) {
 			return fmt.Errorf("unknown notification sound trigger: %q", trigger)
+		}
+		if !notify.ValidSoundName(sound) {
+			return fmt.Errorf(
+				"unknown notification sound %q for trigger %q; valid names: %s",
+				sound, trigger, strings.Join(notify.SystemSounds(), ", "),
+			)
 		}
 	}
 	for trigger := range c.Notifications.Images {

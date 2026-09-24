@@ -46,7 +46,102 @@ func TestMacNotifier_TerminalNotifier_CommandArgs(t *testing.T) {
 	assert.Contains(t, argStr, "-title PRonto: CI Passed (#123)")
 	assert.Contains(t, argStr, "-message Checks passed for \"Fix critical bug\" (kalverra/pronto#123)")
 	assert.Contains(t, argStr, "-open https://github.com/kalverra/pronto/pull/123")
-	assert.Contains(t, argStr, "-sound default")
+	assert.NotContains(t, argStr, "-sound", "sound is opt-in and must be off by default")
+}
+
+func TestMacNotifier_Sound(t *testing.T) {
+	t.Parallel()
+
+	t.Run("terminal-notifier passes the default sound when enabled without an override", func(t *testing.T) {
+		t.Parallel()
+		var executedArgs []string
+		runner := func(_ context.Context, _ string, args ...string) error {
+			executedArgs = args
+			return nil
+		}
+
+		notifier := notify.NewMacNotifier(
+			notify.WithTerminalNotifierPath("/opt/homebrew/bin/terminal-notifier"),
+			notify.WithCommandRunner(runner),
+			notify.WithSoundEnabled(true),
+		)
+
+		err := notifier.Notify(
+			context.Background(),
+			notify.Notification{Trigger: notify.TriggerCIPassed, Title: "t", Message: "m"},
+		)
+		require.NoError(t, err)
+		assert.Contains(t, strings.Join(executedArgs, " "), "-sound default")
+	})
+
+	t.Run("terminal-notifier passes the configured system sound name", func(t *testing.T) {
+		t.Parallel()
+		var executedArgs []string
+		runner := func(_ context.Context, _ string, args ...string) error {
+			executedArgs = args
+			return nil
+		}
+
+		notifier := notify.NewMacNotifier(
+			notify.WithTerminalNotifierPath("/opt/homebrew/bin/terminal-notifier"),
+			notify.WithCommandRunner(runner),
+			notify.WithSoundEnabled(true),
+		)
+
+		err := notifier.Notify(
+			context.Background(),
+			notify.Notification{Trigger: notify.TriggerCIPassed, Title: "t", Message: "m", Sound: "Glass"},
+		)
+		require.NoError(t, err)
+		assert.Contains(t, strings.Join(executedArgs, " "), "-sound Glass")
+	})
+
+	t.Run("osascript includes the sound name when enabled", func(t *testing.T) {
+		t.Parallel()
+		var script string
+		runner := func(_ context.Context, name string, args ...string) error {
+			if name == "osascript" && len(args) == 2 {
+				script = args[1]
+			}
+			return nil
+		}
+
+		notifier := notify.NewMacNotifier(
+			notify.WithTerminalNotifierPath(""),
+			notify.WithCommandRunner(runner),
+			notify.WithSoundEnabled(true),
+		)
+
+		err := notifier.Notify(
+			context.Background(),
+			notify.Notification{Trigger: notify.TriggerCIPassed, Title: "t", Message: "m", Sound: "Glass"},
+		)
+		require.NoError(t, err)
+		assert.Contains(t, script, `sound name "Glass"`)
+	})
+
+	t.Run("osascript omits sound name when disabled", func(t *testing.T) {
+		t.Parallel()
+		var script string
+		runner := func(_ context.Context, name string, args ...string) error {
+			if name == "osascript" && len(args) == 2 {
+				script = args[1]
+			}
+			return nil
+		}
+
+		notifier := notify.NewMacNotifier(
+			notify.WithTerminalNotifierPath(""),
+			notify.WithCommandRunner(runner),
+		)
+
+		err := notifier.Notify(
+			context.Background(),
+			notify.Notification{Trigger: notify.TriggerCIPassed, Title: "t", Message: "m"},
+		)
+		require.NoError(t, err)
+		assert.NotContains(t, script, "sound name")
+	})
 }
 
 func TestMacNotifier_OSAScript_Fallback(t *testing.T) {

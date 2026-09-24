@@ -45,6 +45,16 @@ var Specs = []KeySpec{
 		Doc:     "Command template run for pr_view = \"custom\"; {url} is substituted with the PR URL.",
 	},
 	{
+		Key:     "notifications.mode",
+		Env:     "PRONTO_NOTIFICATIONS_MODE",
+		Type:    "string",
+		Default: NotifyNative,
+		Valid:   []string{NotifyTerminal, NotifyNative},
+		Doc: "Delivery backend for desktop notifications: \"native\" uses the bundled macOS " +
+			"notification helper (run `pronto notify setup` once), falling back to \"terminal\" " +
+			"(terminal-notifier/osascript) when the helper isn't installed or authorized.",
+	},
+	{
 		Key:     "notifications.popups",
 		Env:     "PRONTO_NOTIFICATIONS_POPUPS",
 		Type:    "bool",
@@ -62,7 +72,8 @@ var Specs = []KeySpec{
 		Key:   "notifications.sounds",
 		Type:  "map[trigger]string",
 		Valid: events.TriggerStrings(),
-		Doc:   "Audio file paths per notification trigger.",
+		Doc: "macOS system sound name per notification trigger (e.g. \"Glass\"); must match a sound " +
+			"under /System/Library/Sounds or ~/Library/Sounds, or \"default\" for the OS alert sound.",
 	},
 	{
 		Key:   "notifications.images",

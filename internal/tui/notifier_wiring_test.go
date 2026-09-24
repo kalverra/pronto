@@ -128,7 +128,11 @@ func TestDefaultNotifierFactory(t *testing.T) {
 		"all channels disabled must yield no notifier, not an empty one",
 	)
 	assert.NotNil(t, tui.DefaultNotifierFactory(config.NotificationConfig{Popups: true}))
-	assert.NotNil(t, tui.DefaultNotifierFactory(config.NotificationConfig{Sound: true}))
+	assert.Nil(
+		t,
+		tui.DefaultNotifierFactory(config.NotificationConfig{Popups: false, Sound: true}),
+		"sound has no independent channel: without popups there is nothing to attach it to",
+	)
 }
 
 func TestModel_NotificationDeliveryFailure_IsLogged(t *testing.T) {

@@ -529,13 +529,13 @@ func TestDetector_DisappearedPR_RetryOnCheckerError(t *testing.T) {
 	assert.Equal(t, 42, notes2[0].PRNumber)
 }
 
-func TestDetector_TriggerImages(t *testing.T) {
+func TestDetector_AssetsImages(t *testing.T) {
 	t.Parallel()
 
 	images := map[notify.Trigger]string{
 		notify.TriggerCIPassed: "/icons/pass.png",
 	}
-	d := notify.NewDetector(nil, notify.WithTriggerImages(images))
+	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Images: images}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -549,13 +549,13 @@ func TestDetector_TriggerImages(t *testing.T) {
 	assert.Equal(t, "/icons/pass.png", notes[0].ImagePath)
 }
 
-func TestDetector_TriggerSounds(t *testing.T) {
+func TestDetector_AssetsSounds(t *testing.T) {
 	t.Parallel()
 
 	sounds := map[notify.Trigger]string{
-		notify.TriggerCIPassed: "/sounds/pass.wav",
+		notify.TriggerCIPassed: "Glass",
 	}
-	d := notify.NewDetector(nil, notify.WithTriggerSounds(sounds))
+	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Sounds: sounds}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -566,7 +566,7 @@ func TestDetector_TriggerSounds(t *testing.T) {
 	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prevPR}, []model.PullRequest{currPR})
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
-	assert.Equal(t, "/sounds/pass.wav", notes[0].SoundPath)
+	assert.Equal(t, "Glass", notes[0].Sound)
 }
 
 func TestDetector_Titles_OmitPRontoPrefix(t *testing.T) {

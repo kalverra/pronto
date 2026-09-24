@@ -28,6 +28,7 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 	wantEnv := map[string]string{
 		"pr_view":                    "PRONTO_PR_VIEW",
 		"pr_view_command":            "PRONTO_PR_VIEW_COMMAND",
+		"notifications.mode":         "PRONTO_NOTIFICATIONS_MODE",
 		"notifications.popups":       "PRONTO_NOTIFICATIONS_POPUPS",
 		"notifications.sound":        "PRONTO_NOTIFICATIONS_SOUND",
 		"server.poll_interval":       "PRONTO_POLL_INTERVAL",
@@ -53,6 +54,7 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 
 	// Defaults must match LoadFile behavior.
 	assert.Equal(t, config.ViewCondensed, got["pr_view"].Default)
+	assert.Equal(t, config.NotifyNative, got["notifications.mode"].Default)
 	assert.Equal(t, true, got["notifications.popups"].Default)
 	assert.Equal(t, false, got["notifications.sound"].Default)
 	assert.Empty(t, got["pr_view_command"].Default)
@@ -67,6 +69,10 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 			config.ViewWeb, config.ViewCustom,
 		},
 		got["pr_view"].Valid,
+	)
+	assert.ElementsMatch(t,
+		[]string{config.NotifyTerminal, config.NotifyNative},
+		got["notifications.mode"].Valid,
 	)
 }
 

@@ -126,8 +126,9 @@ func TestModel_Stack_CollapsedRow_MicroRibbonAndDiffRollup(t *testing.T) {
 	assert.Contains(t, view, "❯ ▸")
 	assert.Contains(t, view, "#709")
 
-	// 2. Stack Pill: ⎘ 6 PRs [2..7]
-	assert.Contains(t, view, "⎘ 6 PRs [2..7]")
+	// 2. Stack Pill: ⎘ 6 PRs
+	assert.Contains(t, view, "⎘ 6 PRs")
+	assert.NotContains(t, view, "[2..7]")
 
 	// 3. Root PR title
 	assert.Contains(t, view, "chore: updates to latest go-github")
@@ -135,7 +136,10 @@ func TestModel_Stack_CollapsedRow_MicroRibbonAndDiffRollup(t *testing.T) {
 	// 4. Micro-status ribbon: ● ● ✖ ◌ ○ ○
 	assert.Contains(t, view, "● ● ✖ ◌ ○ ○")
 
-	// 5. Diff roll-up: sum adds = 673+1100+24+1600+422+38 = 3857 -> +3.9k
+	// 5. Micro-CI ribbon: ○ ○ ✖ ◌ ○ ○
+	assert.Contains(t, view, "○ ○ ✖ ◌ ○ ○")
+
+	// 6. Diff roll-up: sum adds = 673+1100+24+1600+422+38 = 3857 -> +3.9k
 	// sum dels = 1100+19+20+474+27+38 = 1678 -> -1.7k
 	assert.Contains(t, view, "+3.9k -1.7k")
 
@@ -282,6 +286,53 @@ func TestModel_Stack_MicroRibbonSpacingRules(t *testing.T) {
 	assert.True(t, strings.HasPrefix(badge, "[ ") && strings.HasSuffix(badge, " ]"))
 }
 
+func TestModel_Stack_MicroCIRibbonSpacingRules(t *testing.T) {
+	t.Parallel()
+
+	// Short stack (1-6 PRs): 1-space padding
+	shortPRs := make([]tui.PRItem, 4)
+	shortPRs[0] = tui.PRItem{CIStatus: tui.CIStatusPassing}
+	shortPRs[1] = tui.PRItem{CIStatus: tui.CIStatusFailed}
+	shortPRs[2] = tui.PRItem{CIStatus: tui.CIStatusRunning}
+	shortPRs[3] = tui.PRItem{CIStatus: tui.CIStatusNone}
+	assert.Equal(t, "✓ ✖ ◌ ○", tui.RenderMicroCIRibbon(shortPRs))
+
+	// Dense stack (7-10 PRs): no space padding
+	densePRs := make([]tui.PRItem, 8)
+	for i := range densePRs {
+		densePRs[i] = tui.PRItem{CIStatus: tui.CIStatusFailed}
+	}
+	assert.Equal(t, "✖✖✖✖✖✖✖✖", tui.RenderMicroCIRibbon(densePRs))
+
+	// Mega stack (>10 PRs): aggregate badge [ 4✓  3✖  2◌  5○ ]
+	megaPRs := make([]tui.PRItem, 14)
+	for i := range 4 {
+		megaPRs[i] = tui.PRItem{CIStatus: tui.CIStatusPassing}
+	}
+	for i := 4; i < 7; i++ {
+		megaPRs[i] = tui.PRItem{CIStatus: tui.CIStatusFailed}
+	}
+	for i := 7; i < 9; i++ {
+		megaPRs[i] = tui.PRItem{CIStatus: tui.CIStatusRunning}
+	}
+	for i := 9; i < 14; i++ {
+		megaPRs[i] = tui.PRItem{CIStatus: tui.CIStatusNone}
+	}
+	badge := tui.RenderMicroCIRibbon(megaPRs)
+	assert.Contains(t, badge, "4✓")
+	assert.Contains(t, badge, "3✖")
+	assert.Contains(t, badge, "2◌")
+	assert.Contains(t, badge, "5○")
+	assert.True(t, strings.HasPrefix(badge, "[ ") && strings.HasSuffix(badge, " ]"))
+
+	// No CI on any PR: returns empty string
+	noCIPRs := make([]tui.PRItem, 3)
+	for i := range noCIPRs {
+		noCIPRs[i] = tui.PRItem{CIStatus: tui.CIStatusNone}
+	}
+	assert.Empty(t, tui.RenderMicroCIRibbon(noCIPRs))
+}
+
 func TestModel_Stack_InteractiveToggle(t *testing.T) {
 	t.Parallel()
 
@@ -319,7 +370,8 @@ func TestModel_Stack_InteractiveToggle(t *testing.T) {
 	)
 
 	// Collapsed by default: shows collapsed stack row
-	assert.Contains(t, m.View(), "⎘ 2 PRs [1..2]")
+	assert.Contains(t, m.View(), "⎘ 2 PRs")
+	assert.NotContains(t, m.View(), "[1..2]")
 	assert.NotContains(t, m.View(), "Alpha child")
 
 	// Press space to expand
@@ -333,6 +385,7 @@ func TestModel_Stack_InteractiveToggle(t *testing.T) {
 	// Press space to collapse
 	mCol, _ := mExp.(tui.Model).Update(tea.KeyMsg{Type: tea.KeySpace})
 	colView := mCol.(tui.Model).View()
-	assert.Contains(t, colView, "⎘ 2 PRs [1..2]")
+	assert.Contains(t, colView, "⎘ 2 PRs")
+	assert.NotContains(t, colView, "[1..2]")
 	assert.NotContains(t, colView, "Alpha child")
 }

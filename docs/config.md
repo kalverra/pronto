@@ -15,9 +15,10 @@ environment variables override file values.
 | -------- | --- | ---- | ------- | -------------- | ----------- |
 | `pr_view` | `PRONTO_PR_VIEW` | string | `"condensed"` | `condensed`, `terminal`, `vscode`, `web`, `custom` | Viewer used to display a pull request. |
 | `pr_view_command` | `PRONTO_PR_VIEW_COMMAND` | string | `""` | `—` | Command template run for pr_view = "custom"; {url} is substituted with the PR URL. |
+| `notifications.mode` | `PRONTO_NOTIFICATIONS_MODE` | string | `"native"` | `terminal`, `native` | Delivery backend for desktop notifications: "native" uses the bundled macOS notification helper (run `pronto notify setup` once), falling back to "terminal" (terminal-notifier/osascript) when the helper isn't installed or authorized. |
 | `notifications.popups` | `PRONTO_NOTIFICATIONS_POPUPS` | bool | true | `—` | Whether desktop notification popups are enabled. |
 | `notifications.sound` | `PRONTO_NOTIFICATIONS_SOUND` | bool | false | `—` | Whether notification sounds are enabled. |
-| `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Audio file paths per notification trigger. |
+| `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | macOS system sound name per notification trigger (e.g. "Glass"); must match a sound under /System/Library/Sounds or ~/Library/Sounds, or "default" for the OS alert sound. |
 | `notifications.images` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Static image paths per notification trigger. |
 | `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Daemon poll interval as a Go duration string, e.g. "30s"; default 60s; minimum 10s. |
 | `server.pprof_addr` | `PRONTO_PPROF_ADDR` | string | `""` | `—` | Loopback address for the net/http/pprof endpoint in `pronto serve`, e.g. "localhost:6060"; empty disables it. |
@@ -40,6 +41,7 @@ Resolution order mirrors internal/logging:
 ```toml
 pr_view = "condensed"
 pr_view_command = ""
+notifications.mode = "native"
 notifications.popups = true
 notifications.sound = false
 [notifications.sounds]

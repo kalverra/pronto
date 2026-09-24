@@ -4,6 +4,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"runtime"
 	"time"
 
 	"github.com/kalverra/pronto/internal/events"
@@ -40,9 +41,11 @@ type Notification struct {
 	CommitOID   string
 	SubmittedAt time.Time
 	ImagePath   string
-	SoundPath   string
-	Title       string
-	Message     string
+	// Sound is a macOS system sound name (e.g. "Glass"), "default" for the OS
+	// default alert sound, or "" for no sound. It is never a file path.
+	Sound   string
+	Title   string
+	Message string
 }
 
 // Notifier defines the interface for delivering notifications to the user.
@@ -69,11 +72,28 @@ func (m MultiNotifier) Notify(ctx context.Context, n Notification) error {
 // PRStatusChecker checks whether a pull request has been merged.
 type PRStatusChecker func(ctx context.Context, repo string, number int) (merged bool, err error)
 
-// ImageResolver resolves an image file path for a notification.
-type ImageResolver func(n Notification) string
+// Assets holds per-trigger image and sound overrides, resolved once from user
+// config and applied to every notification before delivery.
+type Assets struct {
+	Images map[Trigger]string
+	Sounds map[Trigger]string
+}
 
-// SoundResolver resolves an audio file path or sound name for a notification.
-type SoundResolver func(n Notification) string
+// Apply fills n's image and sound from a. An unset or empty image falls back
+// to the trigger's default icon; an unset sound leaves n.Sound untouched
+// (backends decide their own default when a notifier's sound channel is
+// enabled).
+func (a Assets) Apply(n *Notification) {
+	if img := a.Images[n.Trigger]; img != "" {
+		n.ImagePath = img
+	}
+	if n.ImagePath == "" {
+		n.ImagePath = DefaultTriggerImage(*n)
+	}
+	if snd, ok := a.Sounds[n.Trigger]; ok {
+		n.Sound = snd
+	}
+}
 
 // DetectorOption configures a Detector.
 type DetectorOption func(*Detector)
@@ -85,35 +105,11 @@ func WithBotFilter(filter bool) DetectorOption {
 	}
 }
 
-// WithImageResolver configures an image path resolver for notifications.
-func WithImageResolver(resolver ImageResolver) DetectorOption {
+// WithAssets configures the per-trigger image and sound overrides applied to
+// every notification the detector produces.
+func WithAssets(assets Assets) DetectorOption {
 	return func(d *Detector) {
-		d.imageResolver = resolver
-	}
-}
-
-// WithTriggerImages configures static image paths per trigger.
-func WithTriggerImages(images map[Trigger]string) DetectorOption {
-	return func(d *Detector) {
-		d.imageResolver = func(n Notification) string {
-			return images[n.Trigger]
-		}
-	}
-}
-
-// WithSoundResolver configures a sound path resolver for notifications.
-func WithSoundResolver(resolver SoundResolver) DetectorOption {
-	return func(d *Detector) {
-		d.soundResolver = resolver
-	}
-}
-
-// WithTriggerSounds configures static audio file paths per trigger.
-func WithTriggerSounds(sounds map[Trigger]string) DetectorOption {
-	return func(d *Detector) {
-		d.soundResolver = func(n Notification) string {
-			return sounds[n.Trigger]
-		}
+		d.assets = assets
 	}
 }
 
@@ -131,7 +127,34 @@ func WithCheckerParallelism(n int) DetectorOption {
 	}
 }
 
-// NewDefaultNotifier creates the default notifier for the host operating system.
-func NewDefaultNotifier() Notifier {
-	return NewMacNotifier()
+// Options configures how NewNotifier builds a desktop Notifier, decoupled
+// from the config package so notify never imports it.
+type Options struct {
+	// Mode selects the delivery backend: ModeNative or ModeTerminal.
+	Mode string
+	// Sound enables the notifier's sound channel.
+	Sound bool
+}
+
+// NewNotifier returns the desktop notifier for opts.Mode. On macOS, native
+// mode delivers through the bundled helper app and falls back to the
+// terminal backend (terminal-notifier, then osascript) while the helper is
+// missing or not authorized; the returned *FallbackNotifier's Health says
+// why. Elsewhere, and in terminal mode, the terminal backend is used.
+func NewNotifier(opts Options) Notifier {
+	terminal := NewMacNotifier(WithSoundEnabled(opts.Sound))
+	if opts.Mode != ModeNative || runtime.GOOS != "darwin" {
+		return terminal
+	}
+
+	var fallbackOpts []FallbackOption
+	switch NativeHelperState(DiscoverNativeHelper()) {
+	case HelperMissing:
+		fallbackOpts = append(fallbackOpts, WithFallbackReason(ErrHelperNotFound))
+	case HelperStale:
+		fallbackOpts = append(fallbackOpts, WithFallbackAdvisory(ErrHelperStale))
+	case HelperInstalled:
+	}
+	native := NewNativeNotifier(WithNativeSoundEnabled(opts.Sound))
+	return NewFallbackNotifier(native, terminal, fallbackOpts...)
 }

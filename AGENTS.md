@@ -11,23 +11,24 @@ Create an maintain a simple CLI + TUI tool for a clean interface of PR statuses.
 
 ## Layout
 
-| Package              | Role                                                                                                 |
-| -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `cmd/pronto`         | Cobra+fang CLI; bare invocation launches TUI                                                         |
-| `internal/source`    | GitHub GraphQL fetching; `Source` interface is the test seam (`NewFixtureSource`)                    |
-| `internal/model`     | Domain types (Queue, PullRequest, Checks, MergeStatus); JSON-tagged                                  |
-| `internal/score`     | Ranking + explainable breakdowns                                                                     |
-| `internal/tui`       | Bubbletea app                                                                                        |
-| `internal/notify`    | Change detection (`Detector` → Triggers) + desktop notifications                                     |
-| `internal/events`    | Event vocabulary, subscription filters, bus, wire schema                                             |
-| `internal/server`    | NDJSON Unix socket API (`internal/server/server.go`)                                                 |
-| `internal/daemon`    | Single poll loop feeding events + snapshots                                                          |
-| `internal/profiling` | pprof + goroutine leak profile wiring (serve, daemon, TestMains)                                     |
-| `internal/client`    | Socket client used by `watch`/`wait`                                                                 |
-| `internal/cache`     | On-disk JSON cache (`Store` interface)                                                               |
-| `internal/config`    | viper/TOML, env overrides (`PRONTO_*`); `Specs` table is the single source of truth                  |
-| `tools/gendocs`      | `go generate` generator for `docs/{events,config,model}.md` + `internal/events/schema.json`          |
-| `docs/`              | high-level docs on architecture, usage, and design; `events.md`/`config.md`/`model.md` are generated |
+| Package              | Role                                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/pronto`         | Cobra+fang CLI; bare invocation launches TUI                                                                                                             |
+| `internal/source`    | GitHub GraphQL fetching; `Source` interface is the test seam (`NewFixtureSource`)                                                                        |
+| `internal/model`     | Domain types (Queue, PullRequest, Checks, MergeStatus); JSON-tagged                                                                                      |
+| `internal/score`     | Ranking + explainable breakdowns                                                                                                                         |
+| `internal/tui`       | Bubbletea app                                                                                                                                            |
+| `internal/notify`    | Change detection (`Detector` → Triggers) + desktop notifications (native helper default, terminal-notifier/osascript fallback); `nativehelper/` is the Swift `UserNotifications` helper app (guided setup: `pronto notify setup`, dev build: `mise run bundle`) |
+| `internal/events`    | Event vocabulary, subscription filters, bus, wire schema                                                                                                 |
+| `internal/server`    | NDJSON Unix socket API (`internal/server/server.go`)                                                                                                     |
+| `internal/daemon`    | Single poll loop feeding events + snapshots                                                                                                              |
+| `internal/profiling` | pprof + goroutine leak profile wiring (serve, daemon, TestMains)                                                                                         |
+| `internal/client`    | Socket client used by `watch`/`wait`                                                                                                                     |
+| `internal/cache`     | On-disk JSON cache (`Store` interface)                                                                                                                   |
+| `internal/config`    | viper/TOML, env overrides (`PRONTO_*`); `Specs` table is the single source of truth                                                                      |
+| `assets/`            | Embedded brand assets (logo, app icon PNGs → helper `.icns` at install time)                                                                             |
+| `tools/gendocs`      | `go generate` generator for `docs/{events,config,model}.md` + `internal/events/schema.json`                                                              |
+| `docs/`              | high-level docs on architecture, usage, and design; `events.md`/`config.md`/`model.md` are generated                                                     |
 
 ## Dev Commands
 
@@ -46,4 +47,11 @@ mise run race:thorough
 # Regenerate reference docs (docs/events.md, config.md, model.md) and
 # the wire schema (internal/events/schema.json)
 mise run generate
+
+# Guided setup for the native macOS notification helper (Swift; requires
+# Xcode command line tools): build/install, register with LaunchServices,
+# authorize, and send a test banner.
+mise run bundle:install
+mise run bundle:smoke   # post one test notification through native mode
+mise run bundle         # dev build only (build/, no LaunchServices registration)
 ```

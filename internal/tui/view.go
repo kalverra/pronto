@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -21,12 +22,12 @@ var (
 	activeTabStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#ffffff")).
-			Background(lipgloss.Color("#21262d")).
-			Padding(0, 2)
+			Background(lipgloss.Color("#30363d")).
+			Padding(0, 1)
 
 	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("245")).
-				Padding(0, 2)
+				Foreground(lipgloss.Color("#8b949e")).
+				Padding(0, 1)
 
 	tabSeparatorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("238"))
@@ -37,10 +38,11 @@ var (
 
 	selectedRowStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("255"))
+				Foreground(lipgloss.Color("#ffffff"))
 
 	unselectedRowStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("250"))
+				Bold(true).
+				Foreground(lipgloss.Color("#ffffff"))
 
 	authorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("244"))
@@ -135,13 +137,13 @@ var (
 			Foreground(lipgloss.Color("243"))
 
 	diffAddStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#3fb950"))
+			Foreground(lipgloss.Color("#57ab5a"))
 
 	diffDelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#f85149"))
+			Foreground(lipgloss.Color("#c9514c"))
 
 	numStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("141"))
+			Foreground(lipgloss.Color("#6b7280"))
 
 	accentCoral    = lipgloss.Color("#f0883e")
 	accentRed      = lipgloss.Color("#f85149")
@@ -232,11 +234,14 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 		seenInStack[key]++
 
 		if totalInCat <= 1 {
-			prefix := fmt.Sprintf("╶ [%d/%d] ", pr.Stack.Position, pr.Stack.Size)
+			meta := fmt.Sprintf("%s %s",
+				styleStackTag.Render("⎘"),
+				styleRangeTag.Render(fmt.Sprintf("[%d/%d]", pr.Stack.Position, pr.Stack.Size)),
+			)
 			rows = append(rows, displayRow{
 				kind:        rowItem,
 				itemIndex:   idx,
-				stackPrefix: prefix,
+				stackPrefix: meta,
 			})
 			continue
 		}
@@ -254,6 +259,7 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 						Additions: cpr.Additions,
 						Deletions: cpr.Deletions,
 						Status:    DeterminePRStatus(cpr),
+						CIStatus:  DeterminePRCIStatus(cpr),
 						PR:        cpr,
 					}
 				}
@@ -285,6 +291,7 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 					Additions: cpr.Additions,
 					Deletions: cpr.Deletions,
 					Status:    DeterminePRStatus(cpr),
+					CIStatus:  DeterminePRCIStatus(cpr),
 					PR:        cpr,
 				}
 			}
@@ -692,74 +699,11 @@ func (m Model) View() string {
 		scroll := min(max(m.ScrollOffset(), 0), len(displayRows))
 		end := min(len(displayRows), scroll+visRows)
 
-		headers := []string{"", "TITLE", "STATUS", "SIZE", "CI", "UPDATED", "REPO"}
-		if m.activeTab != TabMine {
-			headers = append(headers, "AUTHOR")
-		}
-
-		tbl := table.New().
-			Border(lipgloss.NormalBorder()).
-			BorderStyle(tableBorderStyle).
-			BorderTop(false).
-			BorderBottom(false).
-			BorderLeft(false).
-			BorderRight(false).
-			BorderColumn(false).
-			BorderHeader(true).
-			Headers(headers...).
-			Width(max(20, m.width-4)).
-			Wrap(false)
-
-		visibleRows := displayRows[scroll:end]
-		for _, dRow := range visibleRows {
-			if dRow.kind == rowDivider || dRow.kind == rowStackBanner {
-				dividerCols := make([]string, len(headers))
-				tbl.Row(dividerCols...)
-				continue
-			}
-
-			item := list[dRow.itemIndex]
-			isSelected := dRow.itemIndex == cursor && !m.IsNotificationFocused()
-
-			var rowCols []string
-			switch {
-			case dRow.isCollapsedStack && dRow.stackGroup != nil:
-				rowCols = m.collapsedStackRowCols(dRow.stackGroup, item.PR, isSelected, refTime)
-			case dRow.isChildInStack:
-				rowCols = m.childStackRowCols(dRow, item.PR, isSelected, refTime)
-			default:
-				rowCols = m.itemRowCols(dRow, item.PR, isSelected, refTime)
-			}
-			if m.activeTab != TabMine {
-				rowCols = append(rowCols, renderAuthor(item.PR))
-			}
-			tbl.Row(rowCols...)
-		}
-
-		tbl.StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().Padding(0, 1)
-			if col == 0 {
-				s = s.Padding(0, 0)
-			}
-			if row == table.HeaderRow {
-				return s.Bold(true).Foreground(lipgloss.Color("245"))
-			}
-			return s
-		})
-
-		rendered := tbl.Render()
-		lines := strings.Split(rendered, "\n")
-		tblWidth := 0
-		if len(lines) > 1 {
-			tblWidth = lipgloss.Width(lines[1])
-		}
-		if tblWidth <= 0 {
-			tblWidth = max(20, m.width-4)
-		}
-		m.rewriteSpecialRowLines(lines, visibleRows, list, cursor, tblWidth)
-		b.WriteString(strings.Join(lines, "\n"))
+		tableStr := m.renderPRTable(list, displayRows, scroll, end, cursor, refTime)
+		b.WriteString(tableStr)
 		b.WriteString("\n")
 
+		visibleRows := displayRows[scroll:end]
 		if len(displayRows) > visRows {
 			shown := 0
 			for _, dRow := range visibleRows {
@@ -787,6 +731,248 @@ func (m Model) View() string {
 	b.WriteString("\n")
 
 	return appStyle.Render(b.String())
+}
+
+// renderPRTable renders the PR list table with left-aligned columns and progressive width budgeting.
+func (m Model) renderPRTable(
+	list []score.Scored,
+	displayRows []displayRow,
+	scroll, end, cursor int,
+	refTime time.Time,
+) string {
+	headers := []string{"", "TITLE", "STATUS", "SIZE", "CI", "UPDATED", "REPO"}
+	hasAuthor := m.activeTab != TabMine
+	if hasAuthor {
+		headers = append(headers, "AUTHOR")
+	}
+
+	visibleRows := displayRows[scroll:end]
+	maxNumWidth := 0
+	maxStackWidth := 0
+	for _, dRow := range displayRows {
+		if dRow.kind != rowItem || dRow.isChildInStack {
+			continue
+		}
+		pr := list[dRow.itemIndex].PR
+		numStr := fmt.Sprintf("#%d", pr.Number)
+		if len(numStr) > maxNumWidth {
+			maxNumWidth = len(numStr)
+		}
+
+		if dRow.isCollapsedStack && dRow.stackGroup != nil {
+			stackMeta := formatCollapsedStackMeta(len(dRow.stackGroup.PRs))
+			if w := lipgloss.Width(stackMeta); w > maxStackWidth {
+				maxStackWidth = w
+			}
+		} else if dRow.stackPrefix != "" {
+			if w := lipgloss.Width(dRow.stackPrefix); w > maxStackWidth {
+				maxStackWidth = w
+			}
+		}
+	}
+
+	var rows [][]string
+	for _, dRow := range visibleRows {
+		if dRow.kind == rowDivider || dRow.kind == rowStackBanner {
+			rows = append(rows, make([]string, len(headers)))
+			continue
+		}
+
+		item := list[dRow.itemIndex]
+		isSelected := dRow.itemIndex == cursor && !m.IsNotificationFocused()
+
+		var rowCols []string
+		switch {
+		case dRow.isCollapsedStack && dRow.stackGroup != nil:
+			rowCols = m.collapsedStackRowCols(dRow.stackGroup, item.PR, isSelected, refTime, maxNumWidth, maxStackWidth)
+		case dRow.isChildInStack:
+			rowCols = m.childStackRowCols(dRow, item.PR, isSelected, refTime)
+		default:
+			rowCols = m.itemRowCols(dRow, item.PR, isSelected, refTime, maxNumWidth, maxStackWidth)
+		}
+		if hasAuthor {
+			rowCols = append(rowCols, renderAuthor(item.PR))
+		}
+		rows = append(rows, rowCols)
+	}
+
+	totalWidth := max(20, m.width-4)
+	cw := computeTableColumnWidths(totalWidth, hasAuthor, rows)
+
+	tbl := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(tableBorderStyle).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderColumn(false).
+		BorderHeader(true).
+		Headers(headers...).
+		Rows(rows...).
+		Wrap(false)
+
+	tbl.StyleFunc(func(row, col int) lipgloss.Style {
+		s := lipgloss.NewStyle().Align(lipgloss.Left)
+		switch col {
+		case 0:
+			s = s.Width(cw.cursor)
+		case 1:
+			s = s.Width(cw.title).Padding(0, 1)
+		case 2:
+			s = s.Width(cw.status).Padding(0, 1)
+		case 3:
+			s = s.Width(cw.size).Padding(0, 1)
+		case 4:
+			s = s.Width(cw.ci).Padding(0, 1)
+		case 5:
+			s = s.Width(cw.updated).Padding(0, 1)
+		case 6:
+			s = s.Width(cw.repo).Padding(0, 1)
+		case 7:
+			s = s.Width(cw.author).Padding(0, 1)
+		}
+		if row == table.HeaderRow {
+			return s.Bold(true).Foreground(lipgloss.Color("245"))
+		}
+		return s
+	})
+
+	rendered := tbl.Render()
+	lines := strings.Split(rendered, "\n")
+	tblWidth := 0
+	if len(lines) > 1 {
+		tblWidth = lipgloss.Width(lines[1])
+	}
+	if tblWidth <= 0 {
+		tblWidth = totalWidth
+	}
+	m.rewriteSpecialRowLines(lines, visibleRows, list, cursor, tblWidth)
+	return strings.Join(lines, "\n")
+}
+
+type tableColumnWidths struct {
+	cursor  int
+	title   int
+	status  int
+	size    int
+	ci      int
+	updated int
+	repo    int
+	author  int
+}
+
+// computeTableColumnWidths dynamically computes column widths for the PR table.
+// It measures the actual content width needed across visible rows, left-aligns,
+// and as screen width decreases, progressively truncates columns
+// while keeping all columns intact and truncating the elastic TITLE column first.
+func computeTableColumnWidths(totalWidth int, hasAuthor bool, rows [][]string) tableColumnWidths {
+	w := tableColumnWidths{
+		cursor:  3,
+		status:  len("STATUS"),
+		size:    len("SIZE"),
+		ci:      len("CI"),
+		updated: len("UPDATED"),
+		repo:    len("REPO"),
+	}
+	if hasAuthor {
+		w.author = len("AUTHOR")
+	}
+
+	for _, r := range rows {
+		if len(r) > 2 {
+			w.status = max(w.status, lipgloss.Width(r[2]))
+		}
+		if len(r) > 3 {
+			w.size = max(w.size, lipgloss.Width(r[3]))
+		}
+		if len(r) > 4 {
+			w.ci = max(w.ci, lipgloss.Width(r[4]))
+		}
+		if len(r) > 5 {
+			w.updated = max(w.updated, lipgloss.Width(r[5]))
+		}
+		if len(r) > 6 {
+			w.repo = max(w.repo, lipgloss.Width(r[6]))
+		}
+		if hasAuthor && len(r) > 7 {
+			w.author = max(w.author, lipgloss.Width(r[7]))
+		}
+	}
+
+	// Add 2 padding for each non-cursor column (1 space padding on left, 1 on right)
+	w.status += 2
+	w.size += 2
+	w.ci += 2
+	w.updated += 2
+	w.repo += 2
+	if hasAuthor {
+		w.author += 2
+	}
+
+	fixedSum := func() int {
+		sum := w.cursor + w.status + w.size + w.ci + w.updated + w.repo
+		if hasAuthor {
+			sum += w.author
+		}
+		return sum
+	}
+
+	availForTitle := totalWidth - fixedSum()
+
+	// If TITLE has at least 20 chars, give all remaining width to TITLE
+	if availForTitle >= 20 {
+		w.title = availForTitle
+		return w
+	}
+
+	// Screen is getting smaller: start progressively truncating metadata columns
+	// to give room to TITLE while keeping all columns visible.
+	deficit := 20 - availForTitle
+
+	// 1. Truncate REPO down to 10
+	if deficit > 0 && w.repo > 10 {
+		shrink := min(deficit, w.repo-10)
+		w.repo -= shrink
+		deficit -= shrink
+	}
+
+	// 2. Truncate CI down to 12
+	if deficit > 0 && w.ci > 12 {
+		shrink := min(deficit, w.ci-12)
+		w.ci -= shrink
+		deficit -= shrink
+	}
+
+	// 3. Truncate AUTHOR down to 11
+	if hasAuthor && deficit > 0 && w.author > 11 {
+		shrink := min(deficit, w.author-11)
+		w.author -= shrink
+		deficit -= shrink
+	}
+
+	// 4. Truncate REPO further down to 8 if very tight
+	if deficit > 0 && w.repo > 8 {
+		shrink := min(deficit, w.repo-8)
+		w.repo -= shrink
+		deficit -= shrink
+	}
+
+	// 5. Truncate CI further down to 8 if very tight
+	if deficit > 0 && w.ci > 8 {
+		shrink := min(deficit, w.ci-8)
+		w.ci -= shrink
+		deficit -= shrink
+	}
+
+	// 6. Truncate STATUS down to 10 if very tight
+	if deficit > 0 && w.status > 10 {
+		shrink := min(deficit, w.status-10)
+		w.status -= shrink
+	}
+
+	w.title = max(10, totalWidth-fixedSum())
+	return w
 }
 
 // rewriteSpecialRowLines replaces the placeholder table lines for category
@@ -822,6 +1008,14 @@ func (m Model) rewriteSpecialRowLines(
 	}
 }
 
+func formatCollapsedStackMeta(count int) string {
+	prCountStr := fmt.Sprintf("%d PRs", count)
+	if count == 1 {
+		prCountStr = "1 PR"
+	}
+	return fmt.Sprintf("%s %s", styleStackTag.Render("⎘"), prCountStr)
+}
+
 // collapsedStackRowCols renders the single collapsed stack row: a micro-status
 // ribbon for the whole stack plus the summed diff roll-up.
 func (m Model) collapsedStackRowCols(
@@ -829,6 +1023,7 @@ func (m Model) collapsedStackRowCols(
 	root model.PullRequest,
 	isSelected bool,
 	refTime time.Time,
+	maxNumWidth, maxStackWidth int,
 ) []string {
 	var prefix string
 	if isSelected {
@@ -843,25 +1038,30 @@ func (m Model) collapsedStackRowCols(
 		totalDels += prItem.Deletions
 	}
 
-	minPos := sg.PRs[0].Index
-	maxPos := sg.PRs[len(sg.PRs)-1].Index
-	rangeStr := fmt.Sprintf("[%d..%d]", minPos, maxPos)
-	stackMeta := fmt.Sprintf("%s %d PRs %s",
-		styleStackTag.Render("⎘"),
-		len(sg.PRs),
-		styleRangeTag.Render(rangeStr),
-	)
+	stackMeta := formatCollapsedStackMeta(len(sg.PRs))
+	padStack := ""
+	if maxStackWidth > lipgloss.Width(stackMeta) {
+		padStack = strings.Repeat(" ", maxStackWidth-lipgloss.Width(stackMeta))
+	}
+	stackPart := stackMeta + padStack
 
 	rootTitle := root.Title
 	if m.isFocused(root) {
 		rootTitle = "★ " + rootTitle
 	}
-	numText := numStyle.Render(fmt.Sprintf("#%d", root.Number))
+
+	numStr := fmt.Sprintf("#%d", root.Number)
+	padNum := ""
+	if maxNumWidth > len(numStr) {
+		padNum = strings.Repeat(" ", maxNumWidth-len(numStr))
+	}
+	numText := numStyle.Render(numStr) + padNum
+
 	titleStyle := unselectedRowStyle
 	if isSelected {
 		titleStyle = selectedRowStyle
 	}
-	titleText := fmt.Sprintf("%s  %s  %s", numText, stackMeta, titleStyle.Render(rootTitle))
+	titleText := fmt.Sprintf("%s  %s  %s", numText, stackPart, titleStyle.Render(rootTitle))
 
 	var updatedText string
 	if !root.UpdatedAt.IsZero() {
@@ -879,7 +1079,7 @@ func (m Model) collapsedStackRowCols(
 		titleText,
 		RenderMicroStatusRibbon(sg.PRs),
 		RenderDiffRollup(totalAdds, totalDels),
-		"",
+		RenderMicroCIRibbon(sg.PRs),
 		updatedText,
 		repoStyle.Render(repo),
 	}
@@ -929,23 +1129,49 @@ func (m Model) childStackRowCols(dRow displayRow, pr model.PullRequest, isSelect
 }
 
 // itemRowCols renders a standard (non-stack, or solo-stack) PR row.
-func (m Model) itemRowCols(dRow displayRow, pr model.PullRequest, isSelected bool, refTime time.Time) []string {
+func (m Model) itemRowCols(
+	dRow displayRow,
+	pr model.PullRequest,
+	isSelected bool,
+	refTime time.Time,
+	maxNumWidth, maxStackWidth int,
+) []string {
 	prefix := "   "
 	if isSelected {
 		prefix = cursorStyle.Render("❯  ")
 	}
 
-	numText := numStyle.Render(fmt.Sprintf("(#%d)", pr.Number))
+	numStr := fmt.Sprintf("#%d", pr.Number)
+	padNum := ""
+	if maxNumWidth > len(numStr) {
+		padNum = strings.Repeat(" ", maxNumWidth-len(numStr))
+	}
+	numText := numStyle.Render(numStr) + padNum
+
 	title := pr.Title
 	if m.isFocused(pr) {
 		title = "★ " + title
 	}
-	fullTitle := dRow.stackPrefix + title
 	titleStyle := unselectedRowStyle
 	if isSelected {
 		titleStyle = selectedRowStyle
 	}
-	titleText := fmt.Sprintf("%s %s", titleStyle.Render(fullTitle), numText)
+
+	var titleText string
+	switch {
+	case dRow.stackPrefix != "":
+		padStack := ""
+		if maxStackWidth > lipgloss.Width(dRow.stackPrefix) {
+			padStack = strings.Repeat(" ", maxStackWidth-lipgloss.Width(dRow.stackPrefix))
+		}
+		stackPart := dRow.stackPrefix + padStack
+		titleText = fmt.Sprintf("%s  %s  %s", numText, stackPart, titleStyle.Render(title))
+	case maxStackWidth > 0:
+		padStack := strings.Repeat(" ", maxStackWidth)
+		titleText = fmt.Sprintf("%s  %s  %s", numText, padStack, titleStyle.Render(title))
+	default:
+		titleText = fmt.Sprintf("%s  %s", numText, titleStyle.Render(title))
+	}
 
 	statusBadge := renderStatusBadge(pr)
 	sizeText := renderDiffSize(pr.Additions, pr.Deletions)
@@ -1012,7 +1238,7 @@ func (m Model) renderTabBar(contentWidth int) string {
 		notifBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#d29922")).Render(alertText)
 	}
 
-	rightHelp := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("[?] Help  [q] Quit")
+	rightHelp := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("[?] Help")
 	rightPart := notifBadge + "  " + sep + "  " + rightHelp
 
 	tabsWidth := lipgloss.Width(tabs)
@@ -1065,6 +1291,32 @@ func (m Model) renderStatusBanner() string {
 		return faintStyle.Render("refreshing…")
 	case m.staleSnapshot:
 		return faintStyle.Render("stale data — refreshing…")
+	case m.notifyHint() != "":
+		return faintStyle.Render(m.notifyHint())
+	default:
+		return ""
+	}
+}
+
+// notifyHint explains a degraded desktop notifier (see
+// notify.FallbackNotifier.Health) and how to fix it, or "" when healthy.
+func (m Model) notifyHint() string {
+	h, ok := m.notifier.(interface{ Health() error })
+	if !ok {
+		return ""
+	}
+	switch err := h.Health(); {
+	case err == nil:
+		return ""
+	case errors.Is(err, notify.ErrDenied):
+		return "🔔 Pronto notifications are off in System Settings > Notifications — using terminal fallback"
+	case errors.Is(err, notify.ErrNotAuthorized):
+		return "🔔 Pronto notifications not authorized — using terminal fallback; run `pronto notify setup`"
+	case errors.Is(err, notify.ErrHelperStale):
+		return "🔔 notification helper out of date — run `pronto notify setup`"
+	case errors.Is(err, notify.ErrHelperNotFound):
+		return "🔔 native notifications not set up — run `pronto notify setup` " +
+			"(or set notifications.mode = \"terminal\")"
 	default:
 		return ""
 	}
@@ -1599,8 +1851,8 @@ func renderAuthor(pr model.PullRequest) string {
 }
 
 func renderDiffSize(additions, deletions int) string {
-	add := diffAddStyle.Render(fmt.Sprintf("+%d", additions))
-	del := diffDelStyle.Render(fmt.Sprintf("-%d", deletions))
+	add := diffAddStyle.Render("+" + FormatDiff(additions))
+	del := diffDelStyle.Render("-" + FormatDiff(deletions))
 	return fmt.Sprintf("%s %s", add, del)
 }
 

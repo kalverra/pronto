@@ -258,43 +258,46 @@ func WithLogger(logger zerolog.Logger) Option {
 type NotifierFactory func(config.NotificationConfig) notify.Notifier
 
 // DefaultNotifierFactory builds a notifier for the configured channels. It
-// returns nil when every channel is disabled, so an empty notifier can never
-// masquerade as a working one.
+// returns nil when popups are disabled, so an empty notifier can never
+// masquerade as a working one. Sound has no separate channel: it is a
+// property of the popup notifier (notifications.sound gates whether it plays
+// a sound alongside the banner it already has to show).
 func DefaultNotifierFactory(cfg config.NotificationConfig) notify.Notifier {
-	var notifiers notify.MultiNotifier
-	if cfg.Popups {
-		notifiers = append(notifiers, notify.NewMacNotifier(notify.WithSoundEnabled(false)))
-	}
-	if cfg.Sound {
-		notifiers = append(notifiers, notify.NewSoundNotifier(notify.NewMacSoundPlayer(), true))
-	}
-	if len(notifiers) == 0 {
+	if !cfg.Popups {
 		return nil
 	}
-	return notifiers
+	return notify.NewNotifier(notify.Options{Mode: cfg.Mode, Sound: cfg.Sound})
+}
+
+// notifyAssets builds the per-trigger image and sound overrides from user
+// notification config, expanding "~" in image paths (sound values are system
+// sound names, never paths).
+func notifyAssets(cfg *config.NotificationConfig) notify.Assets {
+	if cfg == nil {
+		return notify.Assets{}
+	}
+	assets := notify.Assets{}
+	if len(cfg.Images) > 0 {
+		assets.Images = make(map[notify.Trigger]string, len(cfg.Images))
+		for k, v := range cfg.Images {
+			assets.Images[notify.Trigger(k)] = config.ExpandPath(v)
+		}
+	}
+	if len(cfg.Sounds) > 0 {
+		assets.Sounds = make(map[notify.Trigger]string, len(cfg.Sounds))
+		for k, v := range cfg.Sounds {
+			assets.Sounds[notify.Trigger(k)] = v
+		}
+	}
+	return assets
 }
 
 // detectorOptions builds detector options from user notification config.
 func detectorOptions(cfg *config.NotificationConfig) []notify.DetectorOption {
-	opts := []notify.DetectorOption{notify.WithBotFilter(true)}
-	if cfg == nil {
-		return opts
+	return []notify.DetectorOption{
+		notify.WithBotFilter(true),
+		notify.WithAssets(notifyAssets(cfg)),
 	}
-	if len(cfg.Images) > 0 {
-		imgs := make(map[notify.Trigger]string, len(cfg.Images))
-		for k, v := range cfg.Images {
-			imgs[notify.Trigger(k)] = config.ExpandPath(v)
-		}
-		opts = append(opts, notify.WithTriggerImages(imgs))
-	}
-	if len(cfg.Sounds) > 0 {
-		sounds := make(map[notify.Trigger]string, len(cfg.Sounds))
-		for k, v := range cfg.Sounds {
-			sounds[notify.Trigger(k)] = config.ExpandPath(v)
-		}
-		opts = append(opts, notify.WithTriggerSounds(sounds))
-	}
-	return opts
 }
 
 // WithEvents configures an event channel for the model to listen on.
@@ -533,7 +536,10 @@ func New(q model.Queue, opts ...Option) Model {
 			if m.notifCfg != nil {
 				m.notifier = m.notifierFactory(*m.notifCfg)
 			} else {
-				m.notifier = notify.NewDefaultNotifier()
+				// No config loaded: build the notifier from the same defaults
+				// LoadFile would produce (popups on, native with terminal
+				// fallback), so a bare Model still notifies.
+				m.notifier = m.notifierFactory(config.NotificationConfig{Popups: true, Mode: config.NotifyNative})
 			}
 		}
 		if !m.detectionDisabled {
@@ -1232,21 +1238,7 @@ func notificationFromEvent(ev events.Event, cfg *config.NotificationConfig) noti
 		stateText := formatReviewState(state)
 		n.Message = fmt.Sprintf("@%s %s: %q (%s#%d)", author, stateText, ev.Title, ev.Repo, ev.PR)
 	}
-	if cfg != nil {
-		if len(cfg.Images) > 0 {
-			if img, ok := cfg.Images[string(ev.Type)]; ok {
-				n.ImagePath = config.ExpandPath(img)
-			}
-		}
-		if len(cfg.Sounds) > 0 {
-			if snd, ok := cfg.Sounds[string(ev.Type)]; ok {
-				n.SoundPath = config.ExpandPath(snd)
-			}
-		}
-	}
-	if n.ImagePath == "" {
-		n.ImagePath = notify.DefaultTriggerImage(n)
-	}
+	notifyAssets(cfg).Apply(&n)
 	return n
 }
 
@@ -1618,7 +1610,7 @@ func (m Model) statusBannerShown() bool {
 	return m.fetchErr != nil || m.refreshing || m.staleSnapshot ||
 		(m.closeErr != nil && m.closeErrPR != nil) ||
 		m.confirmClosePR != nil || m.closingPR != nil || m.lastClosedPR != nil ||
-		(m.viewErr != nil && m.viewErrPR != nil)
+		(m.viewErr != nil && m.viewErrPR != nil) || m.notifyHint() != ""
 }
 
 func (m Model) removePR(target model.PullRequest) Model {

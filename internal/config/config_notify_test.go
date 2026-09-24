@@ -18,6 +18,7 @@ func TestLoadFile_NotificationsDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.Notifications.Popups, "popups should default to true")
 	assert.False(t, cfg.Notifications.Sound, "sound should default to false")
+	assert.Equal(t, config.NotifyNative, cfg.Notifications.Mode, "mode should default to native")
 	assert.Empty(t, cfg.Notifications.Sounds)
 	assert.Empty(t, cfg.Notifications.Images)
 }
@@ -30,10 +31,35 @@ func TestLoadFile_NotificationsFull(t *testing.T) {
 
 	assert.False(t, cfg.Notifications.Popups)
 	assert.True(t, cfg.Notifications.Sound)
-	assert.Equal(t, "~/sounds/passed.wav", cfg.Notifications.Sounds["ci_passed"])
-	assert.Equal(t, "/System/Library/Sounds/Basso.aiff", cfg.Notifications.Sounds["ci_failed"])
+	assert.Equal(t, config.NotifyNative, cfg.Notifications.Mode)
+	assert.Equal(t, "Glass", cfg.Notifications.Sounds["ci_passed"])
+	assert.Equal(t, "Basso", cfg.Notifications.Sounds["ci_failed"])
 	assert.Equal(t, "/icons/pass.png", cfg.Notifications.Images["ci_passed"])
 	assert.Equal(t, "/icons/fail.png", cfg.Notifications.Images["ci_failed"])
+}
+
+func TestLoadFile_InvalidNotificationSound(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadFile("testdata/invalid_notification_sound.toml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-a-real-sound")
+}
+
+func TestLoadFile_InvalidNotificationMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadFile("testdata/invalid_notification_mode.toml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "notifications.mode")
+}
+
+func TestLoadFile_NotificationModeEnvOverride(t *testing.T) {
+	t.Setenv("PRONTO_NOTIFICATIONS_MODE", config.NotifyNative)
+
+	cfg, err := config.LoadFile("testdata/notifications_defaults.toml")
+	require.NoError(t, err)
+	assert.Equal(t, config.NotifyNative, cfg.Notifications.Mode)
 }
 
 func TestLoadFile_NotificationsPopupsDisabled(t *testing.T) {

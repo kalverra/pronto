@@ -26,6 +26,20 @@ const (
 	StatusDraft
 )
 
+// PRCIStatus represents the CI pipeline status of a PR within a stack.
+type PRCIStatus int
+
+const (
+	// CIStatusNone means no CI checks or pending/neutral.
+	CIStatusNone PRCIStatus = iota
+	// CIStatusPassing means all checks passed.
+	CIStatusPassing
+	// CIStatusFailed means one or more checks failed.
+	CIStatusFailed
+	// CIStatusRunning means checks are currently running.
+	CIStatusRunning
+)
+
 // PRItem represents an item within a pull request stack.
 type PRItem struct {
 	Number    int
@@ -35,6 +49,7 @@ type PRItem struct {
 	Additions int
 	Deletions int
 	Status    PRStatus
+	CIStatus  PRCIStatus
 	UpdatedAt string
 	PR        model.PullRequest
 }
@@ -48,16 +63,16 @@ type StackGroup struct {
 }
 
 var (
-	styleGlyphReview = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5C07B"))
-	styleGlyphFail   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F87"))
-	styleGlyphRun    = lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF"))
-	styleGlyphPass   = lipgloss.NewStyle().Foreground(lipgloss.Color("#98C379"))
-	styleGlyphDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("#5C6370"))
+	styleGlyphReview = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
+	styleGlyphFail   = lipgloss.NewStyle().Foreground(accentRed)
+	styleGlyphRun    = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
+	styleGlyphPass   = lipgloss.NewStyle().Foreground(accentGreen)
+	styleGlyphDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e"))
 
-	styleStackTag = lipgloss.NewStyle().Foreground(lipgloss.Color("#C678DD")).Bold(true)
-	styleRangeTag = lipgloss.NewStyle().Foreground(lipgloss.Color("#5C6370"))
-	styleAdd      = lipgloss.NewStyle().Foreground(lipgloss.Color("#98C379"))
-	styleDel      = lipgloss.NewStyle().Foreground(lipgloss.Color("#E06C75"))
+	styleStackTag = lipgloss.NewStyle().Foreground(accentViolet).Bold(true)
+	styleRangeTag = lipgloss.NewStyle().Foreground(accentCharcoal)
+	styleAdd      = lipgloss.NewStyle().Foreground(lipgloss.Color("#57ab5a"))
+	styleDel      = lipgloss.NewStyle().Foreground(lipgloss.Color("#c9514c"))
 )
 
 // DeterminePRStatus maps a PullRequest to a PRStatus enum.
@@ -163,6 +178,100 @@ func RenderMicroStatusRibbon(prs []PRItem) string {
 	return strings.Join(glyphs, " ")
 }
 
+// DeterminePRCIStatus maps a PullRequest to a PRCIStatus enum.
+func DeterminePRCIStatus(pr model.PullRequest) PRCIStatus {
+	if pr.Checks.IsFailing() || pr.ActionStatus() == model.ActionStatusFailingCI {
+		return CIStatusFailed
+	}
+	if pr.Checks.IsRunning() || pr.ActionStatus() == model.ActionStatusCIRunning {
+		return CIStatusRunning
+	}
+	if pr.Checks.IsPassing() {
+		return CIStatusPassing
+	}
+	return CIStatusNone
+}
+
+// RenderCIGlyph renders the single-character glyph for a PRCIStatus.
+func RenderCIGlyph(st PRCIStatus) string {
+	switch st {
+	case CIStatusFailed:
+		return styleGlyphFail.Render("✖")
+	case CIStatusRunning:
+		return styleGlyphRun.Render("◌")
+	case CIStatusPassing:
+		return styleGlyphPass.Render("✓")
+	default:
+		return styleGlyphDraft.Render("○")
+	}
+}
+
+// RenderMicroCIRibbon renders the ordered micro-status ribbon for CI checks across a stack.
+// Returns an empty string if none of the PRs have any CI checks configured.
+func RenderMicroCIRibbon(prs []PRItem) string {
+	n := len(prs)
+	if n == 0 {
+		return ""
+	}
+
+	ciStatuses := make([]PRCIStatus, n)
+	hasAnyCI := false
+	for i, pr := range prs {
+		st := pr.CIStatus
+		if st == CIStatusNone && (pr.PR.Checks.Total > 0 || pr.PR.Checks.ReqTotal > 0 || pr.PR.Checks.State != "") {
+			st = DeterminePRCIStatus(pr.PR)
+		}
+		ciStatuses[i] = st
+		if st != CIStatusNone {
+			hasAnyCI = true
+		}
+	}
+
+	if !hasAnyCI {
+		return ""
+	}
+
+	if n > 10 {
+		var pass, fail, run, none int
+		for _, st := range ciStatuses {
+			switch st {
+			case CIStatusPassing:
+				pass++
+			case CIStatusFailed:
+				fail++
+			case CIStatusRunning:
+				run++
+			case CIStatusNone:
+				none++
+			}
+		}
+		var parts []string
+		if pass > 0 {
+			parts = append(parts, fmt.Sprintf("%d%s", pass, styleGlyphPass.Render("✓")))
+		}
+		if fail > 0 {
+			parts = append(parts, fmt.Sprintf("%d%s", fail, styleGlyphFail.Render("✖")))
+		}
+		if run > 0 {
+			parts = append(parts, fmt.Sprintf("%d%s", run, styleGlyphRun.Render("◌")))
+		}
+		if none > 0 {
+			parts = append(parts, fmt.Sprintf("%d%s", none, styleGlyphDraft.Render("○")))
+		}
+		return fmt.Sprintf("[ %s ]", strings.Join(parts, "  "))
+	}
+
+	glyphs := make([]string, n)
+	for i, st := range ciStatuses {
+		glyphs[i] = RenderCIGlyph(st)
+	}
+
+	if n > 6 {
+		return strings.Join(glyphs, "")
+	}
+	return strings.Join(glyphs, " ")
+}
+
 // FormatDiff formats diff line counts into compact human-readable strings (e.g. 673 -> 673, 3900 -> 3.9k).
 func FormatDiff(n int) string {
 	if n >= 1000 {
@@ -182,9 +291,9 @@ func RenderDiffRollup(totalAdds, totalDels int) string {
 func renderStackBanner(rootPR model.PullRequest, prs []PRItem, isSelected bool, width int) string {
 	var toggle string
 	if isSelected {
-		toggle = cursorStyle.Render("❯ ▾ ")
+		toggle = cursorStyle.Render("❯ ") + faintStyle.Render("▾ ") + " "
 	} else {
-		toggle = faintStyle.Render("  ▾ ")
+		toggle = "  " + faintStyle.Render("▾ ") + " "
 	}
 
 	num := numStyle.Render(fmt.Sprintf("#%d", rootPR.Number))

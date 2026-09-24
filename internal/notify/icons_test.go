@@ -14,49 +14,53 @@ import (
 	"github.com/kalverra/pronto/internal/notify"
 )
 
-func TestDefaultTriggerImages_MappedTriggers(t *testing.T) {
+func TestDefaultTriggerImage_MappedTriggers(t *testing.T) {
 	t.Parallel()
 
-	images := notify.DefaultTriggerImages()
-
-	assert.Equal(t, "conflict.png", filepath.Base(images[notify.TriggerConflict]))
-	assert.Equal(t, "merged.png", filepath.Base(images[notify.TriggerPRMerged]))
-	assert.Equal(t, "ci-failed.png", filepath.Base(images[notify.TriggerCIFailed]))
-	assert.Equal(t, "ci-passed.png", filepath.Base(images[notify.TriggerCIPassed]))
+	assert.Equal(
+		t,
+		"conflict.png",
+		filepath.Base(notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerConflict})),
+	)
+	assert.Equal(
+		t,
+		"merged.png",
+		filepath.Base(notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerPRMerged})),
+	)
+	assert.Equal(
+		t,
+		"ci-failed.png",
+		filepath.Base(notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIFailed})),
+	)
+	assert.Equal(
+		t,
+		"ci-passed.png",
+		filepath.Base(notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIPassed})),
+	)
 }
 
-func TestDefaultTriggerImages_UnmappedTriggers(t *testing.T) {
+func TestDefaultTriggerImage_ExtractedFileExists(t *testing.T) {
 	t.Parallel()
 
-	images := notify.DefaultTriggerImages()
+	path := notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIPassed})
+	require.NotEmpty(t, path)
 
-	assert.Empty(t, images[notify.TriggerReviewReceived])
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Size(), "must not be an empty file")
+
+	// #nosec G304 -- path comes from DefaultTriggerImage, a controlled cache dir.
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(data), 4)
+	assert.Equal(t, []byte{0x89, 'P', 'N', 'G'}, data[:4], "must be a PNG")
 }
 
-func TestDefaultTriggerImages_ExtractedFilesExist(t *testing.T) {
+func TestDefaultTriggerImage_StablePath(t *testing.T) {
 	t.Parallel()
 
-	images := notify.DefaultTriggerImages()
-	require.NotEmpty(t, images)
-
-	for trigger, path := range images {
-		info, err := os.Stat(path)
-		require.NoError(t, err, "trigger %s", trigger)
-		assert.NotZero(t, info.Size(), "trigger %s must not be an empty file", trigger)
-
-		// #nosec G304 -- path comes from DefaultTriggerImages, a controlled cache dir.
-		data, err := os.ReadFile(path)
-		require.NoError(t, err, "trigger %s", trigger)
-		require.GreaterOrEqual(t, len(data), 4, "trigger %s", trigger)
-		assert.Equal(t, []byte{0x89, 'P', 'N', 'G'}, data[:4], "trigger %s must be a PNG", trigger)
-	}
-}
-
-func TestDefaultTriggerImages_StablePaths(t *testing.T) {
-	t.Parallel()
-
-	first := notify.DefaultTriggerImages()
-	second := notify.DefaultTriggerImages()
+	first := notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIPassed})
+	second := notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIPassed})
 
 	assert.Equal(t, first, second)
 }
@@ -118,14 +122,18 @@ func TestDetector_DefaultIcon_Fallback(t *testing.T) {
 	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prevPR}, []model.PullRequest{currPR})
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
-	assert.Equal(t, notify.DefaultTriggerImages()[notify.TriggerCIFailed], notes[0].ImagePath)
+	assert.Equal(
+		t,
+		notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIFailed}),
+		notes[0].ImagePath,
+	)
 }
 
 func TestDetector_UserImageOverridesDefaultIcon(t *testing.T) {
 	t.Parallel()
 
 	images := map[notify.Trigger]string{notify.TriggerCIFailed: "/custom/fail.png"}
-	d := notify.NewDetector(nil, notify.WithTriggerImages(images))
+	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Images: images}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -151,7 +159,7 @@ func TestDetector_UserImagePartial_KeepsDefaultsForOthers(t *testing.T) {
 	t.Parallel()
 
 	images := map[notify.Trigger]string{notify.TriggerCIPassed: "/custom/pass.png"}
-	d := notify.NewDetector(nil, notify.WithTriggerImages(images))
+	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Images: images}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -170,7 +178,11 @@ func TestDetector_UserImagePartial_KeepsDefaultsForOthers(t *testing.T) {
 	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prevPR}, []model.PullRequest{currPR})
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
-	assert.Equal(t, notify.DefaultTriggerImages()[notify.TriggerCIFailed], notes[0].ImagePath)
+	assert.Equal(
+		t,
+		notify.DefaultTriggerImage(notify.Notification{Trigger: notify.TriggerCIFailed}),
+		notes[0].ImagePath,
+	)
 }
 
 func TestDefaultTriggerImage(t *testing.T) {

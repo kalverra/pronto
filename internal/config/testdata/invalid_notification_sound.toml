@@ -1,0 +1,4 @@
+pr_view = "terminal"
+
+[notifications.sounds]
+ci_passed = "not-a-real-sound"

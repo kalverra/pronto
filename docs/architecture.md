@@ -48,16 +48,20 @@ Key interactions and focus behaviors:
   session restarts. Closed or removed PRs are automatically pruned from the
   active focus set.
 - **Stack folding (`space`/`e`, `E`)**: PRs sharing a stack (branch
-  dependency chain) collapse by default into a single table row: the root
-  PR's title plus a stack pill (`⎘ 6 PRs [2..7]`), an ordered micro-status
-  ribbon — one colored glyph per PR in the stack (`●` review, `✖` CI
-  failing, `◌` CI running, `✓` passing, `○` draft; packed tight at 7–10 PRs,
-  an aggregate badge above 10) — and the summed diff roll-up. `space` toggles
-  the fold under the cursor: the row becomes a full-width banner and children
-  indent beneath it with tree connectors (`├─ #709 [2/7]`). A stack renders
-  in the most-urgent category of its members, so draft children stay visible
-  in the collapsed roll-up (`score.Rank` keeps stack drafts even though it
-  excludes standalone drafts from the inbox).
+  dependency chain) collapse by default into a single table row. All PRs
+  display `#<number>` at the start of the title column followed by any stack
+  metadata (`⎘ 6 PRs` for collapsed stacks, `⎘ [pos/size]` for singleton
+  stack members in a section) and the PR title, aligning PR numbers and the
+  start of PR titles neatly across stacked and standalone items. Collapsed stacks include
+  ordered micro-status ribbons for both general review status in the STATUS
+  column and CI check states in the CI column (`✓` passing, `✖` failing, `◌`
+  running, `○` neutral/none; packed tight at 7–10 PRs, an aggregate badge above 10)
+  — and the summed diff roll-up.
+  `space` toggles the fold under the cursor: the row becomes a full-width banner
+  and children indent beneath it with tree connectors (`├─ #709 [2/7]`). A stack
+  renders in the most-urgent category of its members, so draft children stay
+  visible in the collapsed roll-up (`score.Rank` keeps stack drafts even though
+  it excludes standalone drafts from the inbox).
 
 ### Architecture
 
@@ -211,6 +215,78 @@ URI), `web`, or `custom` (user command template). Diff viewing was removed —
 the `o` key opens the PR in the browser, whose `/files` tab is the diff view;
 `gh`-based diffing and local materialization never matched the real estate
 they cost.
+
+### Notifications
+
+`internal/notify` detects what changed (`Detector` → triggers) and delivers
+desktop notifications through a `Notifier` interface. The TUI wires the
+detector to the notifier built by its factory (`tui.DefaultNotifierFactory`)
+from `notifications.*` config; `notify.NewNotifier(notify.Options{Mode, Sound})`
+is the single constructor both the TUI and `cmd/pronto` use, so the config
+package never has to duplicate backend-selection logic.
+
+Two delivery backends, selected by `notifications.mode` (default `native`):
+
+- **native** — `NativeNotifier` spawns the bundled Swift helper app
+  (`ProntoNotify.app`, source in `internal/notify/nativehelper`) which posts
+  through the `UserNotifications` framework: Pronto-branded banners, click to
+  open the PR (no action buttons), thread grouping per PR, and image
+  attachments. Clicks relaunch the helper with empty stdin (responder mode),
+  which handles the pending response and exits.
+  The Swift source and Info.plist are embedded in the pronto binary, so any
+  install — source checkout, `go install`, or Homebrew — can build the helper
+  with `pronto notify setup` (needs only the free Xcode command line tools;
+  ad-hoc signed, no Apple Developer account or App Store registration). The
+  bundle carries the pronto app icon, generated from the embedded sizes in
+  `assets/` at install time, and its `CFBundleVersion` is a content hash of
+  the embedded source and icons (`notify.HelperVersion`), so a rebuild with a
+  changed icon is a new version and macOS's notification icon cache
+  (usernoted, keyed by bundle id + version) is forced to refresh instead of
+  serving a stale one. `pronto notify setup` also purges any other
+  LaunchServices registration for the same bundle id, so at most one path is
+  ever registered; dev builds (`mise run bundle`) use a separate bundle id
+  (`notify.DevHelperBundleID`) so they never collide with the installed
+  helper. Only `pronto notify setup` (via the helper's `--authorize`) shows
+  the one-time macOS permission prompt; the poster never prompts, because
+  pronto kills it after the delivery timeout and macOS records a prompt whose
+  requester died as denied. Right after the bundle is re-signed, usernoted
+  briefly rejects the helper and caches that per process, so both delivery
+  (`NativeNotifier`) and setup's authorize step retry by respawning the
+  helper. The Go→Swift payload keys are snake_case and mapped via
+  `CodingKeys`; a test checks every emitted key is decoded. `NewNotifier`
+  wraps native in a `FallbackNotifier` over the terminal backend: when the
+  helper is missing (`ErrHelperNotFound`), not yet authorized (helper exit 3,
+  `ErrNotAuthorized`), or denied (exit 4, `ErrDenied`), banners go through
+  terminal instead, and native is retried every 5 minutes so a mid-session
+  `pronto notify setup` takes effect. Other native errors do not fall back (the
+  banner may already be posted). `FallbackNotifier.Health` reports the reason
+  (or `ErrHelperStale` for an outdated but working helper); the TUI renders it
+  as a status-line hint and `pronto notify --test` says when it used the
+  fallback. Dev bundles display as "Pronto (dev)" in System Settings.
+- **terminal** — `MacNotifier` shells out to `terminal-notifier` with an
+  `osascript` fallback. Zero setup; banners are attributed to the helper
+  binary rather than pronto.
+
+Both backends sanitize notification text (it originates from GitHub), group
+per PR (`pronto-<owner>_<repo>-<number>`), and bound each delivery attempt
+with a timeout so one wedged backend cannot stall the queue. Sound is a
+macOS system sound name (e.g. `"Glass"`, or `"default"` for the OS alert),
+never a file path or `afplay`; it only plays when `notifications.sound` is
+true, and each backend passes it through natively (`-sound` for
+terminal-notifier, `sound name` for osascript, `UNNotificationSound(named:)`
+for native). `notify.SystemSounds()` lists the valid names (macOS's built-in
+sounds plus any under `~/Library/Sounds`); `config.Validate` rejects unknown
+names at load time.
+
+`pronto notify setup` is the guided, idempotent path to native notifications:
+it checks for `swiftc`, builds/installs the helper only if missing or stale
+(comparing `notify.HelperVersion()` against the installed bundle's
+`CFBundleVersion`), registers it with LaunchServices, requests notification
+authorization, and sends a real test banner — each step prints its own
+result so a failure is easy to place. `pronto notify` (no subcommand) prints
+a passive status report: configured backends, the native helper's
+installed/stale/missing state, and (bounded by a short timeout, since it
+runs on every invocation) its current authorization status.
 
 ### Profiling
 

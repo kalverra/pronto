@@ -1,0 +1,4 @@
+pr_view = "terminal"
+
+[notifications]
+mode = "carrier-pigeon"

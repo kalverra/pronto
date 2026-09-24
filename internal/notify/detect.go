@@ -26,8 +26,7 @@ type Detector struct {
 	checkerTimeout     time.Duration
 	checkerParallelism int
 	filterBots         bool
-	imageResolver      ImageResolver
-	soundResolver      SoundResolver
+	assets             Assets
 	seenKeys           map[string]bool
 	pendingChecks      map[model.PRKey]model.PullRequest
 	mu                 sync.Mutex
@@ -108,19 +107,10 @@ func (d *Detector) markCISeen(repo string, num int, oid, state string) bool {
 	return true
 }
 
-func (d *Detector) applyImage(n *Notification) {
-	if d.imageResolver != nil {
-		n.ImagePath = d.imageResolver(*n)
-	}
-	if n.ImagePath == "" {
-		n.ImagePath = defaultTriggerImage(*n)
-	}
-}
-
-func (d *Detector) applySound(n *Notification) {
-	if d.soundResolver != nil {
-		n.SoundPath = d.soundResolver(*n)
-	}
+// applyAssets resolves n's image and sound, falling back to the default
+// trigger icon when neither the caller nor configured assets set one.
+func (d *Detector) applyAssets(n *Notification) {
+	d.assets.Apply(n)
 }
 
 // DetectMineChanges inspects changes to authored pull requests and returns new notifications.
@@ -161,8 +151,7 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 						currPR.Key(),
 					),
 				}
-				d.applyImage(&n)
-				d.applySound(&n)
+				d.applyAssets(&n)
 				results = append(results, n)
 			}
 		}
@@ -186,8 +175,7 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 						currPR.Key(),
 					),
 				}
-				d.applyImage(&n)
-				d.applySound(&n)
+				d.applyAssets(&n)
 				results = append(results, n)
 			}
 		}
@@ -211,8 +199,7 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 						currPR.Key(),
 					),
 				}
-				d.applyImage(&n)
-				d.applySound(&n)
+				d.applyAssets(&n)
 				results = append(results, n)
 			}
 		} else if !currPR.MergeStatus.HasConflict() {
@@ -301,8 +288,7 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 				currPR.Key(),
 			),
 		}
-		d.applyImage(&n)
-		d.applySound(&n)
+		d.applyAssets(&n)
 		results = append(results, n)
 	}
 	return results
@@ -376,8 +362,7 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 						target.pr.Key(),
 					),
 				}
-				d.applyImage(&n)
-				d.applySound(&n)
+				d.applyAssets(&n)
 
 				resMu.Lock()
 				results = append(results, n)

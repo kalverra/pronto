@@ -1,5 +1,7 @@
 # pronto
 
+<img src="assets/logo.png" alt="pronto logo" width="128" align="right">
+
 PR triage dashboard and review queue. Get in the flow of reviewing PRs quickly: prioritize incoming PRs, track authored PR progress, and inspect detailed score breakdowns.
 
 ## Installation
@@ -34,23 +36,35 @@ Download pre-compiled binaries for macOS and Linux from [GitHub Releases](https:
 
 pronto can post desktop notifications when CI finishes, a review lands, a PR hits a merge conflict, or a PR merges.
 
-1. Install [terminal-notifier](https://github.com/julienxx/terminal-notifier) for best experience
-2. Configure notifications in `~/.config/pronto/pronto.toml`:
+By default (`notifications.mode = "native"`) pronto posts through a bundled, ad-hoc signed helper app for Pronto-branded banners, click-to-open PR, and per-PR grouping. Run the guided setup once:
 
-  ```toml
-  [notifications]
-  popups = true
-  sound  = true
-  ```
+```sh
+pronto notify setup
+```
 
-3.Check the setup and send a test notification:
+This builds and installs the helper (needs only the free Xcode command line tools — `xcode-select --install` — no Apple Developer account), registers it with LaunchServices, requests the one-time notification permission, and sends a test banner. It's safe to run again: each step is skipped when already satisfied.
 
-  ```sh
-  pronto notify        # show config, backends, and per-trigger assets
-  pronto notify --test # deliver a test notification through the configured channels
-  ```
+If the helper isn't installed or authorized (or you denied it in System Settings), native mode falls back to terminal delivery and the TUI shows a one-line hint on how to fix it. With `notifications.mode = "terminal"`, pronto always shells out to [terminal-notifier](https://github.com/julienxx/terminal-notifier) (with an `osascript` fallback) — no setup required, but banners are attributed to the helper binary rather than Pronto.
 
-`pronto notify --test` exits non-zero if delivery fails. If it reports `Sent` but no banner appears, macOS suppressed it — allow **terminal-notifier** under System Settings → Notifications, and turn off Focus / Do Not Disturb. Delivery failures during normal runs are recorded in the log:
+Configure notifications in `~/.config/pronto/pronto.toml`:
+
+```toml
+[notifications]
+popups = true
+sound  = true
+
+[notifications.sounds]
+ci_passed = "Glass"   # any macOS system sound name, or "default"
+```
+
+Check the setup and send a test notification:
+
+```sh
+pronto notify        # show config, backends, native helper state, and per-trigger assets
+pronto notify --test # deliver a test notification through the configured channels
+```
+
+`pronto notify --test` exits non-zero if delivery fails. If it reports `Sent` but no banner appears, macOS suppressed it — allow **Pronto** (native mode) or **terminal-notifier** (terminal mode) under System Settings → Notifications, and turn off Focus / Do Not Disturb. Delivery failures during normal runs are recorded in the log:
 
 </details>
 

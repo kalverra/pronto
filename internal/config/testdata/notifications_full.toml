@@ -1,12 +1,13 @@
 pr_view = "terminal"
 
 [notifications]
+mode = "native"
 popups = false
 sound = true
 
 [notifications.sounds]
-ci_passed = "~/sounds/passed.wav"
-ci_failed = "/System/Library/Sounds/Basso.aiff"
+ci_passed = "Glass"
+ci_failed = "Basso"
 
 [notifications.images]
 ci_passed = "/icons/pass.png"

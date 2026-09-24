@@ -489,9 +489,11 @@ func TestModel_NewDefaultColumnsAndBotBadge(t *testing.T) {
 	assert.Contains(t, view, "AUTHOR")
 	assert.NotContains(t, view, " PR ")
 
-	// Title formatted with (number)
-	assert.Contains(t, view, "Add auth middleware (#101)")
-	assert.Contains(t, view, "Automated bump dependencies (#102)")
+	// Title formatted with #number prefix consistently with stacks
+	assert.Contains(t, view, "#101  Add auth middleware")
+	assert.Contains(t, view, "#102  Automated bump dependencies")
+	assert.NotContains(t, view, "Add auth middleware (#101)")
+	assert.NotContains(t, view, "Automated bump dependencies (#102)")
 
 	// Solid pill badges for status
 	assert.Contains(t, view, "CLEAN")
@@ -1401,8 +1403,9 @@ func TestModel_StackGrouping(t *testing.T) {
 	assert.Contains(t, view, "├─ #102 [2/3] Alpha middle endpoint")
 	assert.Contains(t, view, "╰─ #103 [3/3] Alpha top UI")
 
-	// 3. Solo stack member rendered with ╶
-	assert.Contains(t, view, "╶ [2/2] Solo stack PR")
+	// 3. Solo stack member rendered with #number and stack pill ⎘ [2/2]
+	assert.Contains(t, view, "#300  ⎘ [2/2]  Solo stack PR")
+	assert.NotContains(t, view, "╶ [2/2]")
 
 	// 4. Standalone PR does not have tree connector
 	assert.Contains(t, view, "High priority standalone PR")
@@ -1634,7 +1637,8 @@ func TestModel_PRStacks_CollapsedByDefault(t *testing.T) {
 	view := m.View()
 
 	// Bottom PR visible via collapsed stack pill with root title
-	assert.Contains(t, view, "⎘ 3 PRs [1..3]")
+	assert.Contains(t, view, "⎘ 3 PRs")
+	assert.NotContains(t, view, "[1..3]")
 	assert.Contains(t, view, "Alpha base")
 	// Child PRs hidden
 	assert.NotContains(t, view, "Alpha middle")
@@ -1695,7 +1699,8 @@ func TestModel_PRStacks_ToggleExpandAndCollapse(t *testing.T) {
 	)
 
 	// Initial: collapsed
-	assert.Contains(t, m.View(), "⎘ 3 PRs [1..3]")
+	assert.Contains(t, m.View(), "⎘ 3 PRs")
+	assert.NotContains(t, m.View(), "[1..3]")
 
 	// Press space: expands stack
 	mExpanded, _ := sendKey(m, tea.KeySpace)
@@ -1708,7 +1713,8 @@ func TestModel_PRStacks_ToggleExpandAndCollapse(t *testing.T) {
 	// Press space again: collapses stack
 	mCollapsed, _ := sendKey(mExpanded, tea.KeySpace)
 	viewCol := mCollapsed.(tui.Model).View()
-	assert.Contains(t, viewCol, "⎘ 3 PRs [1..3]")
+	assert.Contains(t, viewCol, "⎘ 3 PRs")
+	assert.NotContains(t, viewCol, "[1..3]")
 	assert.NotContains(t, viewCol, "Alpha middle")
 
 	// Press 'e': also expands
@@ -1768,7 +1774,8 @@ func TestModel_PRStacks_ToggleAllKey(t *testing.T) {
 
 	// Initial: both collapsed
 	view := m.View()
-	assert.Contains(t, view, "⎘ 2 PRs [1..2]")
+	assert.Contains(t, view, "⎘ 2 PRs")
+	assert.NotContains(t, view, "[1..2]")
 	assert.Contains(t, view, "Alpha 1")
 	assert.Contains(t, view, "Beta 1")
 	assert.NotContains(t, view, "Alpha 2")
@@ -1787,7 +1794,8 @@ func TestModel_PRStacks_ToggleAllKey(t *testing.T) {
 	// Press 'E' again: collapses all stacks
 	mAllCol, _ := sendRune(mAllExp, 'E')
 	viewAllCol := mAllCol.(tui.Model).View()
-	assert.Contains(t, viewAllCol, "⎘ 2 PRs [1..2]")
+	assert.Contains(t, viewAllCol, "⎘ 2 PRs")
+	assert.NotContains(t, viewAllCol, "[1..2]")
 	assert.Contains(t, viewAllCol, "Alpha 1")
 	assert.Contains(t, viewAllCol, "Beta 1")
 	assert.NotContains(t, viewAllCol, "Alpha 2")

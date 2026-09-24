@@ -1,10 +1,12 @@
 package tui_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/kalverra/pronto/internal/model"
@@ -104,9 +106,10 @@ func TestModel_View_TabBarSeparatorsAndHeaderDivider(t *testing.T) {
 	view := m.View()
 
 	assert.Contains(t, view, "1: Focus (0)")
-	assert.Contains(t, view, "│")
 	assert.Contains(t, view, "2: Mine (0)")
 	assert.Contains(t, view, "3: Inbox (0)")
+	// Modern tab pills without ncurses vertical border lines between tabs
+	assert.NotContains(t, view, "Focus (0)  │  2: Mine")
 }
 
 func TestModel_View_NotificationStatusBadgeAndNoRedundantInfo(t *testing.T) {
@@ -179,10 +182,11 @@ func TestModel_View_ZeroNotificationsHeaderBadgeAndZeroLines(t *testing.T) {
 	m := tui.New(q, tui.WithDimensions(120, 30))
 	view := m.View()
 
-	// Header contains muted 🔔 0 badge
+	// Header contains muted 🔔 0 badge and [?] Help (no duplicate [q] Quit)
 	assert.Contains(t, view, "🔔 0")
-	assert.Contains(t, view, "│")
-	assert.Contains(t, view, "[?] Help  [q] Quit")
+	assert.Contains(t, view, "[?] Help")
+	assert.NotContains(t, view, "[?] Help  [q] Quit")
+	assert.NotContains(t, view, "[q] Quit")
 
 	// Body does not waste lines on 0 notifications
 	assert.NotContains(t, view, "NOTIFICATIONS")
@@ -323,4 +327,209 @@ func TestModel_View_CategoryHeadersLeftAccentAndPills(t *testing.T) {
 	assert.NotContains(t, view, "── ACTION REQUIRED (")
 	assert.NotContains(t, view, "── IN REVIEW (")
 	assert.NotContains(t, view, "── DRAFTS (")
+}
+
+func TestModel_View_SmallWindow_TruncatesTitleAndPreservesColumns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	q := model.Queue{
+		Authored: []model.PullRequest{
+			{
+				Number:            23787,
+				Title:             "chore: bump ci versions and update github actions configurations for repository",
+				RepoName:          "chainlink",
+				RepoNameWithOwner: "smartcontractkit/chainlink",
+				Checks: model.ChecksSummary{
+					Total:  224,
+					Failed: 3,
+					Done:   221,
+				},
+				Additions: 191,
+				Deletions: 203,
+				UpdatedAt: now.Add(-2 * 24 * time.Hour),
+			},
+		},
+	}
+
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(80, 24),
+		tui.WithActiveTab(tui.TabMine),
+	)
+	view := m.View()
+
+	// All column headers must be preserved even in narrow terminal windows
+	assert.Contains(t, view, "TITLE")
+	assert.Contains(t, view, "STATUS")
+	assert.Contains(t, view, "SIZE")
+	assert.Contains(t, view, "CI")
+	assert.Contains(t, view, "UPDATED")
+	assert.Contains(t, view, "REPO")
+
+	// PR data should cleanly show in columns rather than dropping columns
+	assert.Contains(t, view, "+191")
+	assert.Contains(t, view, "2d")
+	assert.Contains(t, view, "chain")
+}
+
+func TestModel_View_ConsistentOrderedPRDisplay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	q := model.Queue{
+		Authored: []model.PullRequest{
+			// 1. Stack of 2 PRs (collapsed by default)
+			{
+				Number:            709,
+				Title:             "updates to latest go-github",
+				RepoName:          "infra-griddle",
+				RepoNameWithOwner: "org/infra-griddle",
+				UpdatedAt:         now.Add(-1 * time.Hour),
+				ReviewDecision:    "CHANGES_REQUESTED",
+				Stack:             &model.PRStack{ID: "STACK_1", Number: 709, Size: 7, Position: 2},
+			},
+			{
+				Number:            710,
+				Title:             "add go-github mock tests",
+				RepoName:          "infra-griddle",
+				RepoNameWithOwner: "org/infra-griddle",
+				UpdatedAt:         now.Add(-2 * time.Hour),
+				ReviewDecision:    "CHANGES_REQUESTED",
+				Stack:             &model.PRStack{ID: "STACK_1", Number: 709, Size: 7, Position: 3},
+			},
+			// 2. Solo PR (not stacked) in same category
+			{
+				Number:            23787,
+				Title:             "bump ci versions",
+				RepoName:          "chainlink",
+				RepoNameWithOwner: "org/chainlink",
+				UpdatedAt:         now.Add(-2 * time.Hour),
+				ReviewDecision:    "CHANGES_REQUESTED",
+			},
+			// 3. Single PR belonging to a stack where only 1 item is in this category
+			{
+				Number:            23505,
+				Title:             "integration-tests",
+				RepoName:          "chainlink",
+				RepoNameWithOwner: "org/chainlink",
+				UpdatedAt:         now.Add(-3 * time.Hour),
+				ReviewDecision:    "CHANGES_REQUESTED",
+				Stack:             &model.PRStack{ID: "STACK_CHAIN", Number: 23498, Size: 14, Position: 13},
+			},
+		},
+	}
+
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(160, 40),
+		tui.WithActiveTab(tui.TabMine),
+	)
+	view := m.View()
+
+	// 1. Collapsed stack: starts with #number, then stack pill ⎘ 2 PRs (consolidated), then title
+	assert.Contains(t, view, "#709")
+	assert.Contains(t, view, "⎘ 2 PRs")
+	assert.NotContains(t, view, "[2..3]")
+	assert.Contains(t, view, "updates to latest go-github")
+
+	// 2. Solo PR: starts with #number, then title; NO parentheses at end
+	assert.Contains(t, view, "#23787")
+	assert.Contains(t, view, "bump ci versions")
+	assert.NotContains(t, view, "bump ci versions (#23787)")
+
+	// 3. Single PR in stack (totalInCat <= 1): starts with #number, then stack pill ⎘ [13/14], then title
+	assert.Contains(t, view, "#23505")
+	assert.Contains(t, view, "⎘ [13/14]")
+	assert.Contains(t, view, "integration-tests")
+	assert.NotContains(t, view, "╶ [13/14]")
+	assert.NotContains(t, view, "integration-tests (#23505)")
+}
+
+func TestModel_View_GutterStrictAlignmentAndBlockerSummary(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	q := model.Queue{
+		Authored: []model.PullRequest{
+			// Stack of 2 PRs, one failing CI -> should state blocker ✖ FAILING CI
+			{
+				Number:            732,
+				Title:             "e2e test coverage",
+				RepoName:          "infra-griddle",
+				RepoNameWithOwner: "org/infra-griddle",
+				UpdatedAt:         now.Add(-1 * time.Hour),
+				Stack:             &model.PRStack{ID: "STACK_1", Number: 732, Size: 2, Position: 1},
+			},
+			{
+				Number:            733,
+				Title:             "fix e2e flaker",
+				RepoName:          "infra-griddle",
+				RepoNameWithOwner: "org/infra-griddle",
+				Checks:            model.ChecksSummary{Total: 5, Failed: 1},
+				UpdatedAt:         now.Add(-1 * time.Hour),
+				Stack:             &model.PRStack{ID: "STACK_1", Number: 732, Size: 2, Position: 2},
+			},
+			// Solo PR with failing CI
+			{
+				Number:            23787,
+				Title:             "bump ci versions",
+				RepoName:          "chainlink",
+				RepoNameWithOwner: "org/chainlink",
+				Checks:            model.ChecksSummary{Total: 10, Failed: 2},
+				UpdatedAt:         now.Add(-2 * time.Hour),
+			},
+		},
+	}
+
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(140, 30),
+		tui.WithActiveTab(tui.TabMine),
+	)
+	view := m.View()
+
+	// 1. Blocker clarity: Solo PR with failing CI states blocker
+	assert.Contains(t, view, "✖ FAILING CI")
+
+	// 2. Strict gutter alignment: find lines for #732 and #23787
+	lines := strings.Split(view, "\n")
+	var line732, line23787 string
+	for _, l := range lines {
+		if strings.Contains(l, "#732") {
+			line732 = l
+		}
+		if strings.Contains(l, "#23787") {
+			line23787 = l
+		}
+	}
+	assert.NotEmpty(t, line732)
+	assert.NotEmpty(t, line23787)
+
+	r732 := []rune(ansi.Strip(line732))
+	r23787 := []rune(ansi.Strip(line23787))
+	idx732 := -1
+	for i := 0; i <= len(r732)-len([]rune("#732")); i++ {
+		if string(r732[i:i+len([]rune("#732"))]) == "#732" {
+			idx732 = i
+			break
+		}
+	}
+	idx23787 := -1
+	for i := 0; i <= len(r23787)-len([]rune("#23787")); i++ {
+		if string(r23787[i:i+len([]rune("#23787"))]) == "#23787" {
+			idx23787 = i
+			break
+		}
+	}
+	assert.Equal(t, idx732, idx23787, "PR numbers must start at the exact same X-coordinate")
+
+	// Stack line has chevron gutter indicator
+	assert.Contains(t, line732, "▸")
 }

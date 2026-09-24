@@ -625,7 +625,7 @@ func TestModel_WithNotificationConfig(t *testing.T) {
 		Popups: false,
 		Sound:  true,
 		Sounds: map[string]string{
-			"ci_passed": "/sounds/passed.wav",
+			"ci_passed": "Glass",
 		},
 		Images: map[string]string{
 			"ci_passed": "/icons/passed.png",
@@ -676,7 +676,7 @@ func TestModel_WithNotificationConfig(t *testing.T) {
 	notifMsg, ok := msg.(tui.NotificationMsg)
 	require.True(t, ok)
 	require.Len(t, notifMsg.Notifications, 1)
-	assert.Equal(t, "/sounds/passed.wav", notifMsg.Notifications[0].SoundPath)
+	assert.Equal(t, "Glass", notifMsg.Notifications[0].Sound)
 	assert.Equal(t, "/icons/passed.png", notifMsg.Notifications[0].ImagePath)
 }
 

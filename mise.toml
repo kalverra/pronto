@@ -56,3 +56,15 @@ run = "golangci-lint run ./... --fix"
 [tasks.generate]
 description = "Run go generate"
 run = "go generate ./..."
+
+[tasks.bundle]
+description = "Build and ad-hoc sign the native macOS notification helper app (dev build, no LaunchServices registration)"
+run = "go run ./cmd/pronto notify setup --output build/ProntoNotify.app --force --no-register --bundle-id com.kalverra.pronto.notifier.dev"
+
+[tasks."bundle:install"]
+description = "Guided setup: install the native notification helper into ~/.local/share/pronto, register it, and authorize"
+run = "go run ./cmd/pronto notify setup"
+
+[tasks."bundle:smoke"]
+description = "Post a test notification through the installed native helper"
+run = "PRONTO_NOTIFICATIONS_MODE=native go run ./cmd/pronto notify --test"

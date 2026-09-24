@@ -38,21 +38,6 @@ var iconCacheDir string
 // extractIconsOnce guards the one-time extraction of embedded icons.
 var extractIconsOnce sync.Once
 
-// DefaultTriggerImages returns per-trigger icon file paths for notifications.
-// The embedded icons are extracted to a cache directory on first call; paths
-// are empty for triggers without a default icon or if extraction fails.
-func DefaultTriggerImages() map[Trigger]string {
-	extractIconsOnce.Do(extractIcons)
-	if iconCacheDir == "" {
-		return map[Trigger]string{}
-	}
-	images := make(map[Trigger]string, len(defaultTriggerImages))
-	for trigger, icon := range defaultTriggerImages {
-		images[trigger] = filepath.Join(iconCacheDir, filepath.Base(icon))
-	}
-	return images
-}
-
 // DefaultTriggerImage resolves the default icon path for a notification.
 func DefaultTriggerImage(n Notification) string {
 	extractIconsOnce.Do(extractIcons)
@@ -71,11 +56,6 @@ func DefaultTriggerImage(n Notification) string {
 		return ""
 	}
 	return filepath.Join(iconCacheDir, filepath.Base(icon))
-}
-
-// defaultTriggerImage resolves the default icon path for a notification.
-func defaultTriggerImage(n Notification) string {
-	return DefaultTriggerImage(n)
 }
 
 // extractIcons writes embedded icons to a cache directory, replacing the
