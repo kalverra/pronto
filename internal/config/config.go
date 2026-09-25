@@ -1,4 +1,5 @@
-// Package config manages configuration for pronto, including PR view preferences.
+// Package config manages user preferences for pronto, including PR view style,
+// desktop notifications, auto-focus rules, and daemon server settings.
 package config
 
 import (
@@ -23,6 +24,16 @@ const (
 	ViewCustom    = "custom"
 )
 
+// Supported PR groups for desktop notifications.
+const (
+	GroupFocus = "focus"
+	GroupMine  = "mine"
+	GroupInbox = "inbox"
+)
+
+// ValidNotificationGroups lists supported PR groups for desktop notifications.
+var ValidNotificationGroups = []string{GroupFocus, GroupMine, GroupInbox}
+
 // Supported desktop notification delivery modes. Vocabulary is owned by the
 // notify package; these aliases exist for configuration ergonomics.
 const (
@@ -38,8 +49,19 @@ type NotificationConfig struct {
 	Mode   string            `json:"mode"   mapstructure:"mode"   toml:"mode"`
 	Popups bool              `json:"popups" mapstructure:"popups" toml:"popups"`
 	Sound  bool              `json:"sound"  mapstructure:"sound"  toml:"sound"`
+	Groups []string          `json:"groups" mapstructure:"groups" toml:"groups"`
 	Sounds map[string]string `json:"sounds" mapstructure:"sounds" toml:"sounds"`
 	Images map[string]string `json:"images" mapstructure:"images" toml:"images"`
+}
+
+// HasGroup reports whether desktop notifications are enabled for the specified PR group.
+func (n NotificationConfig) HasGroup(group string) bool {
+	for _, g := range n.Groups {
+		if strings.EqualFold(g, group) {
+			return true
+		}
+	}
+	return false
 }
 
 // ServerConfig specifies configuration for the daemon socket API.
@@ -54,6 +76,7 @@ type Config struct {
 	PRView        string             `json:"pr_view"         mapstructure:"pr_view"         toml:"pr_view"`
 	PRViewCommand string             `json:"pr_view_command" mapstructure:"pr_view_command" toml:"pr_view_command"`
 	Notifications NotificationConfig `json:"notifications"   mapstructure:"notifications"   toml:"notifications"`
+	Focus         FocusConfig        `json:"focus"           mapstructure:"focus"           toml:"focus"`
 	Server        ServerConfig       `json:"server"          mapstructure:"server"          toml:"server"`
 }
 
@@ -108,6 +131,18 @@ func (c *Config) Validate() error {
 	}
 	if !validValue(spec("notifications.mode").Valid, c.Notifications.Mode) {
 		return fmt.Errorf("unknown notifications.mode: %q", c.Notifications.Mode)
+	}
+	if len(c.Notifications.Groups) == 0 {
+		c.Notifications.Groups = []string{GroupFocus, GroupMine}
+	}
+	for _, g := range c.Notifications.Groups {
+		if !validValue(ValidNotificationGroups, g) {
+			return fmt.Errorf(
+				"unknown notification group: %q; valid groups: %s",
+				g,
+				strings.Join(ValidNotificationGroups, ", "),
+			)
+		}
 	}
 	for trigger, sound := range c.Notifications.Sounds {
 		if !validValue(spec("notifications.sounds").Valid, trigger) {
@@ -170,6 +205,10 @@ func LoadFile(path string) (Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config file %q: %w", path, err)
+	}
+
+	if cfg.Focus.IsEmpty() && v.IsSet("auto_focus") {
+		_ = v.UnmarshalKey("auto_focus", &cfg.Focus)
 	}
 
 	if err := cfg.Validate(); err != nil {

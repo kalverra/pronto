@@ -103,16 +103,18 @@ func newServeCmd(src source.Source) *cobra.Command {
 			}
 
 			d := daemon.New(daemon.Options{
-				Source:            s,
-				Store:             store,
-				Checker:           notify.DefaultPRStatusChecker,
-				Interval:          pollInterval,
-				LeakCheckInterval: leakInterval,
-				LeakChecker:       profiling.RuntimeLeakChecker{},
-				LeakDumpDir:       leakDumpDir,
-				SocketPath:        socketPath,
-				Version:           version,
-				Logger:            logger,
+				Source:             s,
+				Store:              store,
+				Checker:            notify.DefaultPRStatusChecker,
+				Interval:           pollInterval,
+				LeakCheckInterval:  leakInterval,
+				LeakChecker:        profiling.RuntimeLeakChecker{},
+				LeakDumpDir:        leakDumpDir,
+				SocketPath:         socketPath,
+				Version:            version,
+				Logger:             logger,
+				NotificationConfig: cfg.Notifications,
+				FocusConfig:        cfg.Focus,
 			})
 			return d.Run(cmd.Context())
 		},

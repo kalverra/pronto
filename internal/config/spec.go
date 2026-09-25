@@ -69,6 +69,14 @@ var Specs = []KeySpec{
 		Doc:     "Whether notification sounds are enabled.",
 	},
 	{
+		Key:     "notifications.groups",
+		Env:     "PRONTO_NOTIFICATIONS_GROUPS",
+		Type:    "[]string",
+		Default: []string{GroupFocus, GroupMine},
+		Valid:   ValidNotificationGroups,
+		Doc:     "PR groups that trigger desktop notifications: \"focus\", \"mine\", \"inbox\".",
+	},
+	{
 		Key:   "notifications.sounds",
 		Type:  "map[trigger]string",
 		Valid: events.TriggerStrings(),
@@ -80,6 +88,25 @@ var Specs = []KeySpec{
 		Type:  "map[trigger]string",
 		Valid: events.TriggerStrings(),
 		Doc:   "Static image paths per notification trigger.",
+	},
+	{
+		Key:     "focus.authors",
+		Env:     "PRONTO_FOCUS_AUTHORS",
+		Type:    "[]string",
+		Default: []string{},
+		Doc:     "PR authors whose pull requests should automatically be focused.",
+	},
+	{
+		Key:     "focus.repos",
+		Env:     "PRONTO_FOCUS_REPOS",
+		Type:    "[]string",
+		Default: []string{},
+		Doc:     "Repositories whose pull requests should automatically be focused.",
+	},
+	{
+		Key:  "focus.rules",
+		Type: "[]rule",
+		Doc:  "Fine-grained auto-focus rules matching PRs by repo, keywords, files, directories, or authors.",
 	},
 	{
 		Key:  "server.poll_interval",

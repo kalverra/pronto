@@ -125,11 +125,13 @@ func TestModel_View_PRNumbersAndTitlesAlignmentAndConsolidatedStack(t *testing.T
 
 	view := m.View()
 
-	// 1. Collapsed stack must consolidate data: show how big stack is, NO [n..n+x]
-	assert.Contains(t, view, "[STACK] 4 PRs")
+	// 1. Collapsed stack and singleton must show [n/x] indicator, NO [STACK] badge
+	assert.Contains(t, view, "[4/7]")
+	assert.Contains(t, view, "[1/4]")
+	assert.Contains(t, view, "[3/3]")
+	assert.NotContains(t, view, "[STACK]")
 	assert.NotContains(t, view, "[4..7]")
 	assert.NotContains(t, view, "[1..4]")
-	assert.Contains(t, view, "[STACK] [3/3]")
 
 	// 2. Alignment: PR numbers and titles must align neatly across rows
 	lines := strings.Split(view, "\n")

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kalverra/pronto/internal/cache"
+	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
@@ -950,4 +951,32 @@ func TestDaemon_Run_ReturnsEarlyOnOccupiedSocket(t *testing.T) {
 		err,
 	)
 	assert.Less(t, duration, 1*time.Second, "Run must return early without waiting for refresh")
+}
+
+func TestDaemon_NotificationGroups_InboxAndFocus(t *testing.T) {
+	t.Parallel()
+
+	// 1. When groups includes "inbox", changes on inbox PR emit notification events.
+	inboxRunning := pr(101, "Colleague Feature", "kalverra/pronto")
+	inboxRunning.Author = "colleague"
+	inboxRunning.Checks = runningChecks()
+	inboxFailed := inboxRunning
+	inboxFailed.Checks = failedChecks()
+
+	src := &scriptedSource{results: []fetchResult{
+		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{inboxRunning}}},
+		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{inboxFailed}}},
+	}}
+
+	bus := runDaemon(t, daemon.Options{
+		Source: src,
+		NotificationConfig: config.NotificationConfig{
+			Groups: []string{config.GroupInbox},
+		},
+	})
+	c := collect(t, bus)
+
+	ev := c.waitFor(t, events.TypeCIFailed)
+	assert.Equal(t, 101, ev.PR)
+	assert.Equal(t, "Colleague Feature", ev.Title)
 }

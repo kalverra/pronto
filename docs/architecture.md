@@ -40,8 +40,10 @@ Key interactions and focus behaviors:
 
 - **Tab switching**: `1`/`2`/`3` jump directly to tabs; `tab` and `shift+tab`
   cycle forward and backward.
-- **Focus toggling (`f`)**: Toggles focus mode for the selected PR. Focused PRs
-  display a `★ ` prefix in their title and pin to the top of their respective
+- **Focus toggling (`f`) & auto-focus rules**: Toggles focus mode for the selected PR.
+  In addition to manual focus, PRs can be automatically focused via `[focus]` config rules
+  matching by author, repository, and per-repo keywords, files, or directories. Focused PRs
+  display a `★` indicator directly after the selector arrow position and pin to the top of their respective
   category sections in Mine and Inbox views.
 - **Persistence**: Focused PR keys (`model.PRKey`) are saved to `focus.json`
   via `cache.Store` on change and reloaded on startup so focus state survives
@@ -50,8 +52,8 @@ Key interactions and focus behaviors:
 - **Stack folding (`space`/`e`, `E`)**: PRs sharing a stack (branch
   dependency chain) collapse by default into a single table row. All PRs
   display `#<number>` at the start of the title column followed by any stack
-  metadata (`[STACK] 6 PRs` for collapsed stacks, `[STACK] [pos/size]` for singleton
-  stack members in a section) and the PR title, aligning PR numbers and the
+  metadata (`[pos/size]` indicator for collapsed stacks and singleton stack
+  members in a section) and the PR title, aligning PR numbers and the
   start of PR titles neatly across stacked and standalone items. Collapsed stacks include
   ordered micro-status ribbons for both general review status in the STATUS
   column and CI check states in the CI column (`✓` passing, `✖` failing, `◌`
@@ -149,7 +151,7 @@ sequenceDiagram
     else fetch ok
         S-->>L: model.Queue
         Note over L: first fetch seeds the detector<br/>(baseline, no events)
-        L->>D: DetectMineChanges(prev, curr)
+        L->>D: DetectChanges(prev, curr)
         D-->>L: notifications (ci_passed, ci_failed,<br/>conflict, review_received, pr_merged)
         L->>L: set-diff prev vs curr (pr_added, pr_removed)
         L->>B: Emit events (seq assigned, UTC ts)

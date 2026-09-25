@@ -144,8 +144,8 @@ func TestSelectionPop_StylesApplied(t *testing.T) {
 	assert.Equal(t, ansi.Strip(diffSel), ansi.Strip(diffUnsel))
 
 	// 3. Stack meta tag: selected is bold
-	metaSel := formatCollapsedStackMeta(3, true)
-	metaUnsel := formatCollapsedStackMeta(3, false)
+	metaSel := formatCollapsedStackMeta(model.PullRequest{Stack: &model.PRStack{Position: 1, Size: 3}}, true)
+	metaUnsel := formatCollapsedStackMeta(model.PullRequest{Stack: &model.PRStack{Position: 1, Size: 3}}, false)
 	assert.Equal(t, ansi.Strip(metaSel), ansi.Strip(metaUnsel))
 
 	// 4. Author rendering: selected author style is bold

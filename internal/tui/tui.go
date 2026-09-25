@@ -42,29 +42,31 @@ const (
 
 // Model represents the pronto Bubbletea terminal interface.
 type Model struct {
-	queue        model.Queue
-	viewer       string
-	teams        []string
-	now          time.Time
-	nowInjected  bool
-	weights      score.Weights
-	index        score.ExpertiseIndex
-	width        int
-	height       int
-	activeTab    Tab
-	cursorFocus  int
-	cursorMine   int
-	cursorInbox  int
-	scrollFocus  int
-	scrollMine   int
-	scrollInbox  int
-	modalOpen    bool
-	detailsOpen  bool
-	focusedKeys  map[model.PRKey]bool
-	focusItems   []score.Scored
-	inboxItems   []score.Scored
-	mineItems    []score.Scored
-	spinnerFrame int
+	queue           model.Queue
+	viewer          string
+	teams           []string
+	now             time.Time
+	nowInjected     bool
+	weights         score.Weights
+	index           score.ExpertiseIndex
+	width           int
+	height          int
+	activeTab       Tab
+	cursorFocus     int
+	cursorMine      int
+	cursorInbox     int
+	scrollFocus     int
+	scrollMine      int
+	scrollInbox     int
+	modalOpen       bool
+	detailsOpen     bool
+	focusedKeys     map[model.PRKey]bool
+	manualUnfocused map[model.PRKey]bool
+	focusCfg        config.FocusConfig
+	focusItems      []score.Scored
+	inboxItems      []score.Scored
+	mineItems       []score.Scored
+	spinnerFrame    int
 
 	// Refresh machinery; zero-valued for statically constructed models.
 	src                   source.Source
@@ -504,6 +506,13 @@ func WithFocusedPRs(keys []model.PRKey) Option {
 	}
 }
 
+// WithFocusConfig configures auto-focus rules for the TUI model.
+func WithFocusConfig(cfg config.FocusConfig) Option {
+	return func(m *Model) {
+		m.focusCfg = cfg
+	}
+}
+
 // New creates an initialized Model with the given queue and options.
 func New(q model.Queue, opts ...Option) Model {
 	m := Model{
@@ -514,6 +523,7 @@ func New(q model.Queue, opts ...Option) Model {
 		stacksCollapsed: true,
 		expandedStacks:  make(map[string]bool),
 		focusedKeys:     make(map[model.PRKey]bool),
+		manualUnfocused: make(map[model.PRKey]bool),
 		logger:          zerolog.Nop(),
 	}
 
@@ -552,9 +562,13 @@ func New(q model.Queue, opts ...Option) Model {
 		}
 		if !m.detectionDisabled {
 			if m.detector == nil {
-				m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, detectorOptions(m.notifCfg)...)
+				dOpts := detectorOptions(m.notifCfg)
+				if m.viewer != "" {
+					dOpts = append(dOpts, notify.WithViewer(m.viewer))
+				}
+				m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, dOpts...)
 			}
-			m.detector.Seed(q.Authored)
+			m.detector.Seed(m.monitoredPRs(q))
 		}
 	}
 	if m.viewPR == nil {
@@ -620,7 +634,7 @@ func (m Model) rebuildFocusItems() Model {
 		if len(m.focusItems) > 0 {
 			var filtered []score.Scored
 			for _, it := range m.focusItems {
-				if m.focusedKeys[it.PR.Key()] {
+				if m.isFocused(it.PR) {
 					filtered = append(filtered, it)
 				}
 			}
@@ -632,14 +646,14 @@ func (m Model) rebuildFocusItems() Model {
 	seen := make(map[model.PRKey]bool)
 	for _, it := range m.inboxItems {
 		k := it.PR.Key()
-		if m.focusedKeys[k] && !seen[k] {
+		if m.isFocused(it.PR) && !seen[k] {
 			items = append(items, it)
 			seen[k] = true
 		}
 	}
 	for _, it := range m.mineItems {
 		k := it.PR.Key()
-		if m.focusedKeys[k] && !seen[k] {
+		if m.isFocused(it.PR) && !seen[k] {
 			items = append(items, it)
 			seen[k] = true
 		}
@@ -888,19 +902,55 @@ func (m Model) handleToggleFocusKey() (tea.Model, tea.Cmd) {
 	if selected == nil {
 		return m, nil
 	}
-	key := selected.Key()
 	newKeys := make(map[model.PRKey]bool, len(m.focusedKeys))
 	for k, v := range m.focusedKeys {
 		if v {
 			newKeys[k] = true
 		}
 	}
-	if newKeys[key] {
-		delete(newKeys, key)
-	} else {
-		newKeys[key] = true
+	newUnfocused := make(map[model.PRKey]bool, len(m.manualUnfocused))
+	for k, v := range m.manualUnfocused {
+		if v {
+			newUnfocused[k] = true
+		}
 	}
+
+	if _, isCollapsed := m.isCurrentRowCollapsedStack(); isCollapsed && selected.IsPartOfStack() {
+		stackKeys := m.stackPRKeys(selected.StackKey())
+		if len(stackKeys) == 0 {
+			stackKeys = []model.PRKey{selected.Key()}
+		}
+		allFocused := true
+		for _, k := range stackKeys {
+			if !m.IsFocused(k) {
+				allFocused = false
+				break
+			}
+		}
+		if allFocused {
+			for _, k := range stackKeys {
+				delete(newKeys, k)
+				newUnfocused[k] = true
+			}
+		} else {
+			for _, k := range stackKeys {
+				newKeys[k] = true
+				delete(newUnfocused, k)
+			}
+		}
+	} else {
+		key := selected.Key()
+		if m.isFocused(*selected) {
+			delete(newKeys, key)
+			newUnfocused[key] = true
+		} else {
+			newKeys[key] = true
+			delete(newUnfocused, key)
+		}
+	}
+
 	m.focusedKeys = newKeys
+	m.manualUnfocused = newUnfocused
 	m = m.rebuildFocusItems()
 	m = m.clampTabView(TabFocus)
 	m = m.clampTabView(TabMine)
@@ -1214,14 +1264,67 @@ func (m Model) handleQueueLoaded(msg QueueLoadedMsg) (Model, tea.Cmd) {
 	var notifCmd tea.Cmd
 	if wasInitial {
 		if m.detector != nil {
-			m.detector.Seed(msg.Queue.Authored)
+			m.detector.Seed(m.monitoredPRs(msg.Queue))
 		}
 	} else if m.detector != nil && !m.isDaemon() {
-		notifCmd = notifyCmd(m.ctx, m.detector, m.notifier, m.logger, m.queue.Authored, msg.Queue.Authored)
+		prevMonitored := m.monitoredPRs(m.queue)
+		currMonitored := m.monitoredPRs(msg.Queue)
+		notifCmd = notifyCmd(m.ctx, m.detector, m.notifier, m.logger, prevMonitored, currMonitored)
 	}
 
 	m = m.applyQueue(msg.Queue)
 	return m, notifCmd
+}
+
+func (m Model) monitoredPRs(q model.Queue) []model.PullRequest {
+	groups := []string{config.GroupFocus, config.GroupMine}
+	if m.notifCfg != nil && len(m.notifCfg.Groups) > 0 {
+		groups = m.notifCfg.Groups
+	}
+	hasGroup := func(group string) bool {
+		for _, g := range groups {
+			if strings.EqualFold(g, group) {
+				return true
+			}
+		}
+		return false
+	}
+
+	seen := make(map[model.PRKey]bool)
+	var monitored []model.PullRequest
+
+	if hasGroup(config.GroupMine) {
+		for _, pr := range q.Authored {
+			if !seen[pr.Key()] {
+				seen[pr.Key()] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	if hasGroup(config.GroupInbox) {
+		for _, pr := range q.Inbox {
+			if !seen[pr.Key()] {
+				seen[pr.Key()] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	if hasGroup(config.GroupFocus) {
+		for _, pr := range append(slices.Clone(q.Authored), q.Inbox...) {
+			k := pr.Key()
+			if seen[k] {
+				continue
+			}
+			if m.isFocused(pr) {
+				seen[k] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	return monitored
 }
 
 func (m Model) isDaemon() bool {
@@ -1351,6 +1454,53 @@ func (m Model) activeList() []score.Scored {
 		return m.inboxItems
 	}
 	return nil
+}
+
+func (m Model) isCurrentRowCollapsedStack() (*StackGroup, bool) {
+	rows := m.buildDisplayRows(m.activeTab)
+	cursor := m.Cursor()
+	for _, r := range rows {
+		if r.kind == rowItem && r.itemIndex == cursor {
+			if r.isCollapsedStack && r.stackGroup != nil {
+				return r.stackGroup, true
+			}
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+func (m Model) stackPRKeys(stackKey string) []model.PRKey {
+	if stackKey == "" {
+		return nil
+	}
+	seen := make(map[model.PRKey]bool)
+	var keys []model.PRKey
+	add := func(pr model.PullRequest) {
+		if pr.IsPartOfStack() && pr.StackKey() == stackKey {
+			k := pr.Key()
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	for _, it := range m.inboxItems {
+		add(it.PR)
+	}
+	for _, it := range m.mineItems {
+		add(it.PR)
+	}
+	for _, it := range m.focusItems {
+		add(it.PR)
+	}
+	for _, pr := range m.queue.Inbox {
+		add(pr)
+	}
+	for _, pr := range m.queue.Authored {
+		add(pr)
+	}
+	return keys
 }
 
 func (m Model) isStackExpanded(key string) bool {
@@ -1745,7 +1895,21 @@ func (m Model) SortStrategy() SortStrategy {
 
 // IsFocused reports whether a pull request key is currently focused.
 func (m Model) IsFocused(key model.PRKey) bool {
-	return m.focusedKeys[key]
+	if m.focusedKeys[key] {
+		return true
+	}
+	if m.manualUnfocused[key] {
+		return false
+	}
+	if pr, err := m.queue.Find(key.String()); err == nil && pr != nil {
+		return m.focusCfg.Matches(*pr)
+	}
+	for _, it := range m.focusItems {
+		if it.PR.Key() == key {
+			return true
+		}
+	}
+	return false
 }
 
 // FocusedKeys returns a copy of the currently focused PR keys.

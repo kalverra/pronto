@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/kalverra/pronto/internal/events"
@@ -110,6 +111,13 @@ func WithBotFilter(filter bool) DetectorOption {
 func WithAssets(assets Assets) DetectorOption {
 	return func(d *Detector) {
 		d.assets = assets
+	}
+}
+
+// WithViewer configures the viewer's GitHub login so that self-authored reviews do not notify.
+func WithViewer(viewer string) DetectorOption {
+	return func(d *Detector) {
+		d.viewer = strings.TrimPrefix(strings.TrimSpace(viewer), "@")
 	}
 }
 

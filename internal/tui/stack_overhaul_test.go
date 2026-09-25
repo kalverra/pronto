@@ -122,12 +122,13 @@ func TestModel_Stack_CollapsedRow_MicroRibbonAndDiffRollup(t *testing.T) {
 
 	view := m.View()
 
-	// 1. Fold indicator on selected row: ❯ ▸ #709
-	assert.Contains(t, view, "❯ ▸")
+	// 1. Fold indicator on selected row: ❯  ▸ #709
+	assert.Contains(t, view, "❯  ▸")
 	assert.Contains(t, view, "#709")
 
-	// 2. Stack Pill: [STACK] 6 PRs
-	assert.Contains(t, view, "[STACK] 6 PRs")
+	// 2. Stack Pill: [2/7]
+	assert.Contains(t, view, "[2/7]")
+	assert.NotContains(t, view, "[STACK]")
 	assert.NotContains(t, view, "[2..7]")
 
 	// 3. Root PR title
@@ -227,7 +228,8 @@ func TestModel_Stack_ExpandedFolderBannerAndTreeConnectors(t *testing.T) {
 
 	// 1. Open folder banner
 	assert.Contains(t, view, "▾")
-	assert.Contains(t, view, "[STACK] (4 PRs · #709..#733)")
+	assert.Contains(t, view, "(4 PRs · #709..#733)")
+	assert.NotContains(t, view, "[STACK]")
 	assert.Contains(t, view, "[space: fold]")
 
 	// 2. Child rows with connectors
@@ -370,14 +372,16 @@ func TestModel_Stack_InteractiveToggle(t *testing.T) {
 	)
 
 	// Collapsed by default: shows collapsed stack row
-	assert.Contains(t, m.View(), "[STACK] 2 PRs")
+	assert.Contains(t, m.View(), "[1/2]")
+	assert.NotContains(t, m.View(), "[STACK]")
 	assert.NotContains(t, m.View(), "[1..2]")
 	assert.NotContains(t, m.View(), "Alpha child")
 
 	// Press space to expand
 	mExp, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	expView := mExp.(tui.Model).View()
-	assert.Contains(t, expView, "[STACK] (2 PRs · #101..#102)")
+	assert.Contains(t, expView, "(2 PRs · #101..#102)")
+	assert.NotContains(t, expView, "[STACK]")
 	assert.Contains(t, expView, "├─ #101 [1/2]")
 	assert.Contains(t, expView, "╰─ #102 [2/2]")
 	assert.Contains(t, expView, "Alpha child")
@@ -385,7 +389,8 @@ func TestModel_Stack_InteractiveToggle(t *testing.T) {
 	// Press space to collapse
 	mCol, _ := mExp.(tui.Model).Update(tea.KeyMsg{Type: tea.KeySpace})
 	colView := mCol.(tui.Model).View()
-	assert.Contains(t, colView, "[STACK] 2 PRs")
+	assert.Contains(t, colView, "[1/2]")
+	assert.NotContains(t, colView, "[STACK]")
 	assert.NotContains(t, colView, "[1..2]")
 	assert.NotContains(t, colView, "Alpha child")
 }

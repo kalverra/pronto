@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/kalverra/pronto/internal/cache"
+	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/tui"
 )
@@ -159,6 +160,322 @@ func TestModel_ToggleFocusKey(t *testing.T) {
 		model2 := m2.(tui.Model)
 		assert.False(t, model2.IsFocused(inboxPR.Key()))
 		assert.Empty(t, model2.FocusItems())
+	})
+
+	t.Run("toggle focus on collapsed stack focuses entire stack", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+		pr1 := model.PullRequest{
+			Number:            101,
+			Title:             "Stack Root",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 1,
+				Size:     3,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		pr2 := model.PullRequest{
+			Number:            102,
+			Title:             "Stack Child 1",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 2,
+				Size:     3,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		pr3 := model.PullRequest{
+			Number:            103,
+			Title:             "Stack Child 2",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 3,
+				Size:     3,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+
+		q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, pr3}}
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(120, 30),
+			tui.WithActiveTab(tui.TabInbox),
+		)
+
+		assert.False(t, m.IsFocused(pr1.Key()))
+		assert.False(t, m.IsFocused(pr2.Key()))
+		assert.False(t, m.IsFocused(pr3.Key()))
+		assert.Empty(t, m.FocusItems())
+		assert.Contains(t, m.View(), "1: Focus (0)")
+
+		// Press 'f' on collapsed stack row
+		m2, _ := sendRune(m, 'f')
+		model2 := m2.(tui.Model)
+
+		// All 3 PRs in stack must now be focused
+		assert.True(t, model2.IsFocused(pr1.Key()))
+		assert.True(t, model2.IsFocused(pr2.Key()))
+		assert.True(t, model2.IsFocused(pr3.Key()))
+		assert.Len(t, model2.FocusItems(), 3)
+		assert.Contains(t, model2.View(), "1: Focus (3)")
+
+		// Switch to TabFocus and verify the stack is there
+		mFocus, _ := model2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+		modelFocus := mFocus.(tui.Model)
+		focusView := modelFocus.View()
+		assert.Contains(t, focusView, "[1/3]")
+		assert.NotContains(t, focusView, "[STACK]")
+
+		// Press 'f' again on the collapsed stack in TabFocus to unfocus entire stack
+		m3, _ := sendRune(modelFocus, 'f')
+		model3 := m3.(tui.Model)
+		assert.False(t, model3.IsFocused(pr1.Key()))
+		assert.False(t, model3.IsFocused(pr2.Key()))
+		assert.False(t, model3.IsFocused(pr3.Key()))
+		assert.Empty(t, model3.FocusItems())
+		assert.Contains(t, model3.View(), "1: Focus (0)")
+	})
+
+	t.Run("toggle focus on expanded stack PR focuses only that PR", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+		pr1 := model.PullRequest{
+			Number:            101,
+			Title:             "Stack Root",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 1,
+				Size:     2,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		pr2 := model.PullRequest{
+			Number:            102,
+			Title:             "Stack Child 1",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 2,
+				Size:     2,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+
+		q := model.Queue{Inbox: []model.PullRequest{pr1, pr2}}
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(120, 30),
+			tui.WithActiveTab(tui.TabInbox),
+		)
+
+		// Expand stack with space
+		mExp, _ := sendRune(m, ' ')
+		modelExp := mExp.(tui.Model)
+
+		// Focus root PR in expanded stack
+		mFoc1, _ := sendRune(modelExp, 'f')
+		modelFoc1 := mFoc1.(tui.Model)
+		assert.True(t, modelFoc1.IsFocused(pr1.Key()))
+		assert.False(t, modelFoc1.IsFocused(pr2.Key()))
+		assert.Len(t, modelFoc1.FocusItems(), 1)
+		assert.Contains(t, modelFoc1.View(), "1: Focus (1)")
+	})
+
+	t.Run("toggle focus on collapsed stack in mine tab focuses entire stack", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+		pr1 := model.PullRequest{
+			Number:            201,
+			Title:             "Mine Stack Root",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-mine",
+				Position: 1,
+				Size:     2,
+			},
+		}
+		pr2 := model.PullRequest{
+			Number:            202,
+			Title:             "Mine Stack Child",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "kalverra",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-mine",
+				Position: 2,
+				Size:     2,
+			},
+		}
+
+		q := model.Queue{Authored: []model.PullRequest{pr1, pr2}}
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(120, 30),
+			tui.WithActiveTab(tui.TabMine),
+		)
+
+		assert.False(t, m.IsFocused(pr1.Key()))
+		assert.False(t, m.IsFocused(pr2.Key()))
+		assert.Empty(t, m.FocusItems())
+
+		// Press 'f' on collapsed stack row in Mine
+		m2, _ := sendRune(m, 'f')
+		model2 := m2.(tui.Model)
+		assert.True(t, model2.IsFocused(pr1.Key()))
+		assert.True(t, model2.IsFocused(pr2.Key()))
+		assert.Len(t, model2.FocusItems(), 2)
+
+		// Press 'f' again to unfocus entire stack
+		m3, _ := sendRune(model2, 'f')
+		model3 := m3.(tui.Model)
+		assert.False(t, model3.IsFocused(pr1.Key()))
+		assert.False(t, model3.IsFocused(pr2.Key()))
+		assert.Empty(t, model3.FocusItems())
+	})
+
+	t.Run("toggle focus on partially focused collapsed stack focuses all members first", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+		pr1 := model.PullRequest{
+			Number:            101,
+			Title:             "Stack Root",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 1,
+				Size:     3,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		pr2 := model.PullRequest{
+			Number:            102,
+			Title:             "Stack Child 1",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 2,
+				Size:     3,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+		pr3 := model.PullRequest{
+			Number:            103,
+			Title:             "Stack Child 2",
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Author:            "alice",
+			ReviewDecision:    "REVIEW_REQUIRED",
+			UpdatedAt:         now.Add(-1 * time.Hour),
+			Stack: &model.PRStack{
+				ID:       "stack-1",
+				Position: 3,
+				Size:     3,
+			},
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+			},
+		}
+
+		q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, pr3}}
+		// Only pr2 is initially focused
+		m := tui.New(
+			q,
+			tui.WithViewer("kalverra"),
+			tui.WithNow(now),
+			tui.WithDimensions(120, 30),
+			tui.WithActiveTab(tui.TabInbox),
+			tui.WithFocusedPRs([]model.PRKey{pr2.Key()}),
+		)
+
+		assert.False(t, m.IsFocused(pr1.Key()))
+		assert.True(t, m.IsFocused(pr2.Key()))
+		assert.False(t, m.IsFocused(pr3.Key()))
+		assert.Len(t, m.FocusItems(), 1)
+
+		// Press 'f' on collapsed stack row: should focus all members
+		m2, _ := sendRune(m, 'f')
+		model2 := m2.(tui.Model)
+		assert.True(t, model2.IsFocused(pr1.Key()))
+		assert.True(t, model2.IsFocused(pr2.Key()))
+		assert.True(t, model2.IsFocused(pr3.Key()))
+		assert.Len(t, model2.FocusItems(), 3)
+
+		// Press 'f' again: should unfocus all members
+		m3, _ := sendRune(model2, 'f')
+		model3 := m3.(tui.Model)
+		assert.False(t, model3.IsFocused(pr1.Key()))
+		assert.False(t, model3.IsFocused(pr2.Key()))
+		assert.False(t, model3.IsFocused(pr3.Key()))
+		assert.Empty(t, model3.FocusItems())
 	})
 }
 
@@ -451,14 +768,234 @@ func TestModel_FocusedPR_StarPrefix(t *testing.T) {
 
 	view := m.View()
 
-	// Focused PR has star prefix
-	assert.Contains(t, view, "★ Beta PR Two")
-	// Unfocused PR does not have star prefix
+	// Focused PR has star right after selector arrow position, not in title
+	assert.Contains(t, view, " ★   #102")
+	assert.Contains(t, view, "❯    #101")
+	assert.NotContains(t, view, "★ Beta PR Two")
+	assert.Contains(t, view, "Beta PR Two")
+
+	// Unfocused PR does not have star
 	assert.NotContains(t, view, "★ Alpha PR One")
 	assert.Contains(t, view, "Alpha PR One")
 
+	// When cursor moves up to the focused PR, it shows selector and star together
+	mUp, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	viewUp := mUp.(tui.Model).View()
+	assert.Contains(t, viewUp, "❯★   #102")
+	assert.NotContains(t, viewUp, "❯    #101")
+
 	// Help bar displays 'f: focus'
 	assert.Contains(t, view, "f: focus")
+}
+
+func TestModel_Focus_Indicator_CollapsedStack(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	pr1 := model.PullRequest{
+		Number:            201,
+		Title:             "Stack Root",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "alice",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		Stack: &model.PRStack{
+			ID:       "stack-1",
+			Position: 1,
+			Size:     2,
+		},
+		TimelineItems: []model.TimelineItem{
+			{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+		},
+	}
+	pr2 := model.PullRequest{
+		Number:            202,
+		Title:             "Stack Child",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "alice",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		Stack: &model.PRStack{
+			ID:       "stack-1",
+			Position: 2,
+			Size:     2,
+		},
+		TimelineItems: []model.TimelineItem{
+			{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-1 * time.Hour), ReviewerUser: "kalverra"},
+		},
+	}
+	prUnfocused := model.PullRequest{
+		Number:            203,
+		Title:             "Solo PR",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "alice",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		TimelineItems: []model.TimelineItem{
+			{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-2 * time.Hour), ReviewerUser: "kalverra"},
+		},
+	}
+
+	q := model.Queue{Inbox: []model.PullRequest{pr1, pr2, prUnfocused}}
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(120, 30),
+		tui.WithActiveTab(tui.TabInbox),
+		tui.WithFocusedPRs([]model.PRKey{pr1.Key()}),
+	)
+
+	view := m.View()
+	// Stack is unselected and focused initially; star and arrow must not overlap
+	assert.Contains(t, view, " ★ ▸")
+	assert.NotContains(t, view, "★▸")
+	assert.NotContains(t, view, "★ Stack Root")
+	assert.Contains(t, view, "Stack Root")
+
+	// Move cursor up to select the collapsed stack row
+	mUp, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	viewUp := mUp.(tui.Model).View()
+	assert.Contains(t, viewUp, "❯★ ▸")
+	assert.NotContains(t, viewUp, "❯★▸")
+}
+
+func TestModel_FocusedStack_GroupingWhenExpanded(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	// Stack A (PRs 23503..23504)
+	prA1 := model.PullRequest{
+		Number:            23503,
+		Title:             "Stack A PR 1",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "kalverra",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		ReviewDecision:    "CHANGES_REQUESTED",
+		Stack: &model.PRStack{
+			ID:       "stack-a",
+			Position: 1,
+			Size:     2,
+		},
+	}
+	prA2 := model.PullRequest{
+		Number:            23504,
+		Title:             "Stack A PR 2",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "kalverra",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		ReviewDecision:    "CHANGES_REQUESTED",
+		Stack: &model.PRStack{
+			ID:       "stack-a",
+			Position: 2,
+			Size:     2,
+		},
+	}
+
+	// Stack B (PRs 691..692)
+	prB1 := model.PullRequest{
+		Number:            691,
+		Title:             "Stack B PR 1",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "kalverra",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		ReviewDecision:    "CHANGES_REQUESTED",
+		Stack: &model.PRStack{
+			ID:       "stack-b",
+			Position: 1,
+			Size:     2,
+		},
+	}
+	prB2 := model.PullRequest{
+		Number:            692,
+		Title:             "Stack B PR 2",
+		RepoOwner:         "org",
+		RepoName:          "repo",
+		RepoNameWithOwner: "org/repo",
+		Author:            "kalverra",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "CLEAN",
+		MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+		Checks:            model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 1, ReqDone: 1},
+		ReviewDecision:    "CHANGES_REQUESTED",
+		Stack: &model.PRStack{
+			ID:       "stack-b",
+			Position: 2,
+			Size:     2,
+		},
+	}
+
+	q := model.Queue{Authored: []model.PullRequest{prA1, prA2, prB1, prB2}}
+	m := tui.New(
+		q,
+		tui.WithViewer("kalverra"),
+		tui.WithNow(now),
+		tui.WithDimensions(160, 40),
+		tui.WithActiveTab(tui.TabMine),
+		tui.WithFocusedPRs([]model.PRKey{prA1.Key(), prB1.Key()}),
+	)
+
+	// Expand both stacks with space key
+	mUpdated1, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = mUpdated1.(tui.Model)
+	mUpdated2, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = mUpdated2.(tui.Model)
+	mUpdated3, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = mUpdated3.(tui.Model)
+	mUpdated4, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = mUpdated4.(tui.Model)
+	mUpdated5, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = mUpdated5.(tui.Model)
+
+	view := m.View()
+
+	// 1. Stack banner must not show duplicate star icon
+	assert.NotContains(t, view, "★ ▾")
+	assert.NotContains(t, view, "★▾")
+
+	// 2. Stacks must appear contiguously and not be interwoven
+	idxA1 := strings.Index(view, "├─ #23503")
+	idxA2 := strings.Index(view, "╰─ #23504")
+	idxB1 := strings.Index(view, "├─ #691")
+	idxB2 := strings.Index(view, "╰─ #692")
+
+	assert.True(t, idxA1 >= 0 && idxA2 >= 0 && idxB1 >= 0 && idxB2 >= 0)
+	if idxA1 < idxB1 {
+		assert.Less(t, idxA1, idxA2, "Stack A PR 1 must precede Stack A PR 2")
+		assert.Less(t, idxA2, idxB1, "Stack A must completely precede Stack B: A2 at %d, B1 at %d", idxA2, idxB1)
+		assert.Less(t, idxB1, idxB2, "Stack B PR 1 must precede Stack B PR 2")
+	} else {
+		assert.Less(t, idxB1, idxB2, "Stack B PR 1 must precede Stack B PR 2")
+		assert.Less(t, idxB2, idxA1, "Stack B must completely precede Stack A: B2 at %d, A1 at %d", idxB2, idxA1)
+		assert.Less(t, idxA1, idxA2, "Stack A PR 1 must precede Stack A PR 2")
+	}
 }
 
 func TestModel_FocusTab_CategoryDividers(t *testing.T) {
@@ -768,4 +1305,65 @@ func TestModel_FocusTab_CategoryDividers(t *testing.T) {
 		require.NotNil(t, selUpKey)
 		assert.Equal(t, 101, selUpKey.Number)
 	})
+}
+
+func TestModel_AutoFocusRules(t *testing.T) {
+	t.Parallel()
+
+	prAuto := model.PullRequest{
+		Number:            42,
+		Title:             "Urgent security fix",
+		RepoNameWithOwner: "kalverra/pronto",
+		RepoName:          "pronto",
+		Author:            "alice",
+		Files:             []string{"internal/notify/detect.go"},
+	}
+	prRegular := model.PullRequest{
+		Number:            99,
+		Title:             "Routine chore",
+		RepoNameWithOwner: "kalverra/pronto",
+		RepoName:          "pronto",
+		Author:            "bob",
+		Files:             []string{"README.md"},
+	}
+
+	focusCfg := config.FocusConfig{
+		Rules: []config.FocusRule{
+			{
+				Repo:     "kalverra/pronto",
+				Keywords: []string{"security"},
+			},
+		},
+	}
+
+	q := model.Queue{
+		Authored: []model.PullRequest{prAuto, prRegular},
+	}
+
+	m := tui.New(
+		q,
+		tui.WithFocusConfig(focusCfg),
+	)
+
+	// 1. Auto-focused PR is recognized as focused
+	assert.True(t, m.IsFocused(prAuto.Key()))
+	assert.False(t, m.IsFocused(prRegular.Key()))
+
+	// 2. Auto-focused PR is present in Focus items
+	focusItems := m.FocusItems()
+	require.Len(t, focusItems, 1)
+	assert.Equal(t, 42, focusItems[0].PR.Number)
+
+	// 3. User toggles 'f' on auto-focused PR -> unfocuses it
+	mUnfoc, _ := sendRune(m, 'f')
+	modelUnfoc := mUnfoc.(tui.Model)
+	assert.False(t, modelUnfoc.IsFocused(prAuto.Key()))
+	assert.Empty(t, modelUnfoc.FocusItems())
+
+	// 4. Switch to Mine tab and press 'f' again -> re-focuses it
+	mMine, _ := sendRune(modelUnfoc, '2')
+	mRefoc, _ := sendRune(mMine, 'f')
+	modelRefoc := mRefoc.(tui.Model)
+	assert.True(t, modelRefoc.IsFocused(prAuto.Key()))
+	assert.Len(t, modelRefoc.FocusItems(), 1)
 }

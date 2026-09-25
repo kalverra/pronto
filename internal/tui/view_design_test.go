@@ -431,9 +431,10 @@ func TestModel_View_ConsistentOrderedPRDisplay(t *testing.T) {
 	)
 	view := m.View()
 
-	// 1. Collapsed stack: starts with #number, then stack pill [STACK] 2 PRs (consolidated), then title
+	// 1. Collapsed stack: starts with #number, then stack pill [2/7], then title
 	assert.Contains(t, view, "#709")
-	assert.Contains(t, view, "[STACK] 2 PRs")
+	assert.Contains(t, view, "[2/7]")
+	assert.NotContains(t, view, "[STACK]")
 	assert.NotContains(t, view, "[2..3]")
 	assert.Contains(t, view, "updates to latest go-github")
 
@@ -442,9 +443,9 @@ func TestModel_View_ConsistentOrderedPRDisplay(t *testing.T) {
 	assert.Contains(t, view, "bump ci versions")
 	assert.NotContains(t, view, "bump ci versions (#23787)")
 
-	// 3. Single PR in stack (totalInCat <= 1): starts with #number, then stack pill [STACK] [13/14], then title
+	// 3. Single PR in stack (totalInCat <= 1): starts with #number, then stack pill [13/14], then title
 	assert.Contains(t, view, "#23505")
-	assert.Contains(t, view, "[STACK] [13/14]")
+	assert.Contains(t, view, "[13/14]")
 	assert.Contains(t, view, "integration-tests")
 	assert.NotContains(t, view, "╶ [13/14]")
 	assert.NotContains(t, view, "integration-tests (#23505)")
@@ -549,14 +550,14 @@ func TestModel_View_RowSelectionHighlight(t *testing.T) {
 	view := m.View()
 
 	// Selected row (#101, cursor 0) has cursor indicator, unselected row does not
-	assert.Contains(t, view, "❯   #101")
-	assert.NotContains(t, view, "❯   #102")
+	assert.Contains(t, view, "❯    #101")
+	assert.NotContains(t, view, "❯    #102")
 
 	// Moving cursor down moves selection highlight to #102
 	mDown, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	viewDown := mDown.(tui.Model).View()
-	assert.NotContains(t, viewDown, "❯   #101")
-	assert.Contains(t, viewDown, "❯   #102")
+	assert.NotContains(t, viewDown, "❯    #101")
+	assert.Contains(t, viewDown, "❯    #102")
 }
 
 func TestModel_View_CICountSemanticColors(t *testing.T) {

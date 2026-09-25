@@ -57,7 +57,7 @@ func notifyCmd(
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		notes, err := detector.DetectMineChanges(ctx, prev, curr)
+		notes, err := detector.DetectChanges(ctx, prev, curr)
 		if err != nil {
 			logger.Error().Err(err).Msg("change detection failed")
 			return nil

@@ -3,7 +3,8 @@
 
 # pronto configuration
 
-Package config manages configuration for pronto, including PR view preferences.
+Package config manages user preferences for pronto, including PR view style,
+desktop notifications, auto-focus rules, and daemon server settings.
 
 
 Configuration is loaded from `pronto.toml` (see resolution order below);
@@ -18,8 +19,12 @@ environment variables override file values.
 | `notifications.mode` | `PRONTO_NOTIFICATIONS_MODE` | string | `"native"` | `terminal`, `native` | Delivery backend for desktop notifications: "native" uses the bundled macOS notification helper (run `pronto notify setup` once), falling back to "terminal" (terminal-notifier/osascript) when the helper isn't installed or authorized. |
 | `notifications.popups` | `PRONTO_NOTIFICATIONS_POPUPS` | bool | true | `—` | Whether desktop notification popups are enabled. |
 | `notifications.sound` | `PRONTO_NOTIFICATIONS_SOUND` | bool | false | `—` | Whether notification sounds are enabled. |
+| `notifications.groups` | `PRONTO_NOTIFICATIONS_GROUPS` | []string | `["focus", "mine"]` | `focus`, `mine`, `inbox` | PR groups that trigger desktop notifications: "focus", "mine", "inbox". |
 | `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | macOS system sound name per notification trigger (e.g. "Glass"); must match a sound under /System/Library/Sounds or ~/Library/Sounds, or "default" for the OS alert sound. |
 | `notifications.images` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Static image paths per notification trigger. |
+| `focus.authors` | `PRONTO_FOCUS_AUTHORS` | []string | `[]` | `—` | PR authors whose pull requests should automatically be focused. |
+| `focus.repos` | `PRONTO_FOCUS_REPOS` | []string | `[]` | `—` | Repositories whose pull requests should automatically be focused. |
+| `focus.rules` | `—` | []rule | — | `—` | Fine-grained auto-focus rules matching PRs by repo, keywords, files, directories, or authors. |
 | `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Daemon poll interval as a Go duration string, e.g. "30s"; default 60s; minimum 10s. |
 | `server.pprof_addr` | `PRONTO_PPROF_ADDR` | string | `""` | `—` | Loopback address for the net/http/pprof endpoint in `pronto serve`, e.g. "localhost:6060"; empty disables it. |
 | `server.leak_check_interval` | `PRONTO_LEAK_CHECK_INTERVAL` | duration | `"1h"` | `—` | Interval between goroutine leak profile checks in `pronto serve` as a Go duration string; "0" disables. |
@@ -41,16 +46,32 @@ Resolution order mirrors internal/logging:
 ```toml
 pr_view = "condensed"
 pr_view_command = ""
-notifications.mode = "native"
-notifications.popups = true
-notifications.sound = false
+
+[notifications]
+mode = "native"
+popups = true
+sound = false
+groups = ["focus", "mine"]
+
 [notifications.sounds]
-# ci_passed = "path/to/file"
+# ci_passed = "Glass"
 
 [notifications.images]
-# ci_passed = "path/to/file"
+# ci_passed = "/path/to/icon.png"
 
-# server.poll_interval = "30s"
-server.pprof_addr = ""
-server.leak_check_interval = "1h"
+[focus]
+# authors = ["alice"]
+# repos = ["kalverra/pronto"]
+
+[[focus.rules]]
+# repo = "kalverra/pronto"
+# keywords = ["urgent", "security"]
+# files = ["go.mod"]
+# directories = ["internal/notify"]
+# authors = ["charlie"]
+
+[server]
+# poll_interval = "30s"
+pprof_addr = ""
+leak_check_interval = "1h"
 ```

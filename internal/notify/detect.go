@@ -26,6 +26,7 @@ type Detector struct {
 	checkerTimeout     time.Duration
 	checkerParallelism int
 	filterBots         bool
+	viewer             string
 	assets             Assets
 	seenKeys           map[string]bool
 	pendingChecks      map[model.PRKey]model.PullRequest
@@ -113,8 +114,8 @@ func (d *Detector) applyAssets(n *Notification) {
 	d.assets.Apply(n)
 }
 
-// DetectMineChanges inspects changes to authored pull requests and returns new notifications.
-func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.PullRequest) ([]Notification, error) {
+// DetectChanges inspects changes to pull requests and returns new notifications.
+func (d *Detector) DetectChanges(ctx context.Context, prev, curr []model.PullRequest) ([]Notification, error) {
 	prevMap := make(map[model.PRKey]model.PullRequest, len(prev))
 	for _, pr := range prev {
 		prevMap[pr.Key()] = pr
@@ -251,6 +252,13 @@ func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.Pul
 	return results, nil
 }
 
+// DetectMineChanges inspects changes to authored pull requests and returns new notifications.
+//
+// Deprecated: use DetectChanges instead.
+func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.PullRequest) ([]Notification, error) {
+	return d.DetectChanges(ctx, prev, curr)
+}
+
 // checksURL links to the PR's Checks tab; empty when the PR URL is unknown.
 func checksURL(prURL string) string {
 	if prURL == "" {
@@ -280,6 +288,9 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 	var results []Notification
 	for _, rev := range currPR.LatestReviews {
 		if rev.Author == currPR.Author {
+			continue
+		}
+		if d.viewer != "" && strings.EqualFold(d.viewer, rev.Author) {
 			continue
 		}
 		if d.filterBots && model.IsBotLogin(rev.Author) {

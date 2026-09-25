@@ -53,20 +53,45 @@ func renderConfig(pkgDir string) (string, error) {
 
 	b.WriteString("## Example\n\n")
 	b.WriteString("```toml\n")
-	for _, spec := range config.Specs {
-		switch spec.Type {
-		case "map[trigger]string":
-			fmt.Fprintf(&b, "[%s]\n# %s = \"path/to/file\"\n\n", spec.Key, spec.Valid[0])
-		default:
-			if spec.Default == nil {
-				fmt.Fprintf(&b, "# %s = \"30s\"\n", spec.Key)
-				continue
-			}
-			fmt.Fprintf(&b, "%s = %s\n", spec.Key, formatTOMLValue(spec.Default))
-		}
-	}
+	b.WriteString(renderExampleTOML())
 	b.WriteString("```\n")
 	return b.String(), nil
+}
+
+func renderExampleTOML() string {
+	var b strings.Builder
+	b.WriteString("pr_view = \"condensed\"\n")
+	b.WriteString("pr_view_command = \"\"\n\n")
+
+	b.WriteString("[notifications]\n")
+	b.WriteString("mode = \"native\"\n")
+	b.WriteString("popups = true\n")
+	b.WriteString("sound = false\n")
+	b.WriteString("groups = [\"focus\", \"mine\"]\n\n")
+
+	b.WriteString("[notifications.sounds]\n")
+	b.WriteString("# ci_passed = \"Glass\"\n\n")
+
+	b.WriteString("[notifications.images]\n")
+	b.WriteString("# ci_passed = \"/path/to/icon.png\"\n\n")
+
+	b.WriteString("[focus]\n")
+	b.WriteString("# authors = [\"alice\"]\n")
+	b.WriteString("# repos = [\"kalverra/pronto\"]\n\n")
+
+	b.WriteString("[[focus.rules]]\n")
+	b.WriteString("# repo = \"kalverra/pronto\"\n")
+	b.WriteString("# keywords = [\"urgent\", \"security\"]\n")
+	b.WriteString("# files = [\"go.mod\"]\n")
+	b.WriteString("# directories = [\"internal/notify\"]\n")
+	b.WriteString("# authors = [\"charlie\"]\n\n")
+
+	b.WriteString("[server]\n")
+	b.WriteString("# poll_interval = \"30s\"\n")
+	b.WriteString("pprof_addr = \"\"\n")
+	b.WriteString("leak_check_interval = \"1h\"\n")
+
+	return b.String()
 }
 
 // formatDefault renders a spec default for the key table.
@@ -81,20 +106,17 @@ func formatDefault(d any) string {
 			return "`\"\"`"
 		}
 		return "`\"" + v + "\"`"
+	case []string:
+		if len(v) == 0 {
+			return "`[]`"
+		}
+		items := make([]string, len(v))
+		for i, s := range v {
+			items[i] = `"` + s + `"`
+		}
+		return "`[" + strings.Join(items, ", ") + "]`"
 	default:
 		return fmt.Sprintf("%v", v)
-	}
-}
-
-// formatTOMLValue renders a spec default as a TOML value.
-func formatTOMLValue(d any) string {
-	switch v := d.(type) {
-	case bool:
-		return strconv.FormatBool(v)
-	case string:
-		return fmt.Sprintf("%q", v)
-	default:
-		return fmt.Sprintf("%v", d)
 	}
 }
 

@@ -36,6 +36,10 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("#58a6ff"))
 
+	focusStarStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#e3b341"))
+
 	selectedRowStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#ffffff"))
@@ -382,10 +386,7 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 		seenInStack[key]++
 
 		if totalInCat <= 1 {
-			meta := fmt.Sprintf("%s %s",
-				styleStackTag.Render("[STACK]"),
-				styleRangeTag.Render(fmt.Sprintf("[%d/%d]", pr.Stack.Position, pr.Stack.Size)),
-			)
+			meta := styleRangeTag.Render(fmt.Sprintf("[%d/%d]", pr.Stack.Position, pr.Stack.Size))
 			rows = append(rows, displayRow{
 				kind:        rowItem,
 				itemIndex:   idx,
@@ -475,18 +476,18 @@ func (m Model) buildCategoryDisplayRows(list []score.Scored, indices []int) []di
 }
 
 func (m Model) isFocused(pr model.PullRequest) bool {
-	return m.IsFocused(pr.Key())
+	k := pr.Key()
+	if m.focusedKeys[k] {
+		return true
+	}
+	if m.manualUnfocused[k] {
+		return false
+	}
+	return m.focusCfg.Matches(pr)
 }
 
 func (m Model) partitionFocused(indices []int, list []score.Scored) {
-	sort.SliceStable(indices, func(i, j int) bool {
-		iFocused := m.isFocused(list[indices[i]].PR)
-		jFocused := m.isFocused(list[indices[j]].PR)
-		if iFocused != jFocused {
-			return iFocused
-		}
-		return false
-	})
+	m.partitionFocusedWithStacks(indices, list)
 }
 
 func (m Model) buildInboxDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
@@ -901,7 +902,7 @@ func computeMaxNumAndStackWidth(displayRows []displayRow, list []score.Scored) (
 		}
 
 		if dRow.isCollapsedStack && dRow.stackGroup != nil {
-			stackMeta := formatCollapsedStackMeta(len(dRow.stackGroup.PRs), false)
+			stackMeta := formatCollapsedStackMeta(pr, false)
 			if w := lipgloss.Width(stackMeta); w > maxStackWidth {
 				maxStackWidth = w
 			}
@@ -1042,7 +1043,7 @@ type tableColumnWidths struct {
 // while keeping all columns intact and truncating the elastic TITLE column first.
 func computeTableColumnWidths(totalWidth int, hasAuthor bool, rows [][]string) tableColumnWidths {
 	w := tableColumnWidths{
-		cursor:  3,
+		cursor:  4,
 		status:  len("STATUS"),
 		size:    len("SIZE"),
 		ci:      len("CI"),
@@ -1243,16 +1244,56 @@ func applyRowBackground(line string, bg lipgloss.TerminalColor) string {
 	return trimmed + "\x1b[0m"
 }
 
-func formatCollapsedStackMeta(count int, isSelected bool) string {
-	prCountStr := fmt.Sprintf("%d PRs", count)
-	if count == 1 {
-		prCountStr = "1 PR"
+func formatCollapsedStackMeta(pr model.PullRequest, isSelected bool) string {
+	if pr.Stack == nil {
+		return ""
 	}
 	rangeStyle := styleRangeTag
 	if isSelected {
 		rangeStyle = selectedRangeTagStyle
 	}
-	return fmt.Sprintf("%s %s", styleStackTag.Render("[STACK]"), rangeStyle.Render(prCountStr))
+	return rangeStyle.Render(fmt.Sprintf("[%d/%d]", pr.Stack.Position, pr.Stack.Size))
+}
+
+func renderRowPrefix(isSelected, isFocused, isCollapsedStack bool) string {
+	var char0 string
+	if isSelected {
+		char0 = cursorStyle.Render("❯")
+	} else {
+		char0 = " "
+	}
+
+	var char1 string
+	if isFocused {
+		char1 = focusStarStyle.Render("★")
+	} else {
+		char1 = " "
+	}
+
+	var char3 string
+	if isCollapsedStack {
+		if isSelected {
+			char3 = cursorStyle.Render("▸")
+		} else {
+			char3 = faintStyle.Render("▸")
+		}
+	} else {
+		char3 = " "
+	}
+
+	return char0 + char1 + " " + char3
+}
+
+func (m Model) isStackGroupFocused(sg *StackGroup) bool {
+	if sg == nil {
+		return false
+	}
+	for _, it := range sg.PRs {
+		if m.isFocused(it.PR) {
+			return true
+		}
+	}
+	return false
 }
 
 // collapsedStackRowCols renders the single collapsed stack row: a micro-status
@@ -1264,12 +1305,7 @@ func (m Model) collapsedStackRowCols(
 	refTime time.Time,
 	maxNumWidth, maxStackWidth int,
 ) []string {
-	var prefix string
-	if isSelected {
-		prefix = cursorStyle.Render("❯ ▸")
-	} else {
-		prefix = faintStyle.Render("  ▸")
-	}
+	prefix := renderRowPrefix(isSelected, m.isFocused(root) || m.isStackGroupFocused(sg), true)
 
 	totalAdds, totalDels := 0, 0
 	for _, prItem := range sg.PRs {
@@ -1277,7 +1313,7 @@ func (m Model) collapsedStackRowCols(
 		totalDels += prItem.Deletions
 	}
 
-	stackMeta := formatCollapsedStackMeta(len(sg.PRs), isSelected)
+	stackMeta := formatCollapsedStackMeta(root, isSelected)
 	padStack := ""
 	if maxStackWidth > lipgloss.Width(stackMeta) {
 		padStack = strings.Repeat(" ", maxStackWidth-lipgloss.Width(stackMeta))
@@ -1285,9 +1321,6 @@ func (m Model) collapsedStackRowCols(
 	stackPart := stackMeta + padStack
 
 	rootTitle := root.Title
-	if m.isFocused(root) {
-		rootTitle = "★ " + rootTitle
-	}
 
 	numStr := fmt.Sprintf("#%d", root.Number)
 	padNum := ""
@@ -1338,16 +1371,10 @@ func (m Model) collapsedStackRowCols(
 
 // childStackRowCols renders a single PR row inside an expanded stack.
 func (m Model) childStackRowCols(dRow displayRow, pr model.PullRequest, isSelected bool, refTime time.Time) []string {
-	prefix := "   "
 	childSelected := isSelected && !dRow.isStackRoot
-	if childSelected {
-		prefix = cursorStyle.Render("❯  ")
-	}
+	prefix := renderRowPrefix(childSelected, m.isFocused(pr), false)
 
 	title := pr.Title
-	if m.isFocused(pr) {
-		title = "★ " + title
-	}
 	fullTitle := dRow.stackPrefix + title
 	titleStyle := unselectedRowStyle
 	if childSelected {
@@ -1393,10 +1420,7 @@ func (m Model) itemRowCols(
 	refTime time.Time,
 	maxNumWidth, maxStackWidth int,
 ) []string {
-	prefix := "   "
-	if isSelected {
-		prefix = cursorStyle.Render("❯  ")
-	}
+	prefix := renderRowPrefix(isSelected, m.isFocused(pr), false)
 
 	numStr := fmt.Sprintf("#%d", pr.Number)
 	padNum := ""
@@ -1410,9 +1434,6 @@ func (m Model) itemRowCols(
 	numText := numSt.Render(numStr) + padNum
 
 	title := pr.Title
-	if m.isFocused(pr) {
-		title = "★ " + title
-	}
 	titleStyle := unselectedRowStyle
 	if isSelected {
 		titleStyle = selectedRowStyle

@@ -874,3 +874,40 @@ func TestDetector_NotificationLinks_NoPRURL(t *testing.T) {
 	require.Len(t, notes, 1)
 	assert.Empty(t, notes[0].URL, "no PR URL must not produce a bare /checks link")
 }
+
+func TestDetector_DetectChanges_InboxPR(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil)
+	prev := makeBasePR(10, "Inbox PR by Colleague")
+	prev.Author = "colleague"
+	prev.Checks = model.ChecksSummary{Total: 1, Running: 1}
+	curr := prev
+	curr.Checks = model.ChecksSummary{Total: 1, Done: 1}
+
+	notes, err := d.DetectChanges(context.Background(), []model.PullRequest{prev}, []model.PullRequest{curr})
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Equal(t, notify.TriggerCIPassed, notes[0].Trigger)
+	assert.Equal(t, 10, notes[0].PRNumber)
+}
+
+func TestDetector_WithViewer_IgnoresSelfReview(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil, notify.WithViewer("octocat"))
+	prev := makeBasePR(20, "Community PR")
+	prev.Author = "contributor"
+	curr := prev
+	curr.LatestReviews = []model.Review{
+		{
+			Author:      "octocat", // viewer submitted review
+			State:       "APPROVED",
+			SubmittedAt: time.Now(),
+		},
+	}
+
+	notes, err := d.DetectChanges(context.Background(), []model.PullRequest{prev}, []model.PullRequest{curr})
+	require.NoError(t, err)
+	assert.Empty(t, notes, "reviews submitted by viewer must not trigger notifications")
+}

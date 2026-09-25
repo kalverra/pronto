@@ -187,16 +187,18 @@ func resolveTUISource(
 	}
 
 	daemonOpts := daemon.Options{
-		Source:            underlyingSrc,
-		Store:             store,
-		Checker:           notify.DefaultPRStatusChecker,
-		Interval:          pollInterval,
-		LeakCheckInterval: leakInterval,
-		LeakChecker:       leakChecker,
-		LeakDumpDir:       leakDumpDir,
-		SocketPath:        socketPath,
-		Version:           version,
-		Logger:            logger,
+		Source:             underlyingSrc,
+		Store:              store,
+		Checker:            notify.DefaultPRStatusChecker,
+		Interval:           pollInterval,
+		LeakCheckInterval:  leakInterval,
+		LeakChecker:        leakChecker,
+		LeakDumpDir:        leakDumpDir,
+		SocketPath:         socketPath,
+		Version:            version,
+		Logger:             logger,
+		NotificationConfig: cfg.Notifications,
+		FocusConfig:        cfg.Focus,
 	}
 
 	d := daemon.New(daemonOpts)

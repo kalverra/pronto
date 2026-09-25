@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/kalverra/pronto/internal/cache"
+	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/notify"
@@ -66,6 +67,9 @@ type Options struct {
 	LeakChecker LeakChecker
 	// LeakDumpDir receives goroutine leak profile dumps; empty disables dumps.
 	LeakDumpDir string
+
+	NotificationConfig config.NotificationConfig
+	FocusConfig        config.FocusConfig
 }
 
 // Daemon owns the poll loop, change detection, and event bus, and serves the
@@ -97,11 +101,28 @@ func New(opts Options) *Daemon {
 	if opts.LeakChecker == nil {
 		opts.LeakChecker = profiling.RuntimeLeakChecker{}
 	}
-	// A zero zerolog.Logger discards all output, so no default is needed.
+	detectorOpts := []notify.DetectorOption{notify.WithBotFilter(true)}
+	if len(opts.NotificationConfig.Images) > 0 || len(opts.NotificationConfig.Sounds) > 0 {
+		assets := notify.Assets{}
+		if len(opts.NotificationConfig.Images) > 0 {
+			assets.Images = make(map[notify.Trigger]string, len(opts.NotificationConfig.Images))
+			for k, v := range opts.NotificationConfig.Images {
+				assets.Images[notify.Trigger(k)] = config.ExpandPath(v)
+			}
+		}
+		if len(opts.NotificationConfig.Sounds) > 0 {
+			assets.Sounds = make(map[notify.Trigger]string, len(opts.NotificationConfig.Sounds))
+			for k, v := range opts.NotificationConfig.Sounds {
+				assets.Sounds[notify.Trigger(k)] = v
+			}
+		}
+		detectorOpts = append(detectorOpts, notify.WithAssets(assets))
+	}
+
 	return &Daemon{
 		opts:     opts,
 		bus:      opts.Bus,
-		detector: notify.NewDetector(opts.Checker, notify.WithBotFilter(true)),
+		detector: notify.NewDetector(opts.Checker, detectorOpts...),
 		kickCh:   make(chan struct{}, 1),
 		ready:    make(chan struct{}),
 	}
@@ -336,8 +357,72 @@ func (d *Daemon) warmStart(ctx context.Context) {
 	d.mu.Unlock()
 
 	if fresh {
-		d.detector.Seed(q.Authored)
+		d.detector.Seed(d.monitoredPRs(ctx, q))
 	}
+}
+
+func (d *Daemon) monitoredPRs(ctx context.Context, q model.Queue) []model.PullRequest {
+	groups := d.opts.NotificationConfig.Groups
+	if len(groups) == 0 {
+		groups = []string{config.GroupFocus, config.GroupMine}
+	}
+	hasGroup := func(group string) bool {
+		for _, g := range groups {
+			if strings.EqualFold(g, group) {
+				return true
+			}
+		}
+		return false
+	}
+
+	seen := make(map[model.PRKey]bool)
+	var monitored []model.PullRequest
+
+	if hasGroup(config.GroupMine) {
+		for _, pr := range q.Authored {
+			if !seen[pr.Key()] {
+				seen[pr.Key()] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	if hasGroup(config.GroupInbox) {
+		for _, pr := range q.Inbox {
+			if !seen[pr.Key()] {
+				seen[pr.Key()] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	if hasGroup(config.GroupFocus) {
+		var cachedFocus map[model.PRKey]bool
+		if d.opts.Store != nil {
+			if keys, _, ok := d.opts.Store.Focus(ctx); ok {
+				cachedFocus = make(map[model.PRKey]bool, len(keys))
+				for _, k := range keys {
+					cachedFocus[k] = true
+				}
+			}
+		}
+		for _, pr := range append(slices.Clone(q.Authored), q.Inbox...) {
+			k := pr.Key()
+			if seen[k] {
+				continue
+			}
+			isFoc := cachedFocus != nil && cachedFocus[k]
+			if !isFoc {
+				isFoc = d.opts.FocusConfig.Matches(pr)
+			}
+			if isFoc {
+				seen[k] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	return monitored
 }
 
 func (d *Daemon) refresh(ctx context.Context) {
@@ -390,10 +475,12 @@ func (d *Daemon) refresh(ctx context.Context) {
 	if !hadBaseline {
 		// First observed state is the baseline: seed the detector and
 		// emit no per-PR events.
-		d.detector.Seed(q.Authored)
+		d.detector.Seed(d.monitoredPRs(ctx, q))
 	} else {
+		prevMonitored := d.monitoredPRs(ctx, prevQueue)
+		currMonitored := d.monitoredPRs(ctx, q)
 		merged := make(map[model.PRKey]bool)
-		if notes, derr := d.detector.DetectMineChanges(ctx, prevQueue.Authored, q.Authored); derr != nil {
+		if notes, derr := d.detector.DetectChanges(ctx, prevMonitored, currMonitored); derr != nil {
 			d.opts.Logger.Error().Err(derr).Msg("change detection failed")
 		} else {
 			for _, n := range notes {

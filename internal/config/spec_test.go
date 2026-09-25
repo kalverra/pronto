@@ -31,6 +31,9 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 		"notifications.mode":         "PRONTO_NOTIFICATIONS_MODE",
 		"notifications.popups":       "PRONTO_NOTIFICATIONS_POPUPS",
 		"notifications.sound":        "PRONTO_NOTIFICATIONS_SOUND",
+		"notifications.groups":       "PRONTO_NOTIFICATIONS_GROUPS",
+		"focus.authors":              "PRONTO_FOCUS_AUTHORS",
+		"focus.repos":                "PRONTO_FOCUS_REPOS",
 		"server.poll_interval":       "PRONTO_POLL_INTERVAL",
 		"server.pprof_addr":          "PRONTO_PPROF_ADDR",
 		"server.leak_check_interval": "PRONTO_LEAK_CHECK_INTERVAL",
@@ -57,6 +60,7 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 	assert.Equal(t, config.NotifyNative, got["notifications.mode"].Default)
 	assert.Equal(t, true, got["notifications.popups"].Default)
 	assert.Equal(t, false, got["notifications.sound"].Default)
+	assert.Equal(t, []string{config.GroupFocus, config.GroupMine}, got["notifications.groups"].Default)
 	assert.Empty(t, got["pr_view_command"].Default)
 	assert.Empty(t, got["pr_diff_command"].Default)
 	assert.Empty(t, got["server.pprof_addr"].Default)
@@ -73,6 +77,10 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{config.NotifyTerminal, config.NotifyNative},
 		got["notifications.mode"].Valid,
+	)
+	assert.ElementsMatch(t,
+		config.ValidNotificationGroups,
+		got["notifications.groups"].Valid,
 	)
 }
 

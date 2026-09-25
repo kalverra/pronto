@@ -1,7 +1,5 @@
 # pronto
 
-<img src="assets/logo.png" alt="pronto logo" width="128" align="right">
-
 PR triage dashboard and review queue. Get in the flow of reviewing PRs quickly: prioritize incoming PRs, track authored PR progress, and inspect detailed score breakdowns.
 
 ## Installation
@@ -27,6 +25,10 @@ go install github.com/kalverra/pronto/cmd/pronto@latest
 ### Binary Releases
 
 Download pre-compiled binaries for macOS and Linux from [GitHub Releases](https://github.com/kalverra/pronto/releases).
+
+## Config
+
+See [configuration](docs/configuration.md) for details.
 
 ### Enable Notifications
 

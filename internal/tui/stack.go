@@ -297,14 +297,13 @@ func renderStackBanner(rootPR model.PullRequest, prs []PRItem, isSelected bool, 
 	}
 
 	num := numStyle.Render(fmt.Sprintf("#%d", rootPR.Number))
-	tag := styleStackTag.Render("[STACK]")
 
 	firstPR := prs[0]
 	lastPR := prs[len(prs)-1]
 	rangeText := styleRangeTag.Render(fmt.Sprintf("(%d PRs · #%d..#%d)", len(prs), firstPR.Number, lastPR.Number))
 	foldHint := styleRangeTag.Render("[space: fold]")
 
-	headerText := fmt.Sprintf("%s%s  %s %s ", toggle, num, tag, rangeText)
+	headerText := fmt.Sprintf("%s%s  %s ", toggle, num, rangeText)
 	textWidth := lipgloss.Width(headerText) + lipgloss.Width(foldHint) + 1
 	ruleLen := max(0, width-textWidth)
 	rule := lipgloss.NewStyle().Foreground(lipgloss.Color("#3B4252")).Render(strings.Repeat("─", ruleLen))

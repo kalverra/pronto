@@ -19,8 +19,47 @@ func TestLoadFile_NotificationsDefaults(t *testing.T) {
 	assert.True(t, cfg.Notifications.Popups, "popups should default to true")
 	assert.False(t, cfg.Notifications.Sound, "sound should default to false")
 	assert.Equal(t, config.NotifyNative, cfg.Notifications.Mode, "mode should default to native")
+	assert.Equal(t, []string{config.GroupFocus, config.GroupMine}, cfg.Notifications.Groups)
+	assert.True(t, cfg.Notifications.HasGroup(config.GroupFocus))
+	assert.True(t, cfg.Notifications.HasGroup(config.GroupMine))
+	assert.False(t, cfg.Notifications.HasGroup(config.GroupInbox))
 	assert.Empty(t, cfg.Notifications.Sounds)
 	assert.Empty(t, cfg.Notifications.Images)
+}
+
+func TestLoad_NotificationGroupsCustom(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("PRONTO_CONFIG_DIR", tmpDir)
+
+	tomlContent := `
+[notifications]
+groups = ["inbox"]
+`
+	err := os.WriteFile(filepath.Join(tmpDir, "pronto.toml"), []byte(tomlContent), 0o600)
+	require.NoError(t, err)
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, []string{config.GroupInbox}, cfg.Notifications.Groups)
+	assert.False(t, cfg.Notifications.HasGroup(config.GroupFocus))
+	assert.False(t, cfg.Notifications.HasGroup(config.GroupMine))
+	assert.True(t, cfg.Notifications.HasGroup(config.GroupInbox))
+}
+
+func TestLoad_NotificationGroupsInvalid(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("PRONTO_CONFIG_DIR", tmpDir)
+
+	tomlContent := `
+[notifications]
+groups = ["invalid-group"]
+`
+	err := os.WriteFile(filepath.Join(tmpDir, "pronto.toml"), []byte(tomlContent), 0o600)
+	require.NoError(t, err)
+
+	_, err = config.Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid-group")
 }
 
 func TestLoadFile_NotificationsFull(t *testing.T) {
