@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kalverra/pronto/internal/model"
 )
 
 func TestConvertPR_Stack(t *testing.T) {
@@ -315,6 +317,132 @@ func TestFreshFields_IncludesCheckTimestampsAndLinks(t *testing.T) {
 	assert.Contains(t, freshFragment, "... on CheckRun { name status conclusion startedAt completedAt detailsUrl }")
 	assert.Contains(t, freshFragment, "... on StatusContext { context state createdAt targetUrl }")
 	assert.Contains(t, freshFragment, "url\n      author { login }")
+}
+
+func TestFreshFields_IncludesMergeQueueEntry(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, freshFragment, "mergeQueueEntry {")
+	assert.Contains(t, freshFragment, "headCommit {")
+	assert.Contains(t, freshFragment, "enqueuedAt")
+}
+
+func TestConvertPR_MergeQueueEntry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not in a merge queue leaves MergeQueue and MergeQueueChecks unset", func(t *testing.T) {
+		t.Parallel()
+		pr := convertPR(rawIdentity{Number: 1}, stableFields{}, rawFresh{}, false, convertOpts{})
+		assert.Nil(t, pr.MergeQueue)
+		assert.Equal(t, model.ChecksSummary{}, pr.MergeQueueChecks)
+	})
+
+	t.Run("queued entry without checks yet reports position and state", func(t *testing.T) {
+		t.Parallel()
+		freshJSON := `{
+			"mergeQueueEntry": {
+				"position": 3,
+				"state": "QUEUED",
+				"enqueuedAt": "2026-09-25T10:00:00Z"
+			}
+		}`
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 2}, stableFields{}, fresh, false, convertOpts{})
+		require.NotNil(t, pr.MergeQueue)
+		assert.Equal(t, 3, pr.MergeQueue.Position)
+		assert.Equal(t, "QUEUED", pr.MergeQueue.State)
+		require.NotNil(t, pr.MergeQueue.EnqueuedAt)
+		assert.Equal(t, time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC), *pr.MergeQueue.EnqueuedAt)
+		assert.True(t, pr.InMergeQueue())
+		assert.Equal(t, model.ChecksSummary{}, pr.MergeQueueChecks)
+	})
+
+	t.Run("queued entry's head commit checks populate MergeQueueChecks distinct from Checks", func(t *testing.T) {
+		t.Parallel()
+		start := time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC)
+		freshJSON := `{
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "SUCCESS",
+								"contexts": {
+									"totalCount": 1,
+									"nodes": [
+										{
+											"__typename": "CheckRun",
+											"name": "build",
+											"status": "COMPLETED",
+											"conclusion": "SUCCESS",
+											"startedAt": "2026-09-24T20:00:00Z",
+											"completedAt": "2026-09-24T20:05:00Z"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			},
+			"mergeQueueEntry": {
+				"position": 1,
+				"state": "AWAITING_CHECKS",
+				"enqueuedAt": "2026-09-25T08:55:00Z",
+				"headCommit": {
+					"oid": "merge-group-temp-sha",
+					"statusCheckRollup": {
+						"state": "PENDING",
+						"contexts": {
+							"totalCount": 2,
+							"checkRunCountsByState": [
+								{"state": "SUCCESS", "count": 1},
+								{"state": "IN_PROGRESS", "count": 1}
+							],
+							"nodes": [
+								{
+									"__typename": "CheckRun",
+									"name": "build",
+									"status": "COMPLETED",
+									"conclusion": "SUCCESS",
+									"startedAt": "2026-09-25T09:00:00Z",
+									"completedAt": "2026-09-25T09:10:00Z"
+								},
+								{
+									"__typename": "CheckRun",
+									"name": "test",
+									"status": "IN_PROGRESS",
+									"startedAt": "2026-09-25T09:00:00Z"
+								}
+							]
+						}
+					}
+				}
+			}
+		}`
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 3}, stableFields{}, fresh, false, convertOpts{})
+		require.NotNil(t, pr.MergeQueue)
+		assert.Equal(t, 1, pr.MergeQueue.Position)
+		assert.Equal(t, "AWAITING_CHECKS", pr.MergeQueue.State)
+
+		// The PR's own head-commit checks are untouched by the merge queue entry.
+		assert.Equal(t, 1, pr.Checks.Total)
+		assert.Equal(t, 1, pr.Checks.Done)
+
+		// MergeQueueChecks reflects the merge group's temporary commit instead.
+		assert.Equal(t, 2, pr.MergeQueueChecks.Total)
+		assert.Equal(t, 1, pr.MergeQueueChecks.Done)
+		assert.Equal(t, 1, pr.MergeQueueChecks.Running)
+		require.NotNil(t, pr.MergeQueueChecks.StartedAt)
+		assert.Equal(t, start, *pr.MergeQueueChecks.StartedAt)
+		assert.Nil(t, pr.MergeQueueChecks.CompletedAt)
+
+		assert.Equal(t, pr.MergeQueueChecks, pr.DisplayChecks())
+	})
 }
 
 func TestConvertPR_LinkURLs(t *testing.T) {

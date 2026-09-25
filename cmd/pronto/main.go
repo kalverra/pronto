@@ -112,6 +112,7 @@ func runRootTUI(cmd *cobra.Command, src source.Source) error {
 		tui.WithFocusConfig(cfg.Focus),
 		tui.WithPriorityConfig(cfg.Priority),
 		tui.WithLogger(logger),
+		tui.WithVersion(version),
 	}
 	return runTUI(tuiCtx, s, store, opts...)
 }

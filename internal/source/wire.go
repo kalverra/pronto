@@ -49,13 +49,14 @@ type rawStable struct {
 }
 
 type rawFresh struct {
-	Mergeable        string      `json:"mergeable"`
-	MergeStateStatus string      `json:"mergeStateStatus"`
-	ReviewDecision   string      `json:"reviewDecision"`
-	LatestReviews    rawReviews  `json:"latestReviews"`
-	TimelineItems    rawTimeline `json:"timelineItems"`
-	BaseRef          *rawBaseRef `json:"baseRef"`
-	Commits          rawCommits  `json:"commits"`
+	Mergeable        string              `json:"mergeable"`
+	MergeStateStatus string              `json:"mergeStateStatus"`
+	ReviewDecision   string              `json:"reviewDecision"`
+	LatestReviews    rawReviews          `json:"latestReviews"`
+	TimelineItems    rawTimeline         `json:"timelineItems"`
+	BaseRef          *rawBaseRef         `json:"baseRef"`
+	Commits          rawCommits          `json:"commits"`
+	MergeQueueEntry  *rawMergeQueueEntry `json:"mergeQueueEntry"`
 }
 
 type rawStack struct {
@@ -135,40 +136,57 @@ type rawBaseRef struct {
 	} `json:"branchProtectionRule"`
 }
 
+// rawStatusCheckRollup mirrors the StatusCheckRollupFields fragment, shared by
+// a PR's own head commit and a merge queue entry's temporary head commit.
+type rawStatusCheckRollup struct {
+	State    string `json:"state"`
+	Contexts struct {
+		TotalCount            int `json:"totalCount"`
+		CheckRunCountsByState []struct {
+			State string `json:"state"`
+			Count int    `json:"count"`
+		} `json:"checkRunCountsByState"`
+		StatusContextCountsByState []struct {
+			State string `json:"state"`
+			Count int    `json:"count"`
+		} `json:"statusContextCountsByState"`
+		Nodes []struct {
+			Typename    string     `json:"__typename"`
+			Name        string     `json:"name"`
+			Status      string     `json:"status"`
+			Conclusion  string     `json:"conclusion"`
+			Context     string     `json:"context"`
+			State       string     `json:"state"`
+			StartedAt   *time.Time `json:"startedAt"`
+			CompletedAt *time.Time `json:"completedAt"`
+			CreatedAt   *time.Time `json:"createdAt"`
+			DetailsURL  string     `json:"detailsUrl"`
+			TargetURL   string     `json:"targetUrl"`
+		} `json:"nodes"`
+	} `json:"contexts"`
+}
+
 type rawCommits struct {
 	Nodes []struct {
 		Commit struct {
-			OID               string    `json:"oid"`
-			CommittedDate     time.Time `json:"committedDate"`
-			StatusCheckRollup *struct {
-				State    string `json:"state"`
-				Contexts struct {
-					TotalCount            int `json:"totalCount"`
-					CheckRunCountsByState []struct {
-						State string `json:"state"`
-						Count int    `json:"count"`
-					} `json:"checkRunCountsByState"`
-					StatusContextCountsByState []struct {
-						State string `json:"state"`
-						Count int    `json:"count"`
-					} `json:"statusContextCountsByState"`
-					Nodes []struct {
-						Typename    string     `json:"__typename"`
-						Name        string     `json:"name"`
-						Status      string     `json:"status"`
-						Conclusion  string     `json:"conclusion"`
-						Context     string     `json:"context"`
-						State       string     `json:"state"`
-						StartedAt   *time.Time `json:"startedAt"`
-						CompletedAt *time.Time `json:"completedAt"`
-						CreatedAt   *time.Time `json:"createdAt"`
-						DetailsURL  string     `json:"detailsUrl"`
-						TargetURL   string     `json:"targetUrl"`
-					} `json:"nodes"`
-				} `json:"contexts"`
-			} `json:"statusCheckRollup"`
+			OID               string                `json:"oid"`
+			CommittedDate     time.Time             `json:"committedDate"`
+			StatusCheckRollup *rawStatusCheckRollup `json:"statusCheckRollup"`
 		} `json:"commit"`
 	} `json:"nodes"`
+}
+
+// rawMergeQueueEntry mirrors PullRequest.mergeQueueEntry: the PR's position and
+// state in its repository's merge queue, plus the temporary head commit GitHub
+// creates to run CI for the merge group (distinct from the PR's own head commit).
+type rawMergeQueueEntry struct {
+	Position   int       `json:"position"`
+	State      string    `json:"state"`
+	EnqueuedAt time.Time `json:"enqueuedAt"`
+	HeadCommit *struct {
+		OID               string                `json:"oid"`
+		StatusCheckRollup *rawStatusCheckRollup `json:"statusCheckRollup"`
+	} `json:"headCommit"`
 }
 
 // stableFields is the phase-agnostic form of head-OID-stable data, composable
@@ -223,13 +241,19 @@ func convertStack(rawS *rawStack, rawE *rawStackEntry) *model.PRStack {
 }
 
 func convertChecks(commits rawCommits) (model.CheckRollup, []model.ContextCheck) {
+	if len(commits.Nodes) == 0 {
+		return model.CheckRollup{}, nil
+	}
+	return convertChecksFromRollup(commits.Nodes[0].Commit.StatusCheckRollup)
+}
+
+func convertChecksFromRollup(ru *rawStatusCheckRollup) (model.CheckRollup, []model.ContextCheck) {
 	var rollup model.CheckRollup
 	var checks []model.ContextCheck
-	if len(commits.Nodes) == 0 || commits.Nodes[0].Commit.StatusCheckRollup == nil {
+	if ru == nil {
 		return rollup, checks
 	}
 
-	ru := commits.Nodes[0].Commit.StatusCheckRollup
 	rollup.State = ru.State
 	rollup.TotalCount = ru.Contexts.TotalCount
 	if len(ru.Contexts.CheckRunCountsByState) > 0 {
@@ -361,6 +385,21 @@ func convertPR(
 
 	rollup, checks := convertChecks(fresh.Commits)
 
+	var mergeQueueInfo *model.MergeQueueInfo
+	var mergeQueueChecks model.ChecksSummary
+	if mqe := fresh.MergeQueueEntry; mqe != nil {
+		enqueuedAt := mqe.EnqueuedAt
+		mergeQueueInfo = &model.MergeQueueInfo{
+			Position:   mqe.Position,
+			State:      mqe.State,
+			EnqueuedAt: &enqueuedAt,
+		}
+		if mqe.HeadCommit != nil {
+			mqRollup, mqChecks := convertChecksFromRollup(mqe.HeadCommit.StatusCheckRollup)
+			mergeQueueChecks = model.ComputeChecksSummaryWithRollup(requiredContexts, mqChecks, mqRollup)
+		}
+	}
+
 	isInMergeQueue := ident.IsInMergeQueue
 	mergeStatus := model.ComputeMergeStatus(fresh.Mergeable, fresh.MergeStateStatus, ident.IsDraft)
 	mergeStatus.IsInMergeQueue = isInMergeQueue
@@ -402,6 +441,8 @@ func convertPR(
 		Assigned:          assigned,
 		MergeStatus:       mergeStatus,
 		Checks:            checksSummary,
+		MergeQueue:        mergeQueueInfo,
+		MergeQueueChecks:  mergeQueueChecks,
 		LatestReviews:     reviews,
 		TimelineItems:     timelineItems,
 		Commits:           commits,

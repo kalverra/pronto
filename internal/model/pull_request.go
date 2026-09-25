@@ -109,6 +109,18 @@ func (pr PullRequest) InMergeQueue() bool {
 	return pr.IsInMergeQueue || pr.MergeStateStatus == "QUEUED" || pr.MergeStatus.IsQueued() || pr.MergeQueue != nil
 }
 
+// DisplayChecks returns the checks summary that best represents the PR's
+// current CI progress. While queued, GitHub runs checks against a temporary
+// merge-group commit distinct from the PR's own head commit, so MergeQueueChecks
+// is preferred once it has data; the PR's own Checks (e.g. from before it
+// entered the queue) is used as a fallback until the merge queue run reports in.
+func (pr PullRequest) DisplayChecks() ChecksSummary {
+	if pr.InMergeQueue() && (pr.MergeQueueChecks.Total > 0 || pr.MergeQueueChecks.ReqTotal > 0) {
+		return pr.MergeQueueChecks
+	}
+	return pr.Checks
+}
+
 // StackKey returns a composite identifier for grouping PRs in the same stack.
 func (pr PullRequest) StackKey() string {
 	if pr.Stack == nil || pr.Stack.ID == "" {

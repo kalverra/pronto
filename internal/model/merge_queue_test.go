@@ -167,3 +167,46 @@ func TestPullRequest_InMergeQueue_WithMergeQueueInfo(t *testing.T) {
 	}
 	assert.True(t, pr.InMergeQueue())
 }
+
+func TestPullRequest_DisplayChecks(t *testing.T) {
+	t.Parallel()
+
+	headChecks := model.ChecksSummary{Total: 4, Done: 4}
+
+	t.Run("not in merge queue returns own checks", func(t *testing.T) {
+		t.Parallel()
+		pr := model.PullRequest{Checks: headChecks}
+		assert.Equal(t, headChecks, pr.DisplayChecks())
+	})
+
+	t.Run("queued with no merge queue check data yet falls back to own checks", func(t *testing.T) {
+		t.Parallel()
+		pr := model.PullRequest{
+			Checks:     headChecks,
+			MergeQueue: &model.MergeQueueInfo{Position: 1, State: "QUEUED"},
+		}
+		assert.Equal(t, headChecks, pr.DisplayChecks())
+	})
+
+	t.Run("queued with merge queue checks in progress prefers them", func(t *testing.T) {
+		t.Parallel()
+		queueChecks := model.ChecksSummary{Total: 4, Done: 1, Running: 3}
+		pr := model.PullRequest{
+			Checks:           headChecks,
+			MergeQueue:       &model.MergeQueueInfo{Position: 1, State: "QUEUED"},
+			MergeQueueChecks: queueChecks,
+		}
+		assert.Equal(t, queueChecks, pr.DisplayChecks())
+	})
+
+	t.Run("queued with required-checks merge queue data prefers them", func(t *testing.T) {
+		t.Parallel()
+		queueChecks := model.ChecksSummary{HasRequiredChecks: true, ReqTotal: 2, ReqRunning: 2}
+		pr := model.PullRequest{
+			Checks:           headChecks,
+			MergeQueue:       &model.MergeQueueInfo{Position: 1, State: "QUEUED"},
+			MergeQueueChecks: queueChecks,
+		}
+		assert.Equal(t, queueChecks, pr.DisplayChecks())
+	})
+}

@@ -323,6 +323,21 @@ a passive status report: configured backends, the native helper's
 installed/stale/missing state, and (bounded by a short timeout, since it
 runs on every invocation) its current authorization status.
 
+### Update checks
+
+`internal/update` checks GitHub for a pronto release newer than the running
+binary. On startup the TUI fires one non-blocking `Check` against
+`repos/kalverra/pronto/releases/latest` (via `api.NewRESTClient`, so it shares
+go-gh's auth resolution — GH_TOKEN, gh CLI config, or unauthenticated) with a
+5s timeout; a failed or timed-out lookup is logged at debug and otherwise
+ignored. `main.version` (the ldflags-injected build version) and the
+release's `tag_name` are compared with `golang.org/x/mod/semver` after
+normalizing a missing `v` prefix; a non-semver version (`dev`, local builds)
+skips the network call entirely. When a newer release is found, the status
+banner shows a one-line reminder alongside the notification health hint
+(`renderStatusBanner`), lowest priority so it never displaces an active error
+or confirmation prompt.
+
 ### Profiling
 
 `internal/profiling` is the single wiring surface for pprof and the Go 1.27

@@ -12,6 +12,7 @@ import (
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/notify"
 	"github.com/kalverra/pronto/internal/source"
+	"github.com/kalverra/pronto/internal/update"
 )
 
 const (
@@ -41,6 +42,31 @@ type EventMsg struct {
 // NotificationMsg carries newly detected notifications for the user.
 type NotificationMsg struct {
 	Notifications []notify.Notification
+}
+
+// UpdateCheckMsg carries the outcome of checking GitHub for a newer pronto release.
+type UpdateCheckMsg struct {
+	Info update.Info
+}
+
+// updateCheckCmd checks once for a newer pronto release. A nil client or
+// unset version disables the check; a failed lookup is logged and dropped
+// rather than surfaced, since it is a background nicety, not a queue error.
+func updateCheckCmd(ctx context.Context, client update.RESTClient, version string, logger zerolog.Logger) tea.Cmd {
+	if client == nil || version == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		info, err := update.Check(ctx, client, version)
+		if err != nil {
+			logger.Debug().Err(err).Msg("update check failed")
+			return nil
+		}
+		return UpdateCheckMsg{Info: info}
+	}
 }
 
 func notifyCmd(

@@ -201,7 +201,12 @@ var (
 	stableFragment string
 
 	//go:embed queries/fragments/fresh_fields.graphql
-	freshFragment string
+	rawFreshFragment string
+
+	//go:embed queries/fragments/status_check_rollup_fields.graphql
+	statusCheckRollupFragment string
+
+	freshFragment = rawFreshFragment + "\n" + statusCheckRollupFragment
 
 	discoveryQuery = rawDiscoveryQuery + "\n" + discoveryFragment
 

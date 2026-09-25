@@ -1,0 +1,21 @@
+fragment StatusCheckRollupFields on Commit {
+  statusCheckRollup {
+    state
+    contexts(first: 100) {
+      totalCount
+      checkRunCountsByState {
+        state
+        count
+      }
+      statusContextCountsByState {
+        state
+        count
+      }
+      nodes {
+        __typename
+        ... on CheckRun { name status conclusion startedAt completedAt detailsUrl }
+        ... on StatusContext { context state createdAt targetUrl }
+      }
+    }
+  }
+}

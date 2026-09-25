@@ -1436,7 +1436,7 @@ func (m Model) childStackRowCols(dRow displayRow, pr model.PullRequest, isSelect
 		titleText,
 		RenderChildStatusBadge(pr),
 		renderDiffSize(pr.Additions, pr.Deletions, childSelected),
-		m.renderCIBadge(pr.Checks, refTime, childSelected),
+		m.renderCIBadge(pr.DisplayChecks(), refTime, childSelected),
 		updatedText,
 		rpStyle.Render(repo),
 	}
@@ -1487,7 +1487,7 @@ func (m Model) itemRowCols(
 
 	statusBadge := renderStatusBadge(pr)
 	sizeText := renderDiffSize(pr.Additions, pr.Deletions, isSelected)
-	ciBadge := m.renderCIBadge(pr.Checks, refTime, isSelected)
+	ciBadge := m.renderCIBadge(pr.DisplayChecks(), refTime, isSelected)
 	if pr.Partial {
 		statusBadge = ciRunningStyle.Render(m.spinnerChar() + " LOADING")
 		sizeText = faintStyle.Render("…")
@@ -1636,9 +1636,24 @@ func (m Model) renderStatusBanner() string {
 			"⚠ refresh failed: %s — data from %s ago", m.fetchErr, humanAge(time.Since(m.lastFetch))))
 	case m.notifyHint() != "":
 		return faintStyle.Render(m.notifyHint())
+	case m.updateHint() != "":
+		return faintStyle.Render(m.updateHint())
 	default:
 		return ""
 	}
+}
+
+// updateHint reports a short reminder when a newer pronto release is
+// available, or "" when up to date, not checked, or checking is disabled.
+func (m Model) updateHint() string {
+	if !m.updateInfo.Available {
+		return ""
+	}
+	running := m.version
+	if running != "" && !strings.HasPrefix(running, "v") {
+		running = "v" + running
+	}
+	return fmt.Sprintf("🆕 pronto %s available (running %s) — %s", m.updateInfo.Latest, running, m.updateInfo.URL)
 }
 
 // notifyHint explains a degraded desktop notifier (see
@@ -2040,21 +2055,26 @@ func (m Model) renderDetailsModal() string {
 	}
 
 	// CI Checks
-	if pr.Checks.Total > 0 || pr.Checks.ReqTotal > 0 {
+	displayChecks := pr.DisplayChecks()
+	if displayChecks.Total > 0 || displayChecks.ReqTotal > 0 {
 		b.WriteString("\n")
-		ciTitle := "CI Checks: " + m.renderCIBadge(pr.Checks, refTime, false)
+		ciLabel := "CI Checks"
+		if pr.InMergeQueue() && displayChecks == pr.MergeQueueChecks {
+			ciLabel = "CI Checks (Merge Queue)"
+		}
+		ciTitle := ciLabel + ": " + m.renderCIBadge(displayChecks, refTime, false)
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render(ciTitle))
 		b.WriteString("\n")
 		durationSuffix := ""
-		if d, ok := pr.Checks.Duration(refTime); ok {
-			if pr.Checks.IsRunning() {
+		if d, ok := displayChecks.Duration(refTime); ok {
+			if displayChecks.IsRunning() {
 				durationSuffix = " | Elapsed: " + FormatCIDuration(d)
 			} else {
 				durationSuffix = " | Duration: " + FormatCIDuration(d)
 			}
 		}
 		fmt.Fprintf(&b, "  Total: %d | Done: %d | Failed: %d | Running: %d%s\n",
-			pr.Checks.Total, pr.Checks.Done, pr.Checks.Failed, pr.Checks.Running, durationSuffix)
+			displayChecks.Total, displayChecks.Done, displayChecks.Failed, displayChecks.Running, durationSuffix)
 	}
 
 	// Changed Files & Diffstat

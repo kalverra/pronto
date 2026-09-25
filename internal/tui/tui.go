@@ -26,6 +26,7 @@ import (
 	"github.com/kalverra/pronto/internal/score"
 	"github.com/kalverra/pronto/internal/server"
 	"github.com/kalverra/pronto/internal/source"
+	"github.com/kalverra/pronto/internal/update"
 )
 
 // Tab represents the active pane in the TUI.
@@ -108,6 +109,11 @@ type Model struct {
 	viewErr               error
 	viewErrPR             *model.PullRequest
 	eventsCh              <-chan events.Event
+
+	version       string
+	updateClient  update.RESTClient
+	updateInfo    update.Info
+	updateChecked bool
 
 	stacksCollapsed bool
 	expandedStacks  map[string]bool
@@ -257,6 +263,23 @@ func WithoutChangeDetection() Option {
 func WithNotifierFactory(factory NotifierFactory) Option {
 	return func(m *Model) {
 		m.notifierFactory = factory
+	}
+}
+
+// WithVersion sets the running binary's version (e.g. "0.1.0" or "dev"),
+// enabling the update-available hint. Non-semver values (like "dev") disable
+// the check entirely, since there is no release stream to compare against.
+func WithVersion(v string) Option {
+	return func(m *Model) {
+		m.version = v
+	}
+}
+
+// WithUpdateClient overrides the client used to check for newer pronto
+// releases on GitHub, mainly for tests. Production defaults to update.NewClient().
+func WithUpdateClient(c update.RESTClient) Option {
+	return func(m *Model) {
+		m.updateClient = c
 	}
 }
 
@@ -565,6 +588,11 @@ func New(q model.Queue, opts ...Option) Model {
 	if m.teams == nil {
 		m.teams = q.Teams
 	}
+	if m.version != "" && m.updateClient == nil {
+		if c, err := update.NewClient(); err == nil {
+			m.updateClient = c
+		}
+	}
 	if m.notifierFactory == nil {
 		m.notifierFactory = DefaultNotifierFactory
 	}
@@ -707,6 +735,7 @@ func (m Model) Init() tea.Cmd {
 		// queue from an empty cache cannot fit the refresh-tick deadline.
 		cmds = append(cmds, FetchQueueColdCmd(m.ctx, m.src))
 	}
+	cmds = append(cmds, updateCheckCmd(m.ctx, m.updateClient, m.version, m.logger))
 	return tea.Batch(cmds...)
 }
 
@@ -736,6 +765,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case QueueLoadedMsg:
 		return m.handleQueueLoaded(msg)
+
+	case UpdateCheckMsg:
+		m.updateInfo = msg.Info
+		m.updateChecked = true
+		return m, nil
 
 	case EventMsg:
 		ev := msg.Event
