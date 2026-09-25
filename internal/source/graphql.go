@@ -216,21 +216,23 @@ var (
 )
 
 // searchTask is one GitHub search whose results feed the queue. Primary tasks
-// (authored, direct review-requested) fail the whole fetch on error; the rest
-// (assignee) degrade to a warning and are skipped.
+// (authored, review-requested) fail the whole fetch on error; the rest
+// (assignee, user-only review-requested) degrade to a warning and are skipped.
 type searchTask struct {
-	Query      string
-	IsAuthored bool
-	Primary    bool
-	Assigned   bool
+	Query         string
+	IsAuthored    bool
+	Primary       bool
+	Assigned      bool
+	DirectRequest bool
 }
 
 // discoveredPR is a light identity from discovery plus the task flags that
 // found it.
 type discoveredPR struct {
-	ident    rawIdentity
-	authored bool
-	assigned bool
+	ident         rawIdentity
+	authored      bool
+	assigned      bool
+	directRequest bool
 }
 
 func (d discoveredPR) key() model.PRKey {
@@ -452,6 +454,12 @@ func (s *GraphQLSource) discover(ctx context.Context) ([]discoveredPR, error) {
 			Query:    "is:open is:pr assignee:@me archived:false",
 			Assigned: true,
 		},
+		{
+			// review-requested:@me also matches team requests; this narrower
+			// search flags the PRs requested from the viewer personally.
+			Query:         "is:open is:pr user-review-requested:@me archived:false",
+			DirectRequest: true,
+		},
 	}
 
 	s.logger.Info().Int("tasks_total", len(tasks)).Msg("assembled search tasks")
@@ -493,6 +501,7 @@ func (s *GraphQLSource) discover(ctx context.Context) ([]discoveredPR, error) {
 			if idx, ok := seen[d.key()]; ok {
 				merged[idx].authored = merged[idx].authored || d.authored
 				merged[idx].assigned = merged[idx].assigned || d.assigned
+				merged[idx].directRequest = merged[idx].directRequest || d.directRequest
 				continue
 			}
 			seen[d.key()] = len(merged)
@@ -552,9 +561,10 @@ func (s *GraphQLSource) discoverTask(ctx context.Context, task searchTask) ([]di
 
 		for _, node := range resp.Search.Nodes {
 			prs = append(prs, discoveredPR{
-				ident:    node.rawIdentity,
-				authored: task.IsAuthored,
-				assigned: task.Assigned,
+				ident:         node.rawIdentity,
+				authored:      task.IsAuthored,
+				assigned:      task.Assigned,
+				directRequest: task.DirectRequest,
 			})
 		}
 
@@ -646,6 +656,7 @@ func (s *GraphQLSource) planHydration(
 				cached.Author = d.ident.Author.Login
 				cached.URL = d.ident.URL
 				cached.Assigned = d.assigned
+				cached.DirectRequest = d.directRequest
 				cached.Stack = convertStack(d.ident.Stack, d.ident.StackEntry)
 				cached.MergeStatus = model.ComputeMergeStatus(
 					cached.Mergeable,
@@ -844,6 +855,7 @@ func (s *GraphQLSource) assembleHydrated(
 				staleActivityAfter: s.staleActivityAfter,
 			})
 			pr.Partial = true
+			pr.DirectRequest = d.directRequest
 			finalPRs = append(finalPRs, flaggedPR{
 				PullRequest: pr,
 				authored:    d.authored,
@@ -984,11 +996,13 @@ func (s *GraphQLSource) executeHydrateQuery(
 			stable = stableFromWire(node.rawStable)
 		}
 
+		converted := convertPR(d.ident, stable, node.rawFresh, d.assigned, convertOpts{
+			staleActivityAfter: s.staleActivityAfter,
+		})
+		converted.DirectRequest = d.directRequest
 		pr := flaggedPR{
-			PullRequest: convertPR(d.ident, stable, node.rawFresh, d.assigned, convertOpts{
-				staleActivityAfter: s.staleActivityAfter,
-			}),
-			authored: d.authored,
+			PullRequest: converted,
+			authored:    d.authored,
 		}
 		if s.cache != nil {
 			if err := s.cache.SavePR(

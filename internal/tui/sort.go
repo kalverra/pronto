@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/kalverra/pronto/internal/model"
+import (
+	"strings"
+
+	"github.com/kalverra/pronto/internal/model"
+)
 
 // SortStrategy defines how pull requests are grouped and ordered in the TUI.
 type SortStrategy int
@@ -10,6 +14,8 @@ const (
 	SortAction SortStrategy = iota
 	// SortRepo groups PRs alphabetically by repository name.
 	SortRepo
+	// SortAuthor groups PRs alphabetically by author login.
+	SortAuthor
 	// SortUpdated orders PRs chronologically by last updated timestamp descending.
 	SortUpdated
 	// SortScore orders PRs purely by computed priority score descending.
@@ -19,6 +25,7 @@ const (
 var allSortStrategies = []SortStrategy{
 	SortAction,
 	SortRepo,
+	SortAuthor,
 	SortUpdated,
 	SortScore,
 }
@@ -30,6 +37,8 @@ func (s SortStrategy) String() string {
 		return "action"
 	case SortRepo:
 		return "repo"
+	case SortAuthor:
+		return "author"
 	case SortUpdated:
 		return "updated"
 	case SortScore:
@@ -46,6 +55,8 @@ func (s SortStrategy) Label() string {
 		return "Action"
 	case SortRepo:
 		return "Repo"
+	case SortAuthor:
+		return "Author"
 	case SortUpdated:
 		return "Updated"
 	case SortScore:
@@ -78,4 +89,9 @@ func prRepoKey(pr model.PullRequest) string {
 		return pr.RepoNameWithOwner
 	}
 	return pr.RepoName
+}
+
+// prAuthorKey returns the case-insensitive grouping key for a pull request's author.
+func prAuthorKey(pr model.PullRequest) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(pr.Author), "@"))
 }

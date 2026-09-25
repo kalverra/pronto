@@ -980,3 +980,39 @@ func TestDaemon_NotificationGroups_InboxAndFocus(t *testing.T) {
 	assert.Equal(t, 101, ev.PR)
 	assert.Equal(t, "Colleague Feature", ev.Title)
 }
+
+func TestDaemon_NotificationGroups_Priority(t *testing.T) {
+	t.Parallel()
+
+	direct := pr(101, "Direct Ask", "kalverra/pronto")
+	direct.Author = "colleague"
+	direct.DirectRequest = true
+	direct.Checks = runningChecks()
+	team := pr(102, "Team Ask", "kalverra/pronto")
+	team.Author = "colleague"
+	team.Checks = runningChecks()
+
+	directFailed, teamFailed := direct, team
+	directFailed.Checks = failedChecks()
+	teamFailed.Checks = failedChecks()
+
+	src := &scriptedSource{results: []fetchResult{
+		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{direct, team}}},
+		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{directFailed, teamFailed}}},
+	}}
+
+	bus := runDaemon(t, daemon.Options{
+		Source:             src,
+		PriorityConfig:     config.DefaultPriorityConfig(),
+		NotificationConfig: config.NotificationConfig{Groups: []string{config.GroupPriority}},
+	})
+	c := collect(t, bus)
+
+	ev := c.waitFor(t, events.TypeCIFailed)
+	assert.Equal(t, 101, ev.PR, "only the direct-request PR is in the priority group")
+	for _, rest := range c.drain(t, 200*time.Millisecond) {
+		if rest.Type == events.TypeCIFailed {
+			assert.NotEqual(t, 102, rest.PR, "team-only PR must not notify under the priority group")
+		}
+	}
+}

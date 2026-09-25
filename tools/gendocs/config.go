@@ -67,7 +67,7 @@ func renderExampleTOML() string {
 	b.WriteString("mode = \"native\"\n")
 	b.WriteString("popups = true\n")
 	b.WriteString("sound = false\n")
-	b.WriteString("groups = [\"focus\", \"mine\"]\n\n")
+	b.WriteString("groups = [\"focus\", \"mine\", \"priority\"]\n\n")
 
 	b.WriteString("[notifications.sounds]\n")
 	b.WriteString("# ci_passed = \"Glass\"\n\n")
@@ -76,6 +76,7 @@ func renderExampleTOML() string {
 	b.WriteString("# ci_passed = \"/path/to/icon.png\"\n\n")
 
 	b.WriteString("[focus]\n")
+	b.WriteString("exclude_bots = true\n")
 	b.WriteString("# authors = [\"alice\"]\n")
 	b.WriteString("# repos = [\"kalverra/pronto\"]\n\n")
 
@@ -84,7 +85,19 @@ func renderExampleTOML() string {
 	b.WriteString("# keywords = [\"urgent\", \"security\"]\n")
 	b.WriteString("# files = [\"go.mod\"]\n")
 	b.WriteString("# directories = [\"internal/notify\"]\n")
+	b.WriteString("# regex = ['^migrations/.*\\.sql$']\n")
 	b.WriteString("# authors = [\"charlie\"]\n\n")
+
+	b.WriteString("[priority]\n")
+	b.WriteString("direct_requests = true\n")
+	b.WriteString("exclude_bots = true\n")
+	b.WriteString("# authors = [\"alice\"]\n")
+	b.WriteString("# repos = [\"org/critical-service\"]\n\n")
+
+	b.WriteString("[[priority.rules]]\n")
+	b.WriteString("# repo = \"org/app\"\n")
+	b.WriteString("# directories = [\"infra\"]\n")
+	b.WriteString("# regex = ['(?i)\\.proto$']\n\n")
 
 	b.WriteString("[server]\n")
 	b.WriteString("# poll_interval = \"30s\"\n")

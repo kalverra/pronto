@@ -107,7 +107,8 @@ func TestModel_View_TabBarSeparatorsAndHeaderDivider(t *testing.T) {
 
 	assert.Contains(t, view, "1: Focus (0)")
 	assert.Contains(t, view, "2: Mine (0)")
-	assert.Contains(t, view, "3: Inbox (0)")
+	assert.Contains(t, view, "3: Priority (0)")
+	assert.Contains(t, view, "4: Inbox (0)")
 	// Modern tab pills without ncurses vertical border lines between tabs
 	assert.NotContains(t, view, "Focus (0)  │  2: Mine")
 }

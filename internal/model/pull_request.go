@@ -68,8 +68,11 @@ type PullRequest struct {
 	MergeStateStatus  string    `json:"merge_state_status"`
 	ReviewDecision    string    `json:"review_decision"`
 	Assigned          bool      `json:"assigned"`
-	Starred           bool      `json:"starred"`
-	IsInMergeQueue    bool      `json:"is_in_merge_queue,omitempty"`
+	// DirectRequest marks a PR whose review is requested from the viewer
+	// personally, not only through one of their teams.
+	DirectRequest  bool `json:"direct_request,omitempty"`
+	Starred        bool `json:"starred"`
+	IsInMergeQueue bool `json:"is_in_merge_queue,omitempty"`
 	// Partial marks a PR built from discovery data only (hydration skipped,
 	// e.g. due to a rate limit): merge status, checks, and diff size are
 	// unknown until a later poll completes them.

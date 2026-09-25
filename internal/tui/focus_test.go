@@ -1327,8 +1327,8 @@ func TestModel_AutoFocusRules(t *testing.T) {
 		Files:             []string{"README.md"},
 	}
 
-	focusCfg := config.FocusConfig{
-		Rules: []config.FocusRule{
+	focusCfg := config.RuleSet{
+		Rules: []config.Rule{
 			{
 				Repo:     "kalverra/pronto",
 				Keywords: []string{"security"},

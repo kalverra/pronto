@@ -138,7 +138,7 @@ func TestModel_InitialState(t *testing.T) {
 	assert.Nil(t, m.SelectedPR())
 
 	// Switching to Inbox tab allows selecting inbox PR
-	mInbox, _ := sendRune(m, '3')
+	mInbox, _ := sendRune(m, '4')
 	selected := mInbox.(tui.Model).SelectedPR()
 	require.NotNil(t, selected)
 	assert.Equal(t, m.InboxItems()[0].PR.Number, selected.Number)
@@ -161,8 +161,10 @@ func TestModel_TabSwitching(t *testing.T) {
 	require.NotNil(t, model2.SelectedPR())
 	assert.Equal(t, 201, model2.SelectedPR().Number)
 
-	// Tab advances to Inbox
-	m3, _ := sendKey(model2, tea.KeyTab)
+	// Tab advances to Priority, then Inbox
+	mP, _ := sendKey(model2, tea.KeyTab)
+	assert.Equal(t, tui.TabPriority, mP.(tui.Model).ActiveTab())
+	m3, _ := sendKey(mP, tea.KeyTab)
 	model3 := m3.(tui.Model)
 	assert.Equal(t, tui.TabInbox, model3.ActiveTab())
 
@@ -186,11 +188,13 @@ func TestModel_TabSwitching(t *testing.T) {
 	assert.Equal(t, tui.TabMine, model6.ActiveTab())
 
 	m7, _ := sendRune(model6, '3')
-	model7 := m7.(tui.Model)
-	assert.Equal(t, tui.TabInbox, model7.ActiveTab())
+	assert.Equal(t, tui.TabPriority, m7.(tui.Model).ActiveTab())
+
+	m8, _ := sendRune(m7, '4')
+	assert.Equal(t, tui.TabInbox, m8.(tui.Model).ActiveTab())
 }
 
-func TestModel_TabSwitching_ThreeTabs(t *testing.T) {
+func TestModel_TabSwitching_FourTabs(t *testing.T) {
 	t.Parallel()
 
 	q := makeTestQueue()
@@ -199,29 +203,38 @@ func TestModel_TabSwitching_ThreeTabs(t *testing.T) {
 	// 1. Defaults to TabFocus
 	assert.Equal(t, tui.TabFocus, m.ActiveTab())
 
-	// 2. Tab cycling: Focus -> Mine -> Inbox -> Focus
+	// 2. Tab cycling: Focus -> Mine -> Priority -> Inbox -> Focus
 	m1, _ := sendKey(m, tea.KeyTab)
 	assert.Equal(t, tui.TabMine, m1.(tui.Model).ActiveTab())
 
-	m2, _ := sendKey(m1, tea.KeyTab)
+	mp, _ := sendKey(m1, tea.KeyTab)
+	assert.Equal(t, tui.TabPriority, mp.(tui.Model).ActiveTab())
+
+	m2, _ := sendKey(mp, tea.KeyTab)
 	assert.Equal(t, tui.TabInbox, m2.(tui.Model).ActiveTab())
 
 	m3, _ := sendKey(m2, tea.KeyTab)
 	assert.Equal(t, tui.TabFocus, m3.(tui.Model).ActiveTab())
 
-	// 3. Shift+Tab cycling: Focus -> Inbox -> Mine -> Focus
+	// 3. Shift+Tab cycling: Focus -> Inbox -> Priority -> Mine -> Focus
 	mr1, _ := sendKey(m3, tea.KeyShiftTab)
 	assert.Equal(t, tui.TabInbox, mr1.(tui.Model).ActiveTab())
 
-	mr2, _ := sendKey(mr1, tea.KeyShiftTab)
+	mrp, _ := sendKey(mr1, tea.KeyShiftTab)
+	assert.Equal(t, tui.TabPriority, mrp.(tui.Model).ActiveTab())
+
+	mr2, _ := sendKey(mrp, tea.KeyShiftTab)
 	assert.Equal(t, tui.TabMine, mr2.(tui.Model).ActiveTab())
 
 	mr3, _ := sendKey(mr2, tea.KeyShiftTab)
 	assert.Equal(t, tui.TabFocus, mr3.(tui.Model).ActiveTab())
 
-	// 4. Number keys direct navigation: 1 -> Focus, 2 -> Mine, 3 -> Inbox
-	mk3, _ := sendRune(m, '3')
-	assert.Equal(t, tui.TabInbox, mk3.(tui.Model).ActiveTab())
+	// 4. Number keys direct navigation: 1 Focus, 2 Mine, 3 Priority, 4 Inbox
+	mk4, _ := sendRune(m, '4')
+	assert.Equal(t, tui.TabInbox, mk4.(tui.Model).ActiveTab())
+
+	mk3, _ := sendRune(mk4, '3')
+	assert.Equal(t, tui.TabPriority, mk3.(tui.Model).ActiveTab())
 
 	mk2, _ := sendRune(mk3, '2')
 	assert.Equal(t, tui.TabMine, mk2.(tui.Model).ActiveTab())
@@ -229,11 +242,12 @@ func TestModel_TabSwitching_ThreeTabs(t *testing.T) {
 	mk1, _ := sendRune(mk2, '1')
 	assert.Equal(t, tui.TabFocus, mk1.(tui.Model).ActiveTab())
 
-	// 5. Tab headers render all 3 tabs with counts: 1: Focus (N)  2: Mine (N)  3: Inbox (N)
+	// 5. Tab headers render all 4 tabs with counts
 	view := m.View()
 	assert.Contains(t, view, "1: Focus (0)")
 	assert.Contains(t, view, "2: Mine (1)")
-	assert.Contains(t, view, "3: Inbox (2)")
+	assert.Contains(t, view, "3: Priority (0)")
+	assert.Contains(t, view, "4: Inbox (2)")
 }
 
 func TestModel_FocusTab_HeadersIncludeAuthor(t *testing.T) {
@@ -330,7 +344,7 @@ func TestModel_CursorPreservedPerTab(t *testing.T) {
 	assert.Equal(t, 0, model4.Cursor())
 
 	// Switch back to Inbox (cursor should still be 1)
-	m5, _ := sendKey(model4, tea.KeyTab)
+	m5, _ := sendRune(model4, '4')
 	model5 := m5.(tui.Model)
 	assert.Equal(t, tui.TabInbox, model5.ActiveTab())
 	assert.Equal(t, 1, model5.Cursor())
@@ -755,7 +769,7 @@ func TestModel_ScrollPreservedPerTab(t *testing.T) {
 	assert.Equal(t, 0, mineModel.ScrollOffset(), "Mine tab should start at scroll offset 0")
 
 	// Switch back to Inbox
-	mInbox, _ := sendKey(mineModel, tea.KeyTab)
+	mInbox, _ := sendRune(mineModel, '4')
 	inboxModel := mInbox.(tui.Model)
 	assert.Equal(t, tui.TabInbox, inboxModel.ActiveTab())
 	assert.Equal(t, inboxOffset, inboxModel.ScrollOffset(), "Inbox tab scroll offset should be preserved")

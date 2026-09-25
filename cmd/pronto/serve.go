@@ -115,6 +115,7 @@ func newServeCmd(src source.Source) *cobra.Command {
 				Logger:             logger,
 				NotificationConfig: cfg.Notifications,
 				FocusConfig:        cfg.Focus,
+				PriorityConfig:     cfg.Priority,
 			})
 			return d.Run(cmd.Context())
 		},

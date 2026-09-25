@@ -147,6 +147,7 @@ PullRequest represents a pull request in the review queue.
 | `MergeStateStatus` | `merge_state_status` | `string` |  | — |
 | `ReviewDecision` | `review_decision` | `string` |  | — |
 | `Assigned` | `assigned` | `bool` |  | — |
+| `DirectRequest` | `direct_request` | `bool` | yes | DirectRequest marks a PR whose review is requested from the viewer personally, not only through one of their teams. |
 | `Starred` | `starred` | `bool` |  | — |
 | `IsInMergeQueue` | `is_in_merge_queue` | `bool` | yes | — |
 | `Partial` | `partial` | `bool` | yes | Partial marks a PR built from discovery data only (hydration skipped, e.g. due to a rate limit): merge status, checks, and diff size are unknown until a later poll completes them. |

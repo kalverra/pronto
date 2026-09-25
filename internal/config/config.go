@@ -1,5 +1,5 @@
 // Package config manages user preferences for pronto, including PR view style,
-// desktop notifications, auto-focus rules, and daemon server settings.
+// desktop notifications, auto-focus and priority rules, and daemon server settings.
 package config
 
 import (
@@ -26,13 +26,19 @@ const (
 
 // Supported PR groups for desktop notifications.
 const (
-	GroupFocus = "focus"
-	GroupMine  = "mine"
-	GroupInbox = "inbox"
+	GroupFocus    = "focus"
+	GroupMine     = "mine"
+	GroupPriority = "priority"
+	GroupInbox    = "inbox"
 )
 
 // ValidNotificationGroups lists supported PR groups for desktop notifications.
-var ValidNotificationGroups = []string{GroupFocus, GroupMine, GroupInbox}
+var ValidNotificationGroups = []string{GroupFocus, GroupMine, GroupPriority, GroupInbox}
+
+// DefaultNotificationGroups lists the PR groups notified when none are configured.
+func DefaultNotificationGroups() []string {
+	return []string{GroupFocus, GroupMine, GroupPriority}
+}
 
 // Supported desktop notification delivery modes. Vocabulary is owned by the
 // notify package; these aliases exist for configuration ergonomics.
@@ -76,7 +82,8 @@ type Config struct {
 	PRView        string             `json:"pr_view"         mapstructure:"pr_view"         toml:"pr_view"`
 	PRViewCommand string             `json:"pr_view_command" mapstructure:"pr_view_command" toml:"pr_view_command"`
 	Notifications NotificationConfig `json:"notifications"   mapstructure:"notifications"   toml:"notifications"`
-	Focus         FocusConfig        `json:"focus"           mapstructure:"focus"           toml:"focus"`
+	Focus         RuleSet            `json:"focus"           mapstructure:"focus"           toml:"focus"`
+	Priority      PriorityConfig     `json:"priority"        mapstructure:"priority"        toml:"priority"`
 	Server        ServerConfig       `json:"server"          mapstructure:"server"          toml:"server"`
 }
 
@@ -133,7 +140,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("unknown notifications.mode: %q", c.Notifications.Mode)
 	}
 	if len(c.Notifications.Groups) == 0 {
-		c.Notifications.Groups = []string{GroupFocus, GroupMine}
+		c.Notifications.Groups = DefaultNotificationGroups()
 	}
 	for _, g := range c.Notifications.Groups {
 		if !validValue(ValidNotificationGroups, g) {
@@ -159,6 +166,12 @@ func (c *Config) Validate() error {
 		if !validValue(spec("notifications.images").Valid, trigger) {
 			return fmt.Errorf("unknown notification image trigger: %q", trigger)
 		}
+	}
+	if err := c.Focus.Validate(); err != nil {
+		return fmt.Errorf("focus: %w", err)
+	}
+	if err := c.Priority.Validate(); err != nil {
+		return fmt.Errorf("priority: %w", err)
 	}
 	if c.Server.PollInterval != "" {
 		if _, err := time.ParseDuration(c.Server.PollInterval); err != nil {

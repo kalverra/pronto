@@ -17,22 +17,26 @@ func TestSortStrategy_Cycling(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, tui.SortRepo, tui.SortAction.Next(1))
-	assert.Equal(t, tui.SortUpdated, tui.SortRepo.Next(1))
+	assert.Equal(t, tui.SortAuthor, tui.SortRepo.Next(1))
+	assert.Equal(t, tui.SortUpdated, tui.SortAuthor.Next(1))
 	assert.Equal(t, tui.SortScore, tui.SortUpdated.Next(1))
 	assert.Equal(t, tui.SortAction, tui.SortScore.Next(1))
 
 	assert.Equal(t, tui.SortScore, tui.SortAction.Next(-1))
 	assert.Equal(t, tui.SortUpdated, tui.SortScore.Next(-1))
-	assert.Equal(t, tui.SortRepo, tui.SortUpdated.Next(-1))
+	assert.Equal(t, tui.SortAuthor, tui.SortUpdated.Next(-1))
+	assert.Equal(t, tui.SortRepo, tui.SortAuthor.Next(-1))
 	assert.Equal(t, tui.SortAction, tui.SortRepo.Next(-1))
 
 	assert.Equal(t, "action", tui.SortAction.String())
 	assert.Equal(t, "repo", tui.SortRepo.String())
+	assert.Equal(t, "author", tui.SortAuthor.String())
 	assert.Equal(t, "updated", tui.SortUpdated.String())
 	assert.Equal(t, "score", tui.SortScore.String())
 
 	assert.Equal(t, "Action", tui.SortAction.Label())
 	assert.Equal(t, "Repo", tui.SortRepo.Label())
+	assert.Equal(t, "Author", tui.SortAuthor.Label())
 	assert.Equal(t, "Updated", tui.SortUpdated.Label())
 	assert.Equal(t, "Score", tui.SortScore.Label())
 }
@@ -48,7 +52,12 @@ func TestModel_SortKeyToggle(t *testing.T) {
 	m = m1.(tui.Model)
 	assert.Equal(t, tui.SortRepo, m.SortStrategy())
 
-	// Press 's' to cycle forward: Repo -> Updated
+	// Press 's' to cycle forward: Repo -> Author
+	mA, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = mA.(tui.Model)
+	assert.Equal(t, tui.SortAuthor, m.SortStrategy())
+
+	// Press 's' to cycle forward: Author -> Updated
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m = m2.(tui.Model)
 	assert.Equal(t, tui.SortUpdated, m.SortStrategy())
@@ -135,7 +144,7 @@ func TestModel_SortByRepo(t *testing.T) {
 	}
 
 	m := tui.New(q, tui.WithNow(now), tui.WithViewer("viewer"), tui.WithDimensions(120, 40))
-	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}) // switch to Inbox tab
+	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}}) // switch to Inbox tab
 	m = mNav.(tui.Model)
 
 	// In default SortAction mode:
@@ -238,7 +247,7 @@ func TestModel_SortByUpdated(t *testing.T) {
 		tui.WithDimensions(120, 40),
 		tui.WithSortStrategy(tui.SortUpdated),
 	)
-	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	m = mNav.(tui.Model)
 
 	view := m.View()
@@ -263,7 +272,7 @@ func TestModel_SortByScore(t *testing.T) {
 		tui.WithDimensions(120, 40),
 		tui.WithSortStrategy(tui.SortScore),
 	)
-	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	m = mNav.(tui.Model)
 
 	view := m.View()
@@ -318,7 +327,7 @@ func TestModel_SortMaintainsCursor(t *testing.T) {
 	}
 
 	m := tui.New(q, tui.WithNow(now), tui.WithViewer("viewer"), tui.WithDimensions(120, 40))
-	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	m = mNav.(tui.Model)
 
 	// Move cursor down to PR 102
@@ -328,7 +337,7 @@ func TestModel_SortMaintainsCursor(t *testing.T) {
 	selectedNum := m.SelectedPR().Number
 
 	// Cycle through all sort strategies; the selected PR must stay identical
-	for range 4 {
+	for range 5 {
 		mCycle, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 		m = mCycle.(tui.Model)
 		require.NotNil(t, m.SelectedPR(), "selected PR must not be nil after sort toggle")
@@ -345,7 +354,10 @@ func TestModel_TabBarRendersSortBadge(t *testing.T) {
 	mRepo, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	assert.Contains(t, mRepo.(tui.Model).View(), "sort: repo")
 
-	mUpd, _ := mRepo.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mAuthor, _ := mRepo.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	assert.Contains(t, mAuthor.(tui.Model).View(), "sort: author")
+
+	mUpd, _ := mAuthor.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	assert.Contains(t, mUpd.(tui.Model).View(), "sort: updated")
 
 	mScore, _ := mUpd.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
@@ -422,7 +434,7 @@ func TestModel_SortWithStacks(t *testing.T) {
 	}
 
 	m := tui.New(q, tui.WithNow(now), tui.WithViewer("viewer"), tui.WithDimensions(120, 40))
-	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	m = mNav.(tui.Model)
 
 	// Expand all stacks using 'E'
@@ -437,11 +449,73 @@ func TestModel_SortWithStacks(t *testing.T) {
 	assert.Contains(t, viewRepo, "#102 [2/2]")
 
 	// Test in SortUpdated: stack effective update places it before PR 201
-	mUpd, _ := mRepo.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mAuthor, _ := mRepo.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	assert.Contains(t, mAuthor.(tui.Model).View(), "sort: author")
+
+	mUpd, _ := mAuthor.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	viewUpd := mUpd.(tui.Model).View()
 	idx101 := strings.Index(viewUpd, "#101 [1/2]")
 	idx102 := strings.Index(viewUpd, "#102 [2/2]")
 	idx201 := strings.Index(viewUpd, "#201")
 	assert.Less(t, idx101, idx102, "Stack position 1 must precede position 2")
 	assert.Less(t, idx102, idx201, "Stack (updated 10m ago) must precede PR 201 (updated 30m ago)")
+}
+
+func TestModel_SortByAuthor(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	mk := func(num int, author string) model.PullRequest {
+		return model.PullRequest{
+			Number:            num,
+			Title:             "PR by " + author,
+			Author:            author,
+			RepoOwner:         "org",
+			RepoName:          "repo",
+			RepoNameWithOwner: "org/repo",
+			Mergeable:         "MERGEABLE",
+			MergeStateStatus:  "CLEAN",
+			MergeStatus:       model.ComputeMergeStatus("MERGEABLE", "CLEAN", false),
+			TimelineItems: []model.TimelineItem{
+				{Type: model.TimelineItemReviewRequested, CreatedAt: now.Add(-time.Hour), ReviewerUser: "viewer"},
+			},
+		}
+	}
+	q := model.Queue{Inbox: []model.PullRequest{
+		mk(301, "zoe"),
+		mk(302, "Bob"),
+		mk(303, "alice"),
+		mk(304, "bob"),
+		mk(305, ""),
+	}}
+
+	m := tui.New(q,
+		tui.WithNow(now),
+		tui.WithViewer("viewer"),
+		tui.WithDimensions(120, 40),
+		tui.WithSortStrategy(tui.SortAuthor),
+	)
+	mNav, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}}) // Inbox tab
+	view := mNav.(tui.Model).View()
+
+	assert.NotContains(t, view, "NEEDS YOUR ATTENTION")
+	idxAlice := strings.Index(view, "@ALICE")
+	idxBob := strings.Index(view, "@BOB")
+	idxZoe := strings.Index(view, "@ZOE")
+	idxUnknown := strings.Index(view, "UNKNOWN")
+	require.NotEqual(t, -1, idxAlice)
+	require.NotEqual(t, -1, idxBob)
+	require.NotEqual(t, -1, idxZoe)
+	require.NotEqual(t, -1, idxUnknown)
+	assert.Less(t, idxAlice, idxBob)
+	assert.Less(t, idxBob, idxZoe)
+	assert.Less(t, idxZoe, idxUnknown, "PRs with no author group last")
+	assert.Equal(t, 1, strings.Count(view, "@BOB"), "author grouping is case-insensitive")
+
+	// Both of bob's PRs sit between the @BOB and @ZOE dividers.
+	for _, n := range []string{"#302", "#304"} {
+		idx := strings.Index(view, n)
+		assert.Greater(t, idx, idxBob, n)
+		assert.Less(t, idx, idxZoe, n)
+	}
 }

@@ -19,7 +19,7 @@ func TestLoadFile_NotificationsDefaults(t *testing.T) {
 	assert.True(t, cfg.Notifications.Popups, "popups should default to true")
 	assert.False(t, cfg.Notifications.Sound, "sound should default to false")
 	assert.Equal(t, config.NotifyNative, cfg.Notifications.Mode, "mode should default to native")
-	assert.Equal(t, []string{config.GroupFocus, config.GroupMine}, cfg.Notifications.Groups)
+	assert.Equal(t, []string{config.GroupFocus, config.GroupMine, config.GroupPriority}, cfg.Notifications.Groups)
 	assert.True(t, cfg.Notifications.HasGroup(config.GroupFocus))
 	assert.True(t, cfg.Notifications.HasGroup(config.GroupMine))
 	assert.False(t, cfg.Notifications.HasGroup(config.GroupInbox))

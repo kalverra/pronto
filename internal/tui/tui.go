@@ -36,9 +36,17 @@ const (
 	TabFocus Tab = iota
 	// TabMine displays authored PRs.
 	TabMine
-	// TabInbox displays incoming review-requested PRs.
+	// TabPriority displays incoming PRs matching priority config (by default,
+	// review requested from the viewer personally or assigned to them).
+	TabPriority
+	// TabInbox displays incoming review-requested PRs not in Priority.
 	TabInbox
+
+	numTabs = int(TabInbox) + 1
 )
+
+// allTabs lists tabs in display and cycling order; number keys 1..n select them.
+var allTabs = []Tab{TabFocus, TabMine, TabPriority, TabInbox}
 
 // Model represents the pronto Bubbletea terminal interface.
 type Model struct {
@@ -52,18 +60,16 @@ type Model struct {
 	width           int
 	height          int
 	activeTab       Tab
-	cursorFocus     int
-	cursorMine      int
-	cursorInbox     int
-	scrollFocus     int
-	scrollMine      int
-	scrollInbox     int
+	cursors         [numTabs]int
+	scrolls         [numTabs]int
 	modalOpen       bool
 	detailsOpen     bool
 	focusedKeys     map[model.PRKey]bool
 	manualUnfocused map[model.PRKey]bool
-	focusCfg        config.FocusConfig
+	focusCfg        config.RuleSet
+	priorityCfg     config.PriorityConfig
 	focusItems      []score.Scored
+	priorityItems   []score.Scored
 	inboxItems      []score.Scored
 	mineItems       []score.Scored
 	spinnerFrame    int
@@ -106,6 +112,10 @@ type Model struct {
 	stacksCollapsed bool
 	expandedStacks  map[string]bool
 	sortStrategy    SortStrategy
+
+	// Double-click tracking for mouse row selection.
+	lastClickKey model.PRKey
+	lastClickAt  time.Time
 }
 
 // Option configures a Model.
@@ -346,7 +356,7 @@ func (m Model) refTime() time.Time {
 }
 
 func (m Model) hasRunningCI() bool {
-	for _, it := range m.inboxItems {
+	for _, it := range slices.Concat(m.priorityItems, m.inboxItems) {
 		if it.PR.Checks.IsRunning() {
 			return true
 		}
@@ -362,7 +372,7 @@ func (m Model) hasRunningCI() bool {
 // hasPartialPRs reports whether any visible PR is discovery-only data waiting
 // for hydration, whose loading spinner must animate.
 func (m Model) hasPartialPRs() bool {
-	for _, it := range m.inboxItems {
+	for _, it := range slices.Concat(m.priorityItems, m.inboxItems) {
 		if it.PR.Partial {
 			return true
 		}
@@ -507,9 +517,17 @@ func WithFocusedPRs(keys []model.PRKey) Option {
 }
 
 // WithFocusConfig configures auto-focus rules for the TUI model.
-func WithFocusConfig(cfg config.FocusConfig) Option {
+func WithFocusConfig(cfg config.RuleSet) Option {
 	return func(m *Model) {
 		m.focusCfg = cfg
+	}
+}
+
+// WithPriorityConfig configures which incoming PRs go in the Priority tab.
+// Without it, config.DefaultPriorityConfig applies.
+func WithPriorityConfig(cfg config.PriorityConfig) Option {
+	return func(m *Model) {
+		m.priorityCfg = cfg
 	}
 }
 
@@ -518,6 +536,7 @@ func New(q model.Queue, opts ...Option) Model {
 	m := Model{
 		weights:         score.DefaultWeights(),
 		activeTab:       TabFocus,
+		priorityCfg:     config.DefaultPriorityConfig(),
 		width:           80,
 		height:          24,
 		stacksCollapsed: true,
@@ -602,7 +621,9 @@ func (m Model) applyQueue(q model.Queue) Model {
 		inboxPRs[i] = pr
 	}
 	q.Inbox = inboxPRs
-	m.inboxItems = score.Rank(inboxPRs, m.now, m.viewer, m.teams, m.index, m.weights)
+	priorityPRs, restPRs := m.priorityCfg.Partition(inboxPRs)
+	m.priorityItems = score.Rank(priorityPRs, m.now, m.viewer, m.teams, m.index, m.weights)
+	m.inboxItems = score.Rank(restPRs, m.now, m.viewer, m.teams, m.index, m.weights)
 
 	authoredPRs := make([]model.PullRequest, len(q.Authored))
 	for i, pr := range q.Authored {
@@ -617,10 +638,7 @@ func (m Model) applyQueue(q model.Queue) Model {
 	m.mineItems = score.RankMine(authoredPRs, m.now, score.DefaultMineWeights())
 
 	m = m.rebuildFocusItems()
-
-	m = m.clampTabView(TabFocus)
-	m = m.clampTabView(TabMine)
-	m = m.clampTabView(TabInbox)
+	m = m.clampAllTabViews()
 
 	m = m.syncNotificationsWithQueue()
 	m = m.pruneStaleNotifications()
@@ -630,7 +648,7 @@ func (m Model) applyQueue(q model.Queue) Model {
 }
 
 func (m Model) rebuildFocusItems() Model {
-	if len(m.inboxItems) == 0 && len(m.mineItems) == 0 {
+	if len(m.priorityItems) == 0 && len(m.inboxItems) == 0 && len(m.mineItems) == 0 {
 		if len(m.focusItems) > 0 {
 			var filtered []score.Scored
 			for _, it := range m.focusItems {
@@ -644,7 +662,7 @@ func (m Model) rebuildFocusItems() Model {
 	}
 	var items []score.Scored
 	seen := make(map[model.PRKey]bool)
-	for _, it := range m.inboxItems {
+	for _, it := range slices.Concat(m.priorityItems, m.inboxItems) {
 		k := it.PR.Key()
 		if m.isFocused(it.PR) && !seen[k] {
 			items = append(items, it)
@@ -698,9 +716,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m = m.clampTabView(TabFocus)
-		m = m.clampTabView(TabMine)
-		m = m.clampTabView(TabInbox)
+		m = m.clampAllTabViews()
 		return m, nil
 
 	case SpinnerTickMsg:
@@ -777,6 +793,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 
 	return m, nil
@@ -859,7 +877,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.notificationFocused = false
 			return m, nil
 		}
-	case "tab", "shift+tab", "1", "2", "3":
+	case "tab", "shift+tab", "1", "2", "3", "4":
 		return m.handleTabKey(msg.String())
 	case "r":
 		return m.handleRefreshKey()
@@ -952,9 +970,7 @@ func (m Model) handleToggleFocusKey() (tea.Model, tea.Cmd) {
 	m.focusedKeys = newKeys
 	m.manualUnfocused = newUnfocused
 	m = m.rebuildFocusItems()
-	m = m.clampTabView(TabFocus)
-	m = m.clampTabView(TabMine)
-	m = m.clampTabView(TabInbox)
+	m = m.clampAllTabViews()
 
 	var cmd tea.Cmd
 	if m.store != nil {
@@ -965,30 +981,15 @@ func (m Model) handleToggleFocusKey() (tea.Model, tea.Cmd) {
 
 func (m Model) handleTabKey(key string) (tea.Model, tea.Cmd) {
 	m.notificationFocused = false
+	cur := slices.Index(allTabs, m.activeTab)
 	switch key {
-	case "1":
-		m.activeTab = TabFocus
-	case "2":
-		m.activeTab = TabMine
-	case "3":
-		m.activeTab = TabInbox
 	case "shift+tab":
-		switch m.activeTab {
-		case TabFocus:
-			m.activeTab = TabInbox
-		case TabMine:
-			m.activeTab = TabFocus
-		case TabInbox:
-			m.activeTab = TabMine
-		}
+		m.activeTab = allTabs[(cur-1+len(allTabs))%len(allTabs)]
+	case "tab":
+		m.activeTab = allTabs[(cur+1)%len(allTabs)]
 	default:
-		switch m.activeTab {
-		case TabFocus:
-			m.activeTab = TabMine
-		case TabMine:
-			m.activeTab = TabInbox
-		case TabInbox:
-			m.activeTab = TabFocus
+		if n, err := strconv.Atoi(key); err == nil && n >= 1 && n <= len(allTabs) {
+			m.activeTab = allTabs[n-1]
 		}
 	}
 	return m, nil
@@ -1277,7 +1278,7 @@ func (m Model) handleQueueLoaded(msg QueueLoadedMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) monitoredPRs(q model.Queue) []model.PullRequest {
-	groups := []string{config.GroupFocus, config.GroupMine}
+	groups := config.DefaultNotificationGroups()
 	if m.notifCfg != nil && len(m.notifCfg.Groups) > 0 {
 		groups = m.notifCfg.Groups
 	}
@@ -1295,6 +1296,16 @@ func (m Model) monitoredPRs(q model.Queue) []model.PullRequest {
 
 	if hasGroup(config.GroupMine) {
 		for _, pr := range q.Authored {
+			if !seen[pr.Key()] {
+				seen[pr.Key()] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	if hasGroup(config.GroupPriority) {
+		priority, _ := m.priorityCfg.Partition(q.Inbox)
+		for _, pr := range priority {
 			if !seen[pr.Key()] {
 				seen[pr.Key()] = true
 				monitored = append(monitored, pr)
@@ -1444,16 +1455,23 @@ func formatReviewState(state string) string {
 	}
 }
 
-func (m Model) activeList() []score.Scored {
-	switch m.activeTab {
+// items returns the ranked list backing a tab.
+func (m Model) items(tab Tab) []score.Scored {
+	switch tab {
 	case TabFocus:
 		return m.focusItems
 	case TabMine:
 		return m.mineItems
+	case TabPriority:
+		return m.priorityItems
 	case TabInbox:
 		return m.inboxItems
 	}
 	return nil
+}
+
+func (m Model) activeList() []score.Scored {
+	return m.items(m.activeTab)
 }
 
 func (m Model) isCurrentRowCollapsedStack() (*StackGroup, bool) {
@@ -1485,6 +1503,9 @@ func (m Model) stackPRKeys(stackKey string) []model.PRKey {
 			}
 		}
 	}
+	for _, it := range m.priorityItems {
+		add(it.PR)
+	}
 	for _, it := range m.inboxItems {
 		add(it.PR)
 	}
@@ -1511,16 +1532,7 @@ func (m Model) isStackExpanded(key string) bool {
 }
 
 func (m Model) findStackBottomIndex(tab Tab, key string) int {
-	var list []score.Scored
-	switch tab {
-	case TabFocus:
-		list = m.focusItems
-	case TabMine:
-		list = m.mineItems
-	case TabInbox:
-		list = m.inboxItems
-	}
-	for i, it := range list {
+	for i, it := range m.items(tab) {
 		if it.PR.IsPartOfStack() && it.PR.StackKey() == key {
 			return i
 		}
@@ -1625,49 +1637,27 @@ func (m Model) setCursor(pos int) Model {
 	if len(list) == 0 {
 		return m
 	}
-	switch m.activeTab {
-	case TabFocus:
-		m.cursorFocus = clampIndex(pos, len(list)-1)
-	case TabMine:
-		m.cursorMine = clampIndex(pos, len(list)-1)
-	case TabInbox:
-		m.cursorInbox = clampIndex(pos, len(list)-1)
-	}
+	m.cursors[m.activeTab] = clampIndex(pos, len(list)-1)
 	return m.clampTabView(m.activeTab)
 }
 
 // clampTabView clamps the tab's cursor to list bounds and re-anchors scroll
 // so the cursor's display row stays within the visible window.
 func (m Model) clampTabView(tab Tab) Model {
-	visRows := m.VisibleRows()
-	switch tab {
-	case TabFocus:
-		if len(m.focusItems) == 0 {
-			m.cursorFocus, m.scrollFocus = 0, 0
-			return m
-		}
-		m.cursorFocus = clampIndex(m.cursorFocus, len(m.focusItems)-1)
-		dispCursor, totalRows := m.displayCursorAndRows(TabFocus)
-		m.scrollFocus = clampScroll(m.scrollFocus, dispCursor, totalRows, visRows)
+	list := m.items(tab)
+	if len(list) == 0 {
+		m.cursors[tab], m.scrolls[tab] = 0, 0
 		return m
-	case TabMine:
-		if len(m.mineItems) == 0 {
-			m.cursorMine, m.scrollMine = 0, 0
-			return m
-		}
-		m.cursorMine = clampIndex(m.cursorMine, len(m.mineItems)-1)
-		dispCursor, totalRows := m.displayCursorAndRows(TabMine)
-		m.scrollMine = clampScroll(m.scrollMine, dispCursor, totalRows, visRows)
-		return m
-	case TabInbox:
-		if len(m.inboxItems) == 0 {
-			m.cursorInbox, m.scrollInbox = 0, 0
-			return m
-		}
-		m.cursorInbox = clampIndex(m.cursorInbox, len(m.inboxItems)-1)
-		dispCursor, totalRows := m.displayCursorAndRows(TabInbox)
-		m.scrollInbox = clampScroll(m.scrollInbox, dispCursor, totalRows, visRows)
-		return m
+	}
+	m.cursors[tab] = clampIndex(m.cursors[tab], len(list)-1)
+	dispCursor, totalRows := m.displayCursorAndRows(tab)
+	m.scrolls[tab] = clampScroll(m.scrolls[tab], dispCursor, totalRows, m.VisibleRows())
+	return m
+}
+
+func (m Model) clampAllTabViews() Model {
+	for _, tab := range allTabs {
+		m = m.clampTabView(tab)
 	}
 	return m
 }
@@ -1677,16 +1667,7 @@ func (m Model) displayCursorAndRows(tab Tab) (int, int) {
 	if len(rows) == 0 {
 		return 0, 0
 	}
-	var cursor int
-	switch tab {
-	case TabFocus:
-		cursor = m.cursorFocus
-	case TabMine:
-		cursor = m.cursorMine
-	case TabInbox:
-		cursor = m.cursorInbox
-	}
-
+	cursor := m.cursors[tab]
 	displayCursor := cursor
 	for i, r := range rows {
 		if r.kind == rowItem && r.itemIndex == cursor {
@@ -1734,6 +1715,11 @@ func clampIndex(val, maxVal int) int {
 	return val
 }
 
+// Height returns the terminal height the model renders for.
+func (m Model) Height() int {
+	return m.height
+}
+
 // ActiveTab returns the currently selected tab.
 func (m Model) ActiveTab() Tab {
 	return m.activeTab
@@ -1741,28 +1727,12 @@ func (m Model) ActiveTab() Tab {
 
 // Cursor returns the cursor index in the active tab.
 func (m Model) Cursor() int {
-	switch m.activeTab {
-	case TabFocus:
-		return m.cursorFocus
-	case TabMine:
-		return m.cursorMine
-	case TabInbox:
-		return m.cursorInbox
-	}
-	return 0
+	return m.cursors[m.activeTab]
 }
 
 // ScrollOffset returns the scroll offset index in the active tab.
 func (m Model) ScrollOffset() int {
-	switch m.activeTab {
-	case TabFocus:
-		return m.scrollFocus
-	case TabMine:
-		return m.scrollMine
-	case TabInbox:
-		return m.scrollInbox
-	}
-	return 0
+	return m.scrolls[m.activeTab]
 }
 
 // VisibleRows returns the number of visible table rows fitting within terminal height.
@@ -1858,24 +1828,12 @@ func (m Model) SelectedScored() *score.Scored {
 	if m.IsNotificationFocused() {
 		return nil
 	}
-	switch m.activeTab {
-	case TabFocus:
-		if len(m.focusItems) == 0 || m.cursorFocus < 0 || m.cursorFocus >= len(m.focusItems) {
-			return nil
-		}
-		return &m.focusItems[m.cursorFocus]
-	case TabMine:
-		if len(m.mineItems) == 0 || m.cursorMine < 0 || m.cursorMine >= len(m.mineItems) {
-			return nil
-		}
-		return &m.mineItems[m.cursorMine]
-	case TabInbox:
-		if len(m.inboxItems) == 0 || m.cursorInbox < 0 || m.cursorInbox >= len(m.inboxItems) {
-			return nil
-		}
-		return &m.inboxItems[m.cursorInbox]
+	list := m.activeList()
+	cursor := m.Cursor()
+	if cursor < 0 || cursor >= len(list) {
+		return nil
 	}
-	return nil
+	return &list[cursor]
 }
 
 // IsModalOpen reports whether the score breakdown modal is currently visible.
@@ -1939,6 +1897,11 @@ func WithFocusItems(items []score.Scored) Option {
 			m.focusedKeys[item.PR.Key()] = true
 		}
 	}
+}
+
+// PriorityItems returns the scored pull requests in the priority tab.
+func (m Model) PriorityItems() []score.Scored {
+	return m.priorityItems
 }
 
 // InboxItems returns the scored pull requests in the inbox tab.

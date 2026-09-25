@@ -27,22 +27,44 @@ each poll GitHub on their own 60s cadence and each write the same
 ### TUI overview
 
 The interactive Bubbletea interface (`internal/tui`) organizes pull requests
-into three views, defaulting to the Focus tab:
+into four views, defaulting to the Focus tab:
 
 1. **Focus (`1`)**: Unified view of user-starred PRs across both review and
    authored queues, partitioned by category dividers in triage priority order
    (`Needs Your Attention`, `Action Required`, `Merge Queue`, `Ready to Merge`,
    `In Review`, `Blocked`, `Drafts`, `Stale`).
 2. **Mine (`2`)**: Authored PRs tracked across review and merge lifecycle stages.
-3. **Inbox (`3`)**: Incoming review requests and assigned PRs ranked by score.
+3. **Priority (`3`)**: Incoming PRs selected by `[priority]` config
+   (`config.PriorityConfig.Partition`): by default (`direct_requests = true`)
+   PRs whose review is requested from you personally rather than only via a
+   team (flagged by a `user-review-requested:@me` discovery search →
+   `PullRequest.DirectRequest`) or that are assigned to you, plus any matching
+   the same author/repo/rule criteria as `[focus]`. A stack with any matching
+   member moves whole.
+4. **Inbox (`4`)**: Remaining incoming review requests ranked by score.
+   Priority and Inbox are disjoint; Focus is the only tab that repeats PRs
+   from other tabs.
 
 Key interactions and focus behaviors:
 
-- **Tab switching**: `1`/`2`/`3` jump directly to tabs; `tab` and `shift+tab`
+- **Mouse** (`internal/tui/mouse.go`, cell-motion capture): click a tab to
+  switch, click a row to select, double-click to open details, click a stack
+  banner to fold it; the wheel moves the cursor. Hit-testing mirrors `View`'s
+  layout (margin, tab bar, notifications area, table header), so layout changes
+  there must keep `mouse.go` in sync — `mouse_test.go` clicks where rows
+  actually render to catch drift. bubbletea's renderer keeps only the last
+  `height` lines of an oversized view (cutting the top), so `View` must fit the
+  terminal (`view_fit_test.go`); when it can't (chrome taller than the window),
+  `handleMouse` offsets y by the overflow. Hold Shift/Option to select terminal text.
+- **Tab switching**: `1`–`4` jump directly to tabs; `tab` and `shift+tab`
   cycle forward and backward.
 - **Focus toggling (`f`) & auto-focus rules**: Toggles focus mode for the selected PR.
   In addition to manual focus, PRs can be automatically focused via `[focus]` config rules
-  matching by author, repository, and per-repo keywords, files, or directories. Focused PRs
+  matching by author, repository, and per-repo keywords, files, directories, paths,
+  or file-path regex (`config.RuleSet`, shared with `[priority]`). Both sections
+  default `exclude_bots = true` (`model.PullRequest.IsAuthorBot`): bot PRs skip
+  auto-focus rules (manual focus still applies) and never enter Priority, even
+  when requested from you directly. Focused PRs
   display a `★` indicator directly after the selector arrow position and pin to the top of their respective
   category sections in Mine and Inbox views.
 - **Persistence**: Focused PR keys (`model.PRKey`) are saved to `focus.json`
@@ -63,9 +85,10 @@ Key interactions and focus behaviors:
   and children indent beneath it with tree connectors (`├─ #709 [2/7]`). A stack
   renders in the most-urgent category of its members, so draft children stay
   visible in the collapsed roll-up (`score.Rank` keeps stack drafts even though
-- **Sorting strategies (`s`, `S`)**: Toggles the display ordering across 4
+- **Sorting strategies (`s`, `S`)**: Toggles the display ordering across 5
   strategies: Action status (default category grouping), Repository (grouped
-  alphabetically with repo section dividers), Recently Updated (ordered
+  alphabetically with repo section dividers), Author (grouped case-insensitively
+  by login with `@LOGIN` dividers, unknown authors last), Recently Updated (ordered
   by `UpdatedAt` descending), and Priority Score (pure global priority score
   ranking without category dividers). Stacks remain contiguous and the currently
   selected PR stays anchored across sort toggles.

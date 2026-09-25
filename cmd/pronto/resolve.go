@@ -199,6 +199,7 @@ func resolveTUISource(
 		Logger:             logger,
 		NotificationConfig: cfg.Notifications,
 		FocusConfig:        cfg.Focus,
+		PriorityConfig:     cfg.Priority,
 	}
 
 	d := daemon.New(daemonOpts)

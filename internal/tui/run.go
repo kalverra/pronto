@@ -192,7 +192,7 @@ func StartupModel(ctx context.Context, src source.Source, store cache.Store, opt
 // Run starts the interactive TUI.
 func Run(ctx context.Context, src source.Source, store cache.Store, opts ...Option) error {
 	m := StartupModel(ctx, src, store, opts...)
-	program := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
+	program := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	go func() {
 		ticker := time.NewTicker(spinnerInterval)
 		defer ticker.Stop()

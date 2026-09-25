@@ -72,9 +72,9 @@ var Specs = []KeySpec{
 		Key:     "notifications.groups",
 		Env:     "PRONTO_NOTIFICATIONS_GROUPS",
 		Type:    "[]string",
-		Default: []string{GroupFocus, GroupMine},
+		Default: DefaultNotificationGroups(),
 		Valid:   ValidNotificationGroups,
-		Doc:     "PR groups that trigger desktop notifications: \"focus\", \"mine\", \"inbox\".",
+		Doc:     "PR groups that trigger desktop notifications: \"focus\", \"mine\", \"priority\", \"inbox\".",
 	},
 	{
 		Key:   "notifications.sounds",
@@ -104,9 +104,51 @@ var Specs = []KeySpec{
 		Doc:     "Repositories whose pull requests should automatically be focused.",
 	},
 	{
+		Key:     "focus.exclude_bots",
+		Env:     "PRONTO_FOCUS_EXCLUDE_BOTS",
+		Type:    "bool",
+		Default: true,
+		Doc:     "Whether bot-authored PRs are skipped by auto-focus rules (manually focused PRs stay focused).",
+	},
+	{
 		Key:  "focus.rules",
 		Type: "[]rule",
-		Doc:  "Fine-grained auto-focus rules matching PRs by repo, keywords, files, directories, or authors.",
+		Doc: "Fine-grained auto-focus rules matching PRs by repo, keywords, files, directories, paths, " +
+			"file-path regex, or authors.",
+	},
+	{
+		Key:     "priority.direct_requests",
+		Env:     "PRONTO_PRIORITY_DIRECT_REQUESTS",
+		Type:    "bool",
+		Default: true,
+		Doc: "Whether PRs requesting review from you personally (not only via a team) or assigned " +
+			"to you go in the Priority tab.",
+	},
+	{
+		Key:     "priority.exclude_bots",
+		Env:     "PRONTO_PRIORITY_EXCLUDE_BOTS",
+		Type:    "bool",
+		Default: true,
+		Doc:     "Whether bot-authored PRs are kept out of the Priority tab, even when requested from you directly.",
+	},
+	{
+		Key:     "priority.authors",
+		Env:     "PRONTO_PRIORITY_AUTHORS",
+		Type:    "[]string",
+		Default: []string{},
+		Doc:     "PR authors whose incoming pull requests go in the Priority tab.",
+	},
+	{
+		Key:     "priority.repos",
+		Env:     "PRONTO_PRIORITY_REPOS",
+		Type:    "[]string",
+		Default: []string{},
+		Doc:     "Repositories whose incoming pull requests go in the Priority tab.",
+	},
+	{
+		Key:  "priority.rules",
+		Type: "[]rule",
+		Doc:  "Priority rules with the same shape as focus.rules (repo, keywords, files, directories, paths, regex, authors).",
 	},
 	{
 		Key:  "server.poll_interval",

@@ -85,10 +85,10 @@ keywords = ["urgent"]
 func TestFocus_Matches(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.FocusConfig{
+	cfg := config.RuleSet{
 		Authors: []string{"alice", "@bob"},
 		Repos:   []string{"kalverra/pronto"},
-		Rules: []config.FocusRule{
+		Rules: []config.Rule{
 			{
 				Repo:        "org/backend",
 				Keywords:    []string{"auth", "security"},

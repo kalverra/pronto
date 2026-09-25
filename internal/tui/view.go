@@ -202,15 +202,7 @@ type displayRow struct {
 }
 
 func (m Model) buildDisplayRows(tab Tab) []displayRow {
-	var list []score.Scored
-	switch tab {
-	case TabFocus:
-		list = m.focusItems
-	case TabMine:
-		list = m.mineItems
-	case TabInbox:
-		list = m.inboxItems
-	}
+	list := m.items(tab)
 	if len(list) == 0 {
 		return nil
 	}
@@ -220,6 +212,8 @@ func (m Model) buildDisplayRows(tab Tab) []displayRow {
 	switch m.sortStrategy {
 	case SortRepo:
 		return m.buildRepoDisplayRows(list)
+	case SortAuthor:
+		return m.buildAuthorDisplayRows(list)
 	case SortUpdated:
 		return m.buildUpdatedDisplayRows(list)
 	case SortScore:
@@ -230,7 +224,7 @@ func (m Model) buildDisplayRows(tab Tab) []displayRow {
 		switch tab {
 		case TabFocus:
 			return m.buildFocusDisplayRows(list, refTime)
-		case TabInbox:
+		case TabPriority, TabInbox:
 			return m.buildInboxDisplayRows(list, refTime)
 		case TabMine:
 			return m.buildMineDisplayRows(list, refTime)
@@ -262,26 +256,60 @@ func (m Model) partitionFocusedWithStacks(indices []int, list []score.Scored) {
 }
 
 func (m Model) buildRepoDisplayRows(list []score.Scored) []displayRow {
-	repoGroups := make(map[string][]int)
+	return m.buildGroupedDisplayRows(list, prRepoKey, strings.ToUpper, nil)
+}
+
+func (m Model) buildAuthorDisplayRows(list []score.Scored) []displayRow {
+	title := func(key string) string {
+		if key == "" {
+			return "UNKNOWN"
+		}
+		return "@" + strings.ToUpper(key)
+	}
+	// Unknown authors sort last rather than first.
+	less := func(a, b string) int {
+		if (a == "") != (b == "") {
+			if a == "" {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(a, b)
+	}
+	return m.buildGroupedDisplayRows(list, prAuthorKey, title, less)
+}
+
+// buildGroupedDisplayRows partitions list by keyFn under one divider per key,
+// ordered by cmp (lexical when nil), with focused PRs first within each group.
+func (m Model) buildGroupedDisplayRows(
+	list []score.Scored,
+	keyFn func(model.PullRequest) string,
+	titleFn func(string) string,
+	cmp func(a, b string) int,
+) []displayRow {
+	groups := make(map[string][]int)
 	for i, item := range list {
-		k := prRepoKey(item.PR)
-		repoGroups[k] = append(repoGroups[k], i)
+		k := keyFn(item.PR)
+		groups[k] = append(groups[k], i)
 	}
 
-	repos := make([]string, 0, len(repoGroups))
-	for r := range repoGroups {
-		repos = append(repos, r)
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
 	}
-	slices.Sort(repos)
+	if cmp == nil {
+		cmp = strings.Compare
+	}
+	slices.SortFunc(keys, cmp)
 
 	var displayRows []displayRow
-	for _, repo := range repos {
-		indices := repoGroups[repo]
+	for _, k := range keys {
+		indices := groups[k]
 		m.partitionFocusedWithStacks(indices, list)
 
 		displayRows = append(displayRows, displayRow{
 			kind:          rowDivider,
-			dividerTitle:  strings.ToUpper(repo),
+			dividerTitle:  titleFn(k),
 			dividerCount:  len(indices),
 			dividerAccent: accentBlue,
 		})
@@ -883,8 +911,10 @@ func (m Model) View() string {
 		helpText = "enter/o: open • ↑/↓: select • x: dismiss • esc: back to PRs • q: quit"
 	}
 	b.WriteString(renderHelp(helpText))
-	b.WriteString("\n")
 
+	// No trailing newline: appStyle's bottom margin already ends the view, and
+	// one extra line overflows the terminal (the renderer then cuts the top,
+	// hiding the tab bar and shifting mouse coordinates).
 	return appStyle.Render(b.String())
 }
 
@@ -1494,24 +1524,26 @@ func (m Model) itemRowCols(
 	}
 }
 
+// tabTitle returns the tab bar label for tab, e.g. "3: Priority (2)".
+func (m Model) tabTitle(tab Tab) string {
+	names := map[Tab]string{TabFocus: "Focus", TabMine: "Mine", TabPriority: "Priority", TabInbox: "Inbox"}
+	return fmt.Sprintf("%d: %s (%d)", slices.Index(allTabs, tab)+1, names[tab], len(m.items(tab)))
+}
+
+// tabGapWidth is the cell width between tab labels ("  |  "); tabAt relies on it.
+const tabGapWidth = 5
+
 func (m Model) renderTabBar(contentWidth int) string {
-	tabFocusTitle := fmt.Sprintf("1: Focus (%d)", len(m.focusItems))
-	tabMineTitle := fmt.Sprintf("2: Mine (%d)", len(m.mineItems))
-	tabInboxTitle := fmt.Sprintf("3: Inbox (%d)", len(m.inboxItems))
-
-	renderTab := func(t Tab, title string) string {
-		if m.activeTab == t {
-			return activeTabStyle.Render(title)
-		}
-		return inactiveTabStyle.Render(title)
-	}
-
 	sep := tabSeparatorStyle.Render("|")
-	tabs := strings.Join([]string{
-		renderTab(TabFocus, tabFocusTitle),
-		renderTab(TabMine, tabMineTitle),
-		renderTab(TabInbox, tabInboxTitle),
-	}, "  "+sep+"  ")
+	rendered := make([]string, len(allTabs))
+	for i, t := range allTabs {
+		if m.activeTab == t {
+			rendered[i] = activeTabStyle.Render(m.tabTitle(t))
+		} else {
+			rendered[i] = inactiveTabStyle.Render(m.tabTitle(t))
+		}
+	}
+	tabs := strings.Join(rendered, "  "+sep+"  ")
 
 	var refreshBadge string
 	if m.isRefreshingVisual() {

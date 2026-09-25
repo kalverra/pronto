@@ -60,7 +60,11 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 	assert.Equal(t, config.NotifyNative, got["notifications.mode"].Default)
 	assert.Equal(t, true, got["notifications.popups"].Default)
 	assert.Equal(t, false, got["notifications.sound"].Default)
-	assert.Equal(t, []string{config.GroupFocus, config.GroupMine}, got["notifications.groups"].Default)
+	assert.Equal(
+		t,
+		[]string{config.GroupFocus, config.GroupMine, config.GroupPriority},
+		got["notifications.groups"].Default,
+	)
 	assert.Empty(t, got["pr_view_command"].Default)
 	assert.Empty(t, got["pr_diff_command"].Default)
 	assert.Empty(t, got["server.pprof_addr"].Default)

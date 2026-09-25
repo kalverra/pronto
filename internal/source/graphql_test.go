@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -587,10 +588,17 @@ func (f *fakeGitHub) prForID(id string) (string, bool) {
 	return "", false
 }
 
+// hasQualifier reports whether the search string contains key as a whole
+// whitespace-separated token, so "review-requested:@me" does not match
+// "user-review-requested:@me".
+func hasQualifier(qVar, key string) bool {
+	return slices.Contains(strings.Fields(qVar), key)
+}
+
 // matchSearch returns the discovery pages configured for a search qualifier.
 func matchSearch(searches map[string][]discoveryPage, qVar string) []discoveryPage {
 	for key, pages := range searches {
-		if strings.Contains(qVar, key) {
+		if hasQualifier(qVar, key) {
 			return pages
 		}
 	}
@@ -600,7 +608,7 @@ func matchSearch(searches map[string][]discoveryPage, qVar string) []discoveryPa
 // matchErr returns an injected error for a search qualifier, if any.
 func matchErr(errs map[string]error, qVar string) error {
 	for key, err := range errs {
-		if strings.Contains(qVar, key) {
+		if hasQualifier(qVar, key) {
 			return err
 		}
 	}
@@ -623,6 +631,9 @@ func (t *inMemoryTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}()
 	select {
 	case <-req.Context().Done():
+		// Wait for the handler (all honor ctx) so fake counters settle before
+		// the caller returns; otherwise a late handler skews call counts.
+		<-done
 		return nil, req.Context().Err()
 	case <-done:
 		res := rec.Result()
@@ -796,6 +807,17 @@ func TestFetch_TwoPhaseDiscoveryAndHydration(t *testing.T) {
 					},
 				},
 			),
+			"user-review-requested:@me": discoverPRs([]prSpec{
+				{
+					num:        2,
+					title:      "Inbox PR 2",
+					repo:       "myorg/repo",
+					author:     "alice",
+					oid:        "oid2",
+					mergeable:  "MERGEABLE",
+					mergeState: "BLOCKED",
+				},
+			}),
 			"assignee:@me": discoverPRs([]prSpec{
 				{
 					num:        2,
@@ -861,9 +883,12 @@ func TestFetch_TwoPhaseDiscoveryAndHydration(t *testing.T) {
 	}
 	require.NotNil(t, pr2, "PR 2 must be present once despite appearing in two searches")
 	assert.True(t, pr2.Assigned)
-	assert.NotNil(t, pr3)
-	assert.NotNil(t, pr4)
+	assert.True(t, pr2.DirectRequest, "PR 2 was found by user-review-requested:@me")
+	require.NotNil(t, pr3)
+	assert.False(t, pr3.DirectRequest, "team-only request is not direct")
+	require.NotNil(t, pr4)
 	assert.True(t, pr4.Assigned)
+	assert.False(t, pr4.DirectRequest)
 
 	// Discovery queries must stay light: no heavy nested fields.
 	assert.NotContains(t, fake.discoveryQuery, "files(first")
@@ -1459,7 +1484,7 @@ func TestFetch_CallerDeadlineGovernsFetch(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "caller deadline must cap the fetch below the default")
 }
 
-func TestFetch_DiscoveryIssuesExactlyThreeSearches(t *testing.T) {
+func TestFetch_DiscoveryIssuesExactlyFourSearches(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeGitHub{
@@ -1477,9 +1502,9 @@ func TestFetch_DiscoveryIssuesExactlyThreeSearches(t *testing.T) {
 
 	assert.Equal(
 		t,
-		int32(3),
+		int32(4),
 		fake.discoveryCalls.Load(),
-		"must issue exactly 3 discovery searches regardless of team count",
+		"must issue exactly 4 discovery searches regardless of team count",
 	)
 }
 
@@ -2462,6 +2487,7 @@ func TestFetch_ReusedPRAdoptsCurrentDiscoveryFlags(t *testing.T) {
 	assert.False(t, q1.Authored[0].IsDraft)
 	assert.Equal(t, "Old Title", q1.Authored[0].Title)
 	assert.False(t, q1.Inbox[0].Assigned)
+	assert.False(t, q1.Inbox[0].DirectRequest)
 	assert.Nil(t, q1.Authored[0].Stack)
 
 	// Second fetch:
@@ -2477,9 +2503,10 @@ func TestFetch_ReusedPRAdoptsCurrentDiscoveryFlags(t *testing.T) {
 	updatedAuthored.stackBase = "main"
 
 	fake.searches = map[string][]discoveryPage{
-		"author:@me":           discoverPRs([]prSpec{updatedAuthored}),
-		"review-requested:@me": discoverPRs([]prSpec{inboxSpec}),
-		"assignee:@me":         discoverPRs([]prSpec{inboxSpec}),
+		"author:@me":                discoverPRs([]prSpec{updatedAuthored}),
+		"review-requested:@me":      discoverPRs([]prSpec{inboxSpec}),
+		"assignee:@me":              discoverPRs([]prSpec{inboxSpec}),
+		"user-review-requested:@me": discoverPRs([]prSpec{inboxSpec}),
 	}
 
 	q2, err := src.Fetch(context.Background())
@@ -2495,6 +2522,7 @@ func TestFetch_ReusedPRAdoptsCurrentDiscoveryFlags(t *testing.T) {
 	assert.Equal(t, 2, q2.Authored[0].Stack.Position)
 	assert.Equal(t, 3, q2.Authored[0].Stack.Size)
 	assert.True(t, q2.Inbox[0].Assigned, "Assigned must be overlaid from discovery")
+	assert.True(t, q2.Inbox[0].DirectRequest, "DirectRequest must be overlaid from discovery")
 	assert.Equal(t, 10, q2.Inbox[0].Additions)
 }
 

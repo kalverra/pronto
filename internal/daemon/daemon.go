@@ -69,7 +69,8 @@ type Options struct {
 	LeakDumpDir string
 
 	NotificationConfig config.NotificationConfig
-	FocusConfig        config.FocusConfig
+	FocusConfig        config.RuleSet
+	PriorityConfig     config.PriorityConfig
 }
 
 // Daemon owns the poll loop, change detection, and event bus, and serves the
@@ -364,7 +365,7 @@ func (d *Daemon) warmStart(ctx context.Context) {
 func (d *Daemon) monitoredPRs(ctx context.Context, q model.Queue) []model.PullRequest {
 	groups := d.opts.NotificationConfig.Groups
 	if len(groups) == 0 {
-		groups = []string{config.GroupFocus, config.GroupMine}
+		groups = config.DefaultNotificationGroups()
 	}
 	hasGroup := func(group string) bool {
 		for _, g := range groups {
@@ -380,6 +381,16 @@ func (d *Daemon) monitoredPRs(ctx context.Context, q model.Queue) []model.PullRe
 
 	if hasGroup(config.GroupMine) {
 		for _, pr := range q.Authored {
+			if !seen[pr.Key()] {
+				seen[pr.Key()] = true
+				monitored = append(monitored, pr)
+			}
+		}
+	}
+
+	if hasGroup(config.GroupPriority) {
+		priority, _ := d.opts.PriorityConfig.Partition(q.Inbox)
+		for _, pr := range priority {
 			if !seen[pr.Key()] {
 				seen[pr.Key()] = true
 				monitored = append(monitored, pr)
