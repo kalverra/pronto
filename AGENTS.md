@@ -18,7 +18,7 @@ Create an maintain a simple CLI + TUI tool for a clean interface of PR statuses.
 | `internal/model`     | Domain types (Queue, PullRequest, Checks, MergeStatus); JSON-tagged                                                                                      |
 | `internal/score`     | Ranking + explainable breakdowns                                                                                                                         |
 | `internal/tui`       | Bubbletea app                                                                                                                                            |
-| `internal/notify`    | Change detection (`Detector` → Triggers) + desktop notifications (native helper default, terminal-notifier/osascript fallback); `nativehelper/` is the Swift `UserNotifications` helper app (guided setup: `pronto notify setup`, dev build: `mise run bundle`) |
+| `internal/notify`    | Change detection (`Detector` → Triggers, per-scope `Policy`) + desktop notifications (native helper default, terminal-notifier/osascript fallback); `nativehelper/` is the Swift `UserNotifications` helper app (guided setup: `pronto notify setup`, dev build: `mise run bundle`) |
 | `internal/events`    | Event vocabulary, subscription filters, bus, wire schema                                                                                                 |
 | `internal/server`    | NDJSON Unix socket API (`internal/server/server.go`)                                                                                                     |
 | `internal/daemon`    | Single poll loop feeding events + snapshots                                                                                                              |

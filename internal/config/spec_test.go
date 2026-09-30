@@ -26,17 +26,20 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 
 	// Every key LoadFile binds, with its env override.
 	wantEnv := map[string]string{
-		"pr_view":                    "PRONTO_PR_VIEW",
-		"pr_view_command":            "PRONTO_PR_VIEW_COMMAND",
-		"notifications.mode":         "PRONTO_NOTIFICATIONS_MODE",
-		"notifications.popups":       "PRONTO_NOTIFICATIONS_POPUPS",
-		"notifications.sound":        "PRONTO_NOTIFICATIONS_SOUND",
-		"notifications.groups":       "PRONTO_NOTIFICATIONS_GROUPS",
-		"focus.authors":              "PRONTO_FOCUS_AUTHORS",
-		"focus.repos":                "PRONTO_FOCUS_REPOS",
-		"server.poll_interval":       "PRONTO_POLL_INTERVAL",
-		"server.pprof_addr":          "PRONTO_PPROF_ADDR",
-		"server.leak_check_interval": "PRONTO_LEAK_CHECK_INTERVAL",
+		"pr_view":                         "PRONTO_PR_VIEW",
+		"pr_view_command":                 "PRONTO_PR_VIEW_COMMAND",
+		"notifications.mode":              "PRONTO_NOTIFICATIONS_MODE",
+		"notifications.popups":            "PRONTO_NOTIFICATIONS_POPUPS",
+		"notifications.sound":             "PRONTO_NOTIFICATIONS_SOUND",
+		"notifications.focus.triggers":    "PRONTO_NOTIFICATIONS_FOCUS_TRIGGERS",
+		"notifications.mine.triggers":     "PRONTO_NOTIFICATIONS_MINE_TRIGGERS",
+		"notifications.priority.triggers": "PRONTO_NOTIFICATIONS_PRIORITY_TRIGGERS",
+		"notifications.inbox.triggers":    "PRONTO_NOTIFICATIONS_INBOX_TRIGGERS",
+		"focus.authors":                   "PRONTO_FOCUS_AUTHORS",
+		"focus.repos":                     "PRONTO_FOCUS_REPOS",
+		"server.poll_interval":            "PRONTO_POLL_INTERVAL",
+		"server.pprof_addr":               "PRONTO_PPROF_ADDR",
+		"server.leak_check_interval":      "PRONTO_LEAK_CHECK_INTERVAL",
 	}
 	for key, env := range wantEnv {
 		spec, ok := got[key]
@@ -60,11 +63,15 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 	assert.Equal(t, config.NotifyNative, got["notifications.mode"].Default)
 	assert.Equal(t, true, got["notifications.popups"].Default)
 	assert.Equal(t, false, got["notifications.sound"].Default)
-	assert.Equal(
-		t,
-		[]string{config.GroupFocus, config.GroupMine, config.GroupPriority},
-		got["notifications.groups"].Default,
-	)
+	assert.NotContains(t, got, "notifications.groups")
+	assert.Equal(t, []string{"all", "!entered"}, got["notifications.focus.triggers"].Default)
+	assert.Equal(t, []string{"all", "!new_commits", "!entered"}, got["notifications.mine.triggers"].Default)
+	assert.Equal(t, []string{"entered"}, got["notifications.priority.triggers"].Default)
+	assert.Equal(t, []string{}, got["notifications.inbox.triggers"].Default)
+	assert.Equal(t, []string{"inherit", "!entered"}, got["notifications.priority.blocked"].Default)
+	assert.Equal(t, []string{"inherit"}, got["notifications.mine.in_review"].Default)
+	assert.Contains(t, got, "notifications.focus.action_required")
+	assert.NotContains(t, got, "notifications.mine.attention", "mine has no attention section")
 	assert.Empty(t, got["pr_view_command"].Default)
 	assert.Empty(t, got["pr_diff_command"].Default)
 	assert.Empty(t, got["server.pprof_addr"].Default)
@@ -82,10 +89,6 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 		[]string{config.NotifyTerminal, config.NotifyNative},
 		got["notifications.mode"].Valid,
 	)
-	assert.ElementsMatch(t,
-		config.ValidNotificationGroups,
-		got["notifications.groups"].Valid,
-	)
 }
 
 func TestSpecs_TriggerValuesMatchNotifyVocabulary(t *testing.T) {
@@ -96,12 +99,9 @@ func TestSpecs_TriggerValuesMatchNotifyVocabulary(t *testing.T) {
 		byKey[spec.Key] = spec
 	}
 
-	notifyTriggers := []string{
-		string(notify.TriggerCIPassed),
-		string(notify.TriggerCIFailed),
-		string(notify.TriggerConflict),
-		string(notify.TriggerReviewReceived),
-		string(notify.TriggerPRMerged),
+	notifyTriggers := make([]string, len(notify.Triggers))
+	for i, tr := range notify.Triggers {
+		notifyTriggers[i] = string(tr)
 	}
 	for _, key := range []string{"notifications.sounds", "notifications.images"} {
 		spec, ok := byKey[key]

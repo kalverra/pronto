@@ -17,7 +17,8 @@ type KeySpec struct {
 	// means no override exists.
 	Env string
 	// Type describes the value: "string", "bool", "duration", or
-	// "map[trigger]string" (keys restricted to notification triggers).
+	// "map[trigger]string" (keys restricted to notification triggers), or
+	// "[]trigger" (trigger tokens: names, "all", "!name", "inherit").
 	Type string
 	// Default is the value used when nothing is set; nil means no default.
 	Default any
@@ -67,14 +68,6 @@ var Specs = []KeySpec{
 		Type:    "bool",
 		Default: false,
 		Doc:     "Whether notification sounds are enabled.",
-	},
-	{
-		Key:     "notifications.groups",
-		Env:     "PRONTO_NOTIFICATIONS_GROUPS",
-		Type:    "[]string",
-		Default: DefaultNotificationGroups(),
-		Valid:   ValidNotificationGroups,
-		Doc:     "PR groups that trigger desktop notifications: \"focus\", \"mine\", \"priority\", \"inbox\".",
 	},
 	{
 		Key:   "notifications.sounds",
@@ -170,6 +163,11 @@ var Specs = []KeySpec{
 		Default: "1h",
 		Doc:     "Interval between goroutine leak profile checks in `pronto serve` as a Go duration string; \"0\" disables.",
 	},
+}
+
+func init() {
+	i := slices.IndexFunc(Specs, func(k KeySpec) bool { return k.Key == "notifications.sounds" })
+	Specs = slices.Insert(Specs, i, notificationScopeSpecs()...)
 }
 
 // spec returns the KeySpec for a TOML key, or nil when the key is unknown to

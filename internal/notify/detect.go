@@ -28,8 +28,10 @@ type Detector struct {
 	filterBots         bool
 	viewer             string
 	assets             Assets
+	clock              func() time.Time
+	lastDetect         time.Time
 	seenKeys           map[string]bool
-	pendingChecks      map[model.PRKey]model.PullRequest
+	pendingChecks      map[model.PRKey]Observed
 	mu                 sync.Mutex
 }
 
@@ -40,7 +42,8 @@ func NewDetector(checker PRStatusChecker, opts ...DetectorOption) *Detector {
 		checkerTimeout:     defaultCheckerTimeout,
 		checkerParallelism: defaultCheckerParallelism,
 		seenKeys:           make(map[string]bool),
-		pendingChecks:      make(map[model.PRKey]model.PullRequest),
+		pendingChecks:      make(map[model.PRKey]Observed),
+		clock:              time.Now,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -62,11 +65,19 @@ func (d *Detector) SeenKeysCount() int {
 }
 
 // Seed records initial baseline pull requests so startup does not notify.
-func (d *Detector) Seed(prs []model.PullRequest) {
+func (d *Detector) Seed(obs []Observed) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	for _, pr := range prs {
+	d.lastDetect = d.clock()
+	for _, o := range obs {
+		pr := o.PR
+		for _, sc := range o.Scopes {
+			d.seenKeys[enteredKey(pr, sc)] = true
+		}
+		if pr.InMergeQueue() {
+			d.seenKeys[mergeQueueKey(pr.RepoNameWithOwner, pr.Number)] = true
+		}
 		if pr.Checks.IsPassing() {
 			d.seenKeys[ciKey(pr.RepoNameWithOwner, pr.Number, pr.HeadRefOID, "passed")] = true
 		}
@@ -114,104 +125,35 @@ func (d *Detector) applyAssets(n *Notification) {
 	d.assets.Apply(n)
 }
 
-// DetectChanges inspects changes to pull requests and returns new notifications.
-func (d *Detector) DetectChanges(ctx context.Context, prev, curr []model.PullRequest) ([]Notification, error) {
-	prevMap := make(map[model.PRKey]model.PullRequest, len(prev))
-	for _, pr := range prev {
-		prevMap[pr.Key()] = pr
+// DetectChanges inspects changes to pull requests and returns every
+// notification-worthy transition, unfiltered by policy. Each notification
+// carries the scopes a Policy evaluates it against.
+func (d *Detector) DetectChanges(ctx context.Context, prev, curr []Observed) ([]Notification, error) {
+	now := d.clock()
+	d.mu.Lock()
+	lastDetect := d.lastDetect
+	d.lastDetect = now
+	d.mu.Unlock()
+
+	prevMap := make(map[model.PRKey]Observed, len(prev))
+	for _, o := range prev {
+		prevMap[o.PR.Key()] = o
 	}
 
-	currMap := make(map[model.PRKey]model.PullRequest, len(curr))
-	for _, pr := range curr {
-		currMap[pr.Key()] = pr
+	currMap := make(map[model.PRKey]Observed, len(curr))
+	for _, o := range curr {
+		currMap[o.PR.Key()] = o
 	}
 
 	var results []Notification
 
 	// 1. Inspect PRs currently open
-	for _, currPR := range curr {
-		key := currPR.Key()
-		prevPR, exists := prevMap[key]
-
-		// CI Passed
-		if !prevPR.Checks.IsPassing() && currPR.Checks.IsPassing() {
-			if d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "passed") {
-				n := Notification{
-					Trigger:     TriggerCIPassed,
-					PRNumber:    currPR.Number,
-					PRTitle:     currPR.Title,
-					Repo:        currPR.RepoNameWithOwner,
-					URL:         checksURL(currPR.URL),
-					Author:      currPR.Author,
-					CommitOID:   currPR.HeadRefOID,
-					SubmittedAt: time.Now(),
-					Title:       fmt.Sprintf("CI Passed (#%d)", currPR.Number),
-					Message: fmt.Sprintf(
-						"Checks passed for %q (%s)",
-						currPR.Title,
-						currPR.Key(),
-					),
-				}
-				d.applyAssets(&n)
-				results = append(results, n)
-			}
-		}
-
-		// CI Failed
-		if !prevPR.Checks.IsFailing() && currPR.Checks.IsFailing() {
-			if d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "failed") {
-				n := Notification{
-					Trigger:     TriggerCIFailed,
-					PRNumber:    currPR.Number,
-					PRTitle:     currPR.Title,
-					Repo:        currPR.RepoNameWithOwner,
-					URL:         failedCheckURL(currPR),
-					Author:      currPR.Author,
-					CommitOID:   currPR.HeadRefOID,
-					SubmittedAt: time.Now(),
-					Title:       fmt.Sprintf("CI Failed (#%d)", currPR.Number),
-					Message: fmt.Sprintf(
-						"CI failed for %q (%s)",
-						currPR.Title,
-						currPR.Key(),
-					),
-				}
-				d.applyAssets(&n)
-				results = append(results, n)
-			}
-		}
-
-		// Conflicts
-		if !prevPR.MergeStatus.HasConflict() && currPR.MergeStatus.HasConflict() {
-			if d.tryMarkSeen(conflictKey(currPR.RepoNameWithOwner, currPR.Number)) {
-				n := Notification{
-					Trigger:     TriggerConflict,
-					PRNumber:    currPR.Number,
-					PRTitle:     currPR.Title,
-					Repo:        currPR.RepoNameWithOwner,
-					URL:         currPR.URL,
-					Author:      currPR.Author,
-					CommitOID:   currPR.HeadRefOID,
-					SubmittedAt: time.Now(),
-					Title:       fmt.Sprintf("Merge Conflict (#%d)", currPR.Number),
-					Message: fmt.Sprintf(
-						"Merge conflict in %q (%s)",
-						currPR.Title,
-						currPR.Key(),
-					),
-				}
-				d.applyAssets(&n)
-				results = append(results, n)
-			}
-		} else if !currPR.MergeStatus.HasConflict() {
-			d.clearConflictSeen(currPR.RepoNameWithOwner, currPR.Number)
-		}
-
-		// Reviews
-		results = append(results, d.detectPRReviews(currPR, prevPR, exists)...)
+	for _, currObs := range curr {
+		prevObs, exists := prevMap[currObs.PR.Key()]
+		results = append(results, d.detectPR(prevObs, currObs, exists, lastDetect)...)
 	}
 
-	// 2. Inspect disappeared PRs (potential merges)
+	// 2. Inspect disappeared PRs (potential merges or closes)
 	d.mu.Lock()
 	for key := range d.pendingChecks {
 		if _, ok := currMap[key]; ok {
@@ -219,15 +161,15 @@ func (d *Detector) DetectChanges(ctx context.Context, prev, curr []model.PullReq
 		}
 	}
 
-	vanished := make(map[model.PRKey]model.PullRequest)
-	for key, prevPR := range prevMap {
+	vanished := make(map[model.PRKey]Observed)
+	for key, prevObs := range prevMap {
 		if _, ok := currMap[key]; !ok {
-			vanished[key] = prevPR
+			vanished[key] = prevObs
 		}
 	}
-	for key, pendingPR := range d.pendingChecks {
+	for key, pending := range d.pendingChecks {
 		if _, ok := currMap[key]; !ok {
-			vanished[key] = pendingPR
+			vanished[key] = pending
 		}
 	}
 	d.mu.Unlock()
@@ -252,11 +194,138 @@ func (d *Detector) DetectChanges(ctx context.Context, prev, curr []model.PullReq
 	return results, nil
 }
 
-// DetectMineChanges inspects changes to authored pull requests and returns new notifications.
-//
-// Deprecated: use DetectChanges instead.
-func (d *Detector) DetectMineChanges(ctx context.Context, prev, curr []model.PullRequest) ([]Notification, error) {
-	return d.DetectChanges(ctx, prev, curr)
+// detectPR reports every transition between prev and curr for one PR that is
+// present in the current poll. exists is false for a PR new to the queue.
+func (d *Detector) detectPR(prevObs, currObs Observed, exists bool, lastDetect time.Time) []Notification {
+	var results []Notification
+	currPR, prevPR := currObs.PR, prevObs.PR
+	scopes := unionScopes(prevObs.Scopes, currObs.Scopes)
+
+	// Opened
+	if !exists && !currPR.CreatedAt.IsZero() && currPR.CreatedAt.After(lastDetect) &&
+		d.tryMarkSeen(openedKey(currPR.RepoNameWithOwner, currPR.Number)) {
+		results = append(results, d.note(currPR, TriggerPROpened, currPR.URL, currPR.Author,
+			fmt.Sprintf("PR Opened (#%d)", currPR.Number),
+			fmt.Sprintf("@%s opened %q (%s)", currPR.Author, currPR.Title, currPR.Key()),
+			currObs.Scopes))
+	}
+
+	// Entered scopes
+	results = append(results, d.detectEntered(prevObs, currObs)...)
+
+	// CI Passed
+	if !prevPR.Checks.IsPassing() && currPR.Checks.IsPassing() &&
+		d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "passed") {
+		results = append(results, d.note(currPR, TriggerCIPassed, checksURL(currPR.URL), currPR.Author,
+			fmt.Sprintf("CI Passed (#%d)", currPR.Number),
+			fmt.Sprintf("Checks passed for %q (%s)", currPR.Title, currPR.Key()),
+			scopes))
+	}
+
+	// CI Failed
+	if !prevPR.Checks.IsFailing() && currPR.Checks.IsFailing() &&
+		d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "failed") {
+		results = append(results, d.note(currPR, TriggerCIFailed, failedCheckURL(currPR), currPR.Author,
+			fmt.Sprintf("CI Failed (#%d)", currPR.Number),
+			fmt.Sprintf("CI failed for %q (%s)", currPR.Title, currPR.Key()),
+			scopes))
+	}
+
+	// Conflicts
+	if !prevPR.MergeStatus.HasConflict() && currPR.MergeStatus.HasConflict() {
+		if d.tryMarkSeen(conflictKey(currPR.RepoNameWithOwner, currPR.Number)) {
+			results = append(results, d.note(currPR, TriggerConflict, currPR.URL, currPR.Author,
+				fmt.Sprintf("Merge Conflict (#%d)", currPR.Number),
+				fmt.Sprintf("Merge conflict in %q (%s)", currPR.Title, currPR.Key()),
+				scopes))
+		}
+	} else if !currPR.MergeStatus.HasConflict() {
+		d.clearConflictSeen(currPR.RepoNameWithOwner, currPR.Number)
+	}
+
+	if exists {
+		results = append(results, d.detectMergeQueue(prevPR, currPR, scopes)...)
+
+		// New commits
+		if prevPR.HeadRefOID != "" && currPR.HeadRefOID != prevPR.HeadRefOID && !d.isViewer(currPR.Author) &&
+			d.tryMarkSeen(commitKey(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID)) {
+			results = append(results, d.note(currPR, TriggerNewCommits, commitsURL(currPR.URL), currPR.Author,
+				fmt.Sprintf("New Commits (#%d)", currPR.Number),
+				fmt.Sprintf("New commits on %q (%s)", currPR.Title, currPR.Key()),
+				scopes))
+		}
+	}
+
+	// Reviews
+	return append(results, d.detectPRReviews(currPR, prevPR, exists, scopes)...)
+}
+
+// note builds a Notification for pr and resolves its assets.
+func (d *Detector) note(
+	pr model.PullRequest,
+	trigger Trigger,
+	url, author, title, message string,
+	scopes []Scope,
+) Notification {
+	n := Notification{
+		Trigger:     trigger,
+		PRNumber:    pr.Number,
+		PRTitle:     pr.Title,
+		Repo:        pr.RepoNameWithOwner,
+		URL:         url,
+		Author:      author,
+		CommitOID:   pr.HeadRefOID,
+		SubmittedAt: d.clock(),
+		Title:       title,
+		Message:     message,
+		Scopes:      scopes,
+	}
+	d.applyAssets(&n)
+	return n
+}
+
+func (d *Detector) isViewer(login string) bool {
+	return d.viewer != "" && strings.EqualFold(d.viewer, login)
+}
+
+// detectEntered reports scopes curr occupies that prev did not.
+func (d *Detector) detectEntered(prev, curr Observed) []Notification {
+	var results []Notification
+	for _, sc := range curr.Scopes {
+		if slices.Contains(prev.Scopes, sc) {
+			continue
+		}
+		if !d.tryMarkSeen(enteredKey(curr.PR, sc)) {
+			continue
+		}
+		title, message := enteredText(sc, curr.PR)
+		n := d.note(curr.PR, TriggerEntered, curr.PR.URL, curr.PR.Author, title, message, []Scope{sc})
+		n.Entered = &sc
+		results = append(results, n)
+	}
+	return results
+}
+
+func (d *Detector) detectMergeQueue(prevPR, currPR model.PullRequest, scopes []Scope) []Notification {
+	repo, num := currPR.RepoNameWithOwner, currPR.Number
+	switch {
+	case !prevPR.InMergeQueue() && currPR.InMergeQueue():
+		if d.tryMarkSeen(mergeQueueKey(repo, num)) {
+			return []Notification{d.note(currPR, TriggerMergeQueueEntered, currPR.URL, currPR.Author,
+				fmt.Sprintf("Merge Queue (#%d)", num),
+				fmt.Sprintf("Entered merge queue: %q (%s)", currPR.Title, currPR.Key()),
+				scopes)}
+		}
+	case prevPR.InMergeQueue() && !currPR.InMergeQueue():
+		d.mu.Lock()
+		delete(d.seenKeys, mergeQueueKey(repo, num))
+		d.mu.Unlock()
+		return []Notification{d.note(currPR, TriggerMergeQueueLeft, currPR.URL, currPR.Author,
+			fmt.Sprintf("Left Merge Queue (#%d)", num),
+			fmt.Sprintf("Left merge queue: %q (%s)", currPR.Title, currPR.Key()),
+			scopes)}
+	}
+	return nil
 }
 
 // checksURL links to the PR's Checks tab; empty when the PR URL is unknown.
@@ -284,13 +353,13 @@ func reviewURL(pr model.PullRequest, rev model.Review) string {
 	return pr.URL
 }
 
-func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool) []Notification {
+func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool, scopes []Scope) []Notification {
 	var results []Notification
 	for _, rev := range currPR.LatestReviews {
 		if rev.Author == currPR.Author {
 			continue
 		}
-		if d.viewer != "" && strings.EqualFold(d.viewer, rev.Author) {
+		if d.isViewer(rev.Author) {
 			continue
 		}
 		if d.filterBots && model.IsBotLogin(rev.Author) {
@@ -323,6 +392,7 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 				currPR.Title,
 				currPR.Key(),
 			),
+			Scopes: scopes,
 		}
 		d.applyAssets(&n)
 		results = append(results, n)
@@ -330,26 +400,25 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 	return results
 }
 
-func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRKey]model.PullRequest) []Notification {
+func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRKey]Observed) []Notification {
 	if d.checker == nil || len(vanished) == 0 {
 		return nil
 	}
 
 	type checkTarget struct {
-		key  model.PRKey
-		pr   model.PullRequest
-		mKey string
+		key model.PRKey
+		obs Observed
 	}
 
 	var targets []checkTarget
 	d.mu.Lock()
-	for key, vPR := range vanished {
-		mKey := mergeKey(vPR.RepoNameWithOwner, vPR.Number)
-		if d.seenKeys[mKey] {
+	for key, vObs := range vanished {
+		if d.seenKeys[mergeKey(vObs.PR.RepoNameWithOwner, vObs.PR.Number)] ||
+			d.seenKeys[closedKey(vObs.PR.RepoNameWithOwner, vObs.PR.Number)] {
 			delete(d.pendingChecks, key)
 			continue
 		}
-		targets = append(targets, checkTarget{key: key, pr: vPR, mKey: mKey})
+		targets = append(targets, checkTarget{key: key, obs: vObs})
 	}
 	d.mu.Unlock()
 
@@ -370,10 +439,11 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 			checkCtx, cancel := context.WithTimeout(gctx, d.checkerTimeout)
 			defer cancel()
 
-			merged, err := d.checker(checkCtx, target.pr.RepoNameWithOwner, target.pr.Number)
+			pr := target.obs.PR
+			state, err := d.checker(checkCtx, pr.RepoNameWithOwner, pr.Number)
 			if err != nil {
 				d.mu.Lock()
-				d.pendingChecks[target.key] = target.pr
+				d.pendingChecks[target.key] = target.obs
 				d.mu.Unlock()
 				return nil
 			}
@@ -382,28 +452,34 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 			delete(d.pendingChecks, target.key)
 			d.mu.Unlock()
 
-			if merged && d.tryMarkSeen(target.mKey) {
-				n := Notification{
-					Trigger:     TriggerPRMerged,
-					PRNumber:    target.pr.Number,
-					PRTitle:     target.pr.Title,
-					Repo:        target.pr.RepoNameWithOwner,
-					URL:         target.pr.URL,
-					Author:      target.pr.Author,
-					SubmittedAt: time.Now(),
-					Title:       fmt.Sprintf("PR Merged (#%d)", target.pr.Number),
-					Message: fmt.Sprintf(
-						"Merged: %q (%s)",
-						target.pr.Title,
-						target.pr.Key(),
-					),
+			var n Notification
+			switch state {
+			case PRStateMerged:
+				if !d.tryMarkSeen(mergeKey(pr.RepoNameWithOwner, pr.Number)) {
+					return nil
 				}
-				d.applyAssets(&n)
-
-				resMu.Lock()
-				results = append(results, n)
-				resMu.Unlock()
+				n = d.note(pr, TriggerPRMerged, pr.URL, pr.Author,
+					fmt.Sprintf("PR Merged (#%d)", pr.Number),
+					fmt.Sprintf("Merged: %q (%s)", pr.Title, pr.Key()),
+					target.obs.Scopes)
+				n.CommitOID = ""
+			case PRStateClosed:
+				if !d.tryMarkSeen(closedKey(pr.RepoNameWithOwner, pr.Number)) {
+					return nil
+				}
+				n = d.note(pr, TriggerPRClosed, pr.URL, pr.Author,
+					fmt.Sprintf("PR Closed (#%d)", pr.Number),
+					fmt.Sprintf("Closed: %q (%s)", pr.Title, pr.Key()),
+					target.obs.Scopes)
+				n.CommitOID = ""
+			default:
+				// Still open: it left the queue; pr_removed covers that.
+				return nil
 			}
+
+			resMu.Lock()
+			results = append(results, n)
+			resMu.Unlock()
 			return nil
 		})
 	}
@@ -416,6 +492,25 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 		return cmp.Compare(a.PRNumber, b.PRNumber)
 	})
 	return results
+}
+
+// unionScopes returns the scopes in a followed by those in b not already present.
+func unionScopes(a, b []Scope) []Scope {
+	out := slices.Clone(a)
+	for _, sc := range b {
+		if !slices.Contains(out, sc) {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+// commitsURL links to the PR's Commits tab; empty when the PR URL is unknown.
+func commitsURL(prURL string) string {
+	if prURL == "" {
+		return ""
+	}
+	return strings.TrimSuffix(prURL, "/") + "/commits"
 }
 
 func prKeyFromSeenKey(k string) (model.PRKey, bool) {
@@ -505,4 +600,24 @@ func (d *Detector) clearConflictSeen(repo string, num int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.seenKeys, conflictKey(repo, num))
+}
+
+func closedKey(repo string, num int) string {
+	return fmt.Sprintf("closed:%s", model.PRKey{Repo: repo, Number: num})
+}
+
+func openedKey(repo string, num int) string {
+	return fmt.Sprintf("opened:%s", model.PRKey{Repo: repo, Number: num})
+}
+
+func mergeQueueKey(repo string, num int) string {
+	return fmt.Sprintf("mq:%s", model.PRKey{Repo: repo, Number: num})
+}
+
+func commitKey(repo string, num int, oid string) string {
+	return fmt.Sprintf("commit:%s:%s", model.PRKey{Repo: repo, Number: num}, oid)
+}
+
+func enteredKey(pr model.PullRequest, sc Scope) string {
+	return fmt.Sprintf("entered:%s:%s:%s:%s", pr.Key(), sc.Tab, sc.Section, pr.HeadRefOID)
 }

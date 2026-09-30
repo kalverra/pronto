@@ -518,32 +518,25 @@ func (m Model) partitionFocused(indices []int, list []score.Scored) {
 	m.partitionFocusedWithStacks(indices, list)
 }
 
-func (m Model) buildInboxDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
-	stackCat := make(map[string]model.InboxCategory)
-	for _, item := range list {
-		if item.PR.IsPartOfStack() {
-			key := item.PR.StackKey()
-			cat := item.PR.InboxCategory(refTime)
-			if current, ok := stackCat[key]; !ok || cat < current {
-				stackCat[key] = cat
-			}
-		}
+func scoredPRs(list []score.Scored) []model.PullRequest {
+	prs := make([]model.PullRequest, len(list))
+	for i, item := range list {
+		prs[i] = item.PR
 	}
+	return prs
+}
+
+func (m Model) buildInboxDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
+	sections := model.EffectiveSections(scoredPRs(list), func(model.PullRequest) bool { return false }, refTime)
 
 	var attentionIndices, blockedIndices, staleIndices []int
 	for i, item := range list {
-		cat := item.PR.InboxCategory(refTime)
-		if item.PR.IsPartOfStack() {
-			if eff, ok := stackCat[item.PR.StackKey()]; ok {
-				cat = eff
-			}
-		}
-		switch cat {
-		case model.CategoryAttention:
+		switch sections[item.PR.Key()] {
+		case model.SectionAttention:
 			attentionIndices = append(attentionIndices, i)
-		case model.CategoryBlocked:
+		case model.SectionBlocked:
 			blockedIndices = append(blockedIndices, i)
-		case model.CategoryStale:
+		case model.SectionStale:
 			staleIndices = append(staleIndices, i)
 		}
 	}
@@ -584,16 +577,7 @@ func (m Model) buildInboxDisplayRows(list []score.Scored, refTime time.Time) []d
 }
 
 func (m Model) buildMineDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
-	stackCat := make(map[string]model.MineCategory)
-	for _, item := range list {
-		if item.PR.IsPartOfStack() && !item.PR.InMergeQueue() {
-			key := item.PR.StackKey()
-			cat := item.PR.MineCategory(refTime)
-			if current, ok := stackCat[key]; !ok || cat < current {
-				stackCat[key] = cat
-			}
-		}
-	}
+	sections := model.EffectiveSections(scoredPRs(list), func(model.PullRequest) bool { return true }, refTime)
 
 	var (
 		actionIndices []int
@@ -604,24 +588,18 @@ func (m Model) buildMineDisplayRows(list []score.Scored, refTime time.Time) []di
 		staleIndices  []int
 	)
 	for i, item := range list {
-		cat := item.PR.MineCategory(refTime)
-		if item.PR.IsPartOfStack() && !item.PR.InMergeQueue() {
-			if eff, ok := stackCat[item.PR.StackKey()]; ok {
-				cat = eff
-			}
-		}
-		switch cat {
-		case model.MineCategoryActionRequired:
+		switch sections[item.PR.Key()] {
+		case model.SectionActionRequired:
 			actionIndices = append(actionIndices, i)
-		case model.MineCategoryQueued:
+		case model.SectionMergeQueue:
 			queuedIndices = append(queuedIndices, i)
-		case model.MineCategoryReadyToMerge:
+		case model.SectionReadyToMerge:
 			readyIndices = append(readyIndices, i)
-		case model.MineCategoryInReview:
+		case model.SectionInReview:
 			reviewIndices = append(reviewIndices, i)
-		case model.MineCategoryDraft:
+		case model.SectionDrafts:
 			draftIndices = append(draftIndices, i)
-		case model.MineCategoryStale:
+		case model.SectionStale:
 			staleIndices = append(staleIndices, i)
 		}
 	}
@@ -720,81 +698,16 @@ var focusSections = []struct {
 	{focusSectionStale, "STALE", accentCharcoal},
 }
 
-func computeFocusStackCategories(
-	list []score.Scored,
-	isAuthored func(model.PullRequest) bool,
-	refTime time.Time,
-) (map[string]model.MineCategory, map[string]model.InboxCategory) {
-	mineStackCat := make(map[string]model.MineCategory)
-	inboxStackCat := make(map[string]model.InboxCategory)
-	for _, item := range list {
-		if !item.PR.IsPartOfStack() {
-			continue
-		}
-		key := item.PR.StackKey()
-		if isAuthored(item.PR) {
-			if !item.PR.InMergeQueue() {
-				cat := item.PR.MineCategory(refTime)
-				if current, ok := mineStackCat[key]; !ok || cat < current {
-					mineStackCat[key] = cat
-				}
-			}
-		} else {
-			cat := item.PR.InboxCategory(refTime)
-			if current, ok := inboxStackCat[key]; !ok || cat < current {
-				inboxStackCat[key] = cat
-			}
-		}
-	}
-	return mineStackCat, inboxStackCat
-}
-
-func categorizeFocusItem(
-	item score.Scored,
-	isAuthored bool,
-	refTime time.Time,
-	mineStackCat map[string]model.MineCategory,
-	inboxStackCat map[string]model.InboxCategory,
-) focusSection {
-	if isAuthored {
-		cat := item.PR.MineCategory(refTime)
-		if item.PR.IsPartOfStack() && !item.PR.InMergeQueue() {
-			if eff, ok := mineStackCat[item.PR.StackKey()]; ok {
-				cat = eff
-			}
-		}
-		switch cat {
-		case model.MineCategoryActionRequired:
-			return focusSectionActionRequired
-		case model.MineCategoryQueued:
-			return focusSectionMergeQueue
-		case model.MineCategoryReadyToMerge:
-			return focusSectionReadyToMerge
-		case model.MineCategoryInReview:
-			return focusSectionInReview
-		case model.MineCategoryDraft:
-			return focusSectionDrafts
-		case model.MineCategoryStale:
-			return focusSectionStale
-		}
-		return focusSectionUnknown
-	}
-
-	cat := item.PR.InboxCategory(refTime)
-	if item.PR.IsPartOfStack() {
-		if eff, ok := inboxStackCat[item.PR.StackKey()]; ok {
-			cat = eff
-		}
-	}
-	switch cat {
-	case model.CategoryAttention:
-		return focusSectionAttention
-	case model.CategoryBlocked:
-		return focusSectionBlocked
-	case model.CategoryStale:
-		return focusSectionStale
-	}
-	return focusSectionUnknown
+// focusSectionOf maps model sections to their focus-tab dividers.
+var focusSectionOf = map[model.Section]focusSection{
+	model.SectionAttention:      focusSectionAttention,
+	model.SectionActionRequired: focusSectionActionRequired,
+	model.SectionMergeQueue:     focusSectionMergeQueue,
+	model.SectionReadyToMerge:   focusSectionReadyToMerge,
+	model.SectionInReview:       focusSectionInReview,
+	model.SectionBlocked:        focusSectionBlocked,
+	model.SectionDrafts:         focusSectionDrafts,
+	model.SectionStale:          focusSectionStale,
 }
 
 func (m Model) buildFocusDisplayRows(list []score.Scored, refTime time.Time) []displayRow {
@@ -810,11 +723,14 @@ func (m Model) buildFocusDisplayRows(list []score.Scored, refTime time.Time) []d
 		return mineKeys[pr.Key()] || (m.viewer != "" && strings.EqualFold(pr.Author, m.viewer))
 	}
 
-	mineStackCat, inboxStackCat := computeFocusStackCategories(list, isAuthored, refTime)
+	sections := model.EffectiveSections(scoredPRs(list), isAuthored, refTime)
 
 	sectionIndices := make(map[focusSection][]int)
 	for i, item := range list {
-		sec := categorizeFocusItem(item, isAuthored(item.PR), refTime, mineStackCat, inboxStackCat)
+		sec, ok := focusSectionOf[sections[item.PR.Key()]]
+		if !ok {
+			sec = focusSectionUnknown
+		}
 		sectionIndices[sec] = append(sectionIndices[sec], i)
 	}
 

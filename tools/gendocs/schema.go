@@ -116,7 +116,12 @@ func RenderSchema() ([]byte, error) {
 					},
 					Payload: propDef{
 						Type:        "object",
-						Description: "Type-specific details (review author/state, refresh outcome).",
+						Description: "Type-specific details (review author/state, entered scope, refresh outcome).",
+					},
+					Notify: propDef{
+						Type: "object",
+						Description: "Rendered desktop notification (title, message, url, image, sound); " +
+							"present only when the notification policy selected this event for delivery.",
 					},
 				},
 			},
@@ -304,6 +309,7 @@ type eventProps struct {
 	PR      propDef  `json:"pr"`
 	Title   propDef  `json:"title"`
 	Payload propDef  `json:"payload"`
+	Notify  propDef  `json:"notify"`
 }
 
 type subscriptionDef struct {

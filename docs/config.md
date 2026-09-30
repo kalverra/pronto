@@ -19,9 +19,32 @@ environment variables override file values.
 | `notifications.mode` | `PRONTO_NOTIFICATIONS_MODE` | string | `"native"` | `terminal`, `native` | Delivery backend for desktop notifications: "native" uses the bundled macOS notification helper (run `pronto notify setup` once), falling back to "terminal" (terminal-notifier/osascript) when the helper isn't installed or authorized. |
 | `notifications.popups` | `PRONTO_NOTIFICATIONS_POPUPS` | bool | true | `—` | Whether desktop notification popups are enabled. |
 | `notifications.sound` | `PRONTO_NOTIFICATIONS_SOUND` | bool | false | `—` | Whether notification sounds are enabled. |
-| `notifications.groups` | `PRONTO_NOTIFICATIONS_GROUPS` | []string | `["focus", "mine", "priority"]` | `focus`, `mine`, `priority`, `inbox` | PR groups that trigger desktop notifications: "focus", "mine", "priority", "inbox". |
-| `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | macOS system sound name per notification trigger (e.g. "Glass"); must match a sound under /System/Library/Sounds or ~/Library/Sounds, or "default" for the OS alert sound. |
-| `notifications.images` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged` | Static image paths per notification trigger. |
+| `notifications.focus.triggers` | `PRONTO_NOTIFICATIONS_FOCUS_TRIGGERS` | []trigger | `["all", "!entered"]` | `—` | Triggers that notify for PRs in the focus tab. See [Notification policy](#notification-policy). |
+| `notifications.focus.attention` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's attention section; `inherit` starts from the tab's set. |
+| `notifications.focus.action_required` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's action_required section; `inherit` starts from the tab's set. |
+| `notifications.focus.merge_queue` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's merge_queue section; `inherit` starts from the tab's set. |
+| `notifications.focus.ready_to_merge` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's ready_to_merge section; `inherit` starts from the tab's set. |
+| `notifications.focus.in_review` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's in_review section; `inherit` starts from the tab's set. |
+| `notifications.focus.blocked` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's blocked section; `inherit` starts from the tab's set. |
+| `notifications.focus.drafts` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's drafts section; `inherit` starts from the tab's set. |
+| `notifications.focus.stale` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the focus tab's stale section; `inherit` starts from the tab's set. |
+| `notifications.mine.triggers` | `PRONTO_NOTIFICATIONS_MINE_TRIGGERS` | []trigger | `["all", "!new_commits", "!entered"]` | `—` | Triggers that notify for PRs in the mine tab. See [Notification policy](#notification-policy). |
+| `notifications.mine.action_required` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the mine tab's action_required section; `inherit` starts from the tab's set. |
+| `notifications.mine.merge_queue` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the mine tab's merge_queue section; `inherit` starts from the tab's set. |
+| `notifications.mine.ready_to_merge` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the mine tab's ready_to_merge section; `inherit` starts from the tab's set. |
+| `notifications.mine.in_review` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the mine tab's in_review section; `inherit` starts from the tab's set. |
+| `notifications.mine.drafts` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the mine tab's drafts section; `inherit` starts from the tab's set. |
+| `notifications.mine.stale` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the mine tab's stale section; `inherit` starts from the tab's set. |
+| `notifications.priority.triggers` | `PRONTO_NOTIFICATIONS_PRIORITY_TRIGGERS` | []trigger | `["entered"]` | `—` | Triggers that notify for PRs in the priority tab. See [Notification policy](#notification-policy). |
+| `notifications.priority.attention` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the priority tab's attention section; `inherit` starts from the tab's set. |
+| `notifications.priority.blocked` | `—` | []trigger | `["inherit", "!entered"]` | `—` | Triggers that notify for PRs in the priority tab's blocked section; `inherit` starts from the tab's set. |
+| `notifications.priority.stale` | `—` | []trigger | `["inherit", "!entered"]` | `—` | Triggers that notify for PRs in the priority tab's stale section; `inherit` starts from the tab's set. |
+| `notifications.inbox.triggers` | `PRONTO_NOTIFICATIONS_INBOX_TRIGGERS` | []trigger | `[]` | `—` | Triggers that notify for PRs in the inbox tab. See [Notification policy](#notification-policy). |
+| `notifications.inbox.attention` | `—` | []trigger | `["inherit"]` | `—` | Triggers that notify for PRs in the inbox tab's attention section; `inherit` starts from the tab's set. |
+| `notifications.inbox.blocked` | `—` | []trigger | `["inherit", "!entered"]` | `—` | Triggers that notify for PRs in the inbox tab's blocked section; `inherit` starts from the tab's set. |
+| `notifications.inbox.stale` | `—` | []trigger | `["inherit", "!entered"]` | `—` | Triggers that notify for PRs in the inbox tab's stale section; `inherit` starts from the tab's set. |
+| `notifications.sounds` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged`, `pr_opened`, `pr_closed`, `merge_queue_entered`, `merge_queue_left`, `new_commits`, `entered` | macOS system sound name per notification trigger (e.g. "Glass"); must match a sound under /System/Library/Sounds or ~/Library/Sounds, or "default" for the OS alert sound. |
+| `notifications.images` | `—` | map[trigger]string | — | `ci_passed`, `ci_failed`, `conflict`, `review_received`, `pr_merged`, `pr_opened`, `pr_closed`, `merge_queue_entered`, `merge_queue_left`, `new_commits`, `entered` | Static image paths per notification trigger. |
 | `focus.authors` | `PRONTO_FOCUS_AUTHORS` | []string | `[]` | `—` | PR authors whose pull requests should automatically be focused. |
 | `focus.repos` | `PRONTO_FOCUS_REPOS` | []string | `[]` | `—` | Repositories whose pull requests should automatically be focused. |
 | `focus.exclude_bots` | `PRONTO_FOCUS_EXCLUDE_BOTS` | bool | true | `—` | Whether bot-authored PRs are skipped by auto-focus rules (manually focused PRs stay focused). |
@@ -34,6 +57,108 @@ environment variables override file values.
 | `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Daemon poll interval as a Go duration string, e.g. "30s"; default 60s; minimum 10s. |
 | `server.pprof_addr` | `PRONTO_PPROF_ADDR` | string | `""` | `—` | Loopback address for the net/http/pprof endpoint in `pronto serve`, e.g. "localhost:6060"; empty disables it. |
 | `server.leak_check_interval` | `PRONTO_LEAK_CHECK_INTERVAL` | duration | `"1h"` | `—` | Interval between goroutine leak profile checks in `pronto serve` as a Go duration string; "0" disables. |
+
+## Notification policy
+
+Which events raise a desktop notification is configured per tab and per tab section.
+Every PR is placed in one tab-level scope and one section-level scope per tab it appears in
+(Focus in addition to its home tab: Mine for your PRs, Priority or Inbox for incoming ones).
+An event notifies when *any* scope the PR occupies subscribes to its trigger.
+The event stream (`pronto watch` / `pronto wait`) is unaffected: every event is always emitted,
+and only policy-selected ones carry a `notify` payload.
+
+### Triggers
+
+| Trigger | Fires when |
+| ------- | ---------- |
+| `ci_passed` | CI checks on a PR transitioned to passing. |
+| `ci_failed` | one or more CI checks on a PR transitioned to failing. |
+| `conflict` | a PR newly has merge conflicts. |
+| `review_received` | a new review was submitted on a PR. |
+| `pr_merged` | a PR was merged. |
+| `pr_opened` | a PR was created since the previous poll. |
+| `pr_closed` | a PR was closed without merging. |
+| `merge_queue_entered` | a PR entered a merge queue. |
+| `merge_queue_left` | a PR left a merge queue but is still open. |
+| `new_commits` | new commits were pushed to a PR by someone other than the viewer. |
+| `entered` | a PR gained a tab or tab section it was not in on the previous poll, e.g. a review request landing in Priority or a PR becoming ready for your review (see EnteredPayload). |
+
+### Tokens
+
+Each key is a list of tokens evaluated left to right into a set of triggers.
+
+| Token | Effect |
+| ----- | ------ |
+| `<trigger>` | add that trigger |
+| `!<trigger>` | remove that trigger |
+| `all` | add every trigger |
+| `inherit` | add the tab's resolved set (section keys only) |
+| `[]` | empty set: nothing notifies |
+
+`!all` and `inherit` on a tab key are rejected. Unset section keys default to `["inherit"]`.
+Tab keys can also be set from the environment as comma-separated lists, e.g.
+`PRONTO_NOTIFICATIONS_MINE_TRIGGERS="all,!new_commits"`.
+
+### Sections
+
+| Section | Tabs | Holds |
+| ------- | ---- | ----- |
+| `attention` | `focus`, `priority`, `inbox` | incoming PRs ready for your review (Inbox/Priority "Needs your attention"). |
+| `action_required` | `focus`, `mine` | your PRs needing action: changes requested, failing CI, or a conflict. |
+| `merge_queue` | `focus`, `mine` | your PRs currently in a merge queue. |
+| `ready_to_merge` | `focus`, `mine` | your approved PRs that are clean (or behind) and ready to merge. |
+| `in_review` | `focus`, `mine` | your PRs waiting on review or CI. |
+| `blocked` | `focus`, `priority`, `inbox` | incoming PRs blocked on checks, conflicts, the author, or a merge queue, and drafts. |
+| `drafts` | `focus`, `mine` | your draft PRs. |
+| `stale` | `focus`, `mine`, `priority`, `inbox` | PRs with no recent activity (both your PRs and incoming PRs). |
+
+### Defaults
+
+| Scope | Default tokens | Resolves to |
+| ----- | -------------- | ----------- |
+| `focus` | `["all", "!entered"]` | everything except `entered` |
+| `focus › attention` | `["inherit"]` | everything except `entered` |
+| `focus › action_required` | `["inherit"]` | everything except `entered` |
+| `focus › merge_queue` | `["inherit"]` | everything except `entered` |
+| `focus › ready_to_merge` | `["inherit"]` | everything except `entered` |
+| `focus › in_review` | `["inherit"]` | everything except `entered` |
+| `focus › blocked` | `["inherit"]` | everything except `entered` |
+| `focus › drafts` | `["inherit"]` | everything except `entered` |
+| `focus › stale` | `["inherit"]` | everything except `entered` |
+| `mine` | `["all", "!new_commits", "!entered"]` | everything except `new_commits`, `entered` |
+| `mine › action_required` | `["inherit"]` | everything except `new_commits`, `entered` |
+| `mine › merge_queue` | `["inherit"]` | everything except `new_commits`, `entered` |
+| `mine › ready_to_merge` | `["inherit"]` | everything except `new_commits`, `entered` |
+| `mine › in_review` | `["inherit"]` | everything except `new_commits`, `entered` |
+| `mine › drafts` | `["inherit"]` | everything except `new_commits`, `entered` |
+| `mine › stale` | `["inherit"]` | everything except `new_commits`, `entered` |
+| `priority` | `["entered"]` | `entered` |
+| `priority › attention` | `["inherit"]` | `entered` |
+| `priority › blocked` | `["inherit", "!entered"]` | nothing |
+| `priority › stale` | `["inherit", "!entered"]` | nothing |
+| `inbox` | `[]` | nothing |
+| `inbox › attention` | `["inherit"]` | nothing |
+| `inbox › blocked` | `["inherit", "!entered"]` | nothing |
+| `inbox › stale` | `["inherit", "!entered"]` | nothing |
+
+### Examples
+
+```toml
+# Only CI results and merges for your own PRs.
+[notifications.mine]
+triggers = ["ci_failed", "ci_passed", "pr_merged"]
+
+# Additionally, review activity only while a PR is in review.
+in_review = ["inherit", "review_received"]
+
+# Ping when a PR becomes ready for your review, in Inbox too.
+[notifications.inbox]
+attention = ["entered"]
+
+# Silence Focus entirely.
+[notifications.focus]
+triggers = []
+```
 
 ## Config file resolution
 
@@ -57,7 +182,23 @@ pr_view_command = ""
 mode = "native"
 popups = true
 sound = false
-groups = ["focus", "mine", "priority"]
+
+# Triggers per tab: "all", trigger names, "!trigger" to remove; sections take
+# the same tokens plus "inherit" (the tab's set).
+[notifications.focus]
+triggers = ["all", "!entered"]
+
+[notifications.mine]
+triggers = ["all", "!new_commits", "!entered"]
+# in_review = ["inherit", "!review_received"]
+
+[notifications.priority]
+triggers = ["entered"]
+attention = ["inherit"]
+blocked = ["inherit", "!entered"]
+
+[notifications.inbox]
+triggers = []
 
 [notifications.sounds]
 # ci_passed = "Glass"

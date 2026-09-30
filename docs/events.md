@@ -16,6 +16,12 @@ and the in-process event bus used to fan events out to socket subscribers.
 | `conflict` | indicates a PR newly has merge conflicts. |
 | `review_received` | indicates a new review was submitted on a PR. |
 | `pr_merged` | indicates a PR was merged. |
+| `pr_opened` | indicates a PR was created since the previous poll. |
+| `pr_closed` | indicates a PR was closed without merging. |
+| `merge_queue_entered` | indicates a PR entered a merge queue. |
+| `merge_queue_left` | indicates a PR left a merge queue but is still open. |
+| `new_commits` | indicates new commits were pushed to a PR by someone other than the viewer. |
+| `entered` | indicates a PR gained a tab or tab section it was not in on the previous poll, e.g. a review request landing in Priority or a PR becoming ready for your review (see EnteredPayload). |
 | `pr_added` | indicates a PR newly appeared in the queue. |
 | `pr_removed` | indicates a PR left the queue without merging. |
 | `queue_refreshed` | reports the outcome of a queue poll. It is not scoped to a single PR. |
@@ -30,6 +36,27 @@ ReviewPayload carries details for review_received events.
 | `Author` | `author` | `string` |  | — |
 | `State` | `state` | `string` |  | — |
 | `SubmittedAt` | `submitted_at` | `time.Time` |  | — |
+
+## EnteredPayload
+
+EnteredPayload carries the scope a PR entered (entered events).
+
+| Field | JSON | Type | Omitempty | Description |
+| ----- | ---- | ---- | --------- | ----------- |
+| `Tab` | `tab` | `string` |  | — |
+| `Section` | `section` | `string` | yes | — |
+
+## NotificationPayload
+
+NotificationPayload is the rendered desktop notification for an event the daemon's notification policy selected. Nil means "do not notify".
+
+| Field | JSON | Type | Omitempty | Description |
+| ----- | ---- | ---- | --------- | ----------- |
+| `Title` | `title` | `string` |  | — |
+| `Message` | `message` | `string` |  | — |
+| `URL` | `url` | `string` | yes | — |
+| `Image` | `image` | `string` | yes | — |
+| `Sound` | `sound` | `string` | yes | — |
 
 ## QueueRefreshedPayload
 
@@ -64,6 +91,7 @@ Event is a single emitted pronto event. Seq is monotonic per server lifetime; Re
 | `PR` | `pr` | `int` | yes | — |
 | `Title` | `title` | `string` | yes | — |
 | `Payload` | `payload` | `any` | yes | — |
+| `Notify` | `notify` | `*NotificationPayload` | yes | Notify is set when the notification policy selected this event for desktop delivery; clients deliver it verbatim. |
 
 ## Subscription
 

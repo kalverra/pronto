@@ -132,9 +132,15 @@
             "ci_failed",
             "ci_passed",
             "conflict",
+            "entered",
             "fetch_progress",
+            "merge_queue_entered",
+            "merge_queue_left",
+            "new_commits",
             "pr_added",
+            "pr_closed",
             "pr_merged",
+            "pr_opened",
             "pr_removed",
             "queue_refreshed",
             "review_received"
@@ -158,7 +164,11 @@
         },
         "payload": {
           "type": "object",
-          "description": "Type-specific details (review author/state, refresh outcome)."
+          "description": "Type-specific details (review author/state, entered scope, refresh outcome)."
+        },
+        "notify": {
+          "type": "object",
+          "description": "Rendered desktop notification (title, message, url, image, sound); present only when the notification policy selected this event for delivery."
         }
       }
     },

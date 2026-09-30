@@ -106,7 +106,7 @@ flowchart TB
 
     subgraph daemonpkg["pronto serve (internal/daemon)"]
         loop["Poll loop (interval, warm start from cache)"]
-        detector["notify.Detector (trigger events)"]
+        detector["config.Classify → notify.Detector (trigger events) → Policy.Select"]
         diff["Queue set-diff (pr_added / pr_removed)"]
         bus["events.Bus (fan-out, seq, ordering)"]
         state["Daemon state (queue snapshot)"]
@@ -174,8 +174,9 @@ sequenceDiagram
     else fetch ok
         S-->>L: model.Queue
         Note over L: first fetch seeds the detector<br/>(baseline, no events)
-        L->>D: DetectChanges(prev, curr)
-        D-->>L: notifications (ci_passed, ci_failed,<br/>conflict, review_received, pr_merged)
+        L->>D: DetectChanges(prev, curr) over Classify'd PRs
+        D-->>L: every transition (ci_passed, ci_failed, conflict,<br/>review_received, pr_merged, pr_opened, pr_closed,<br/>merge_queue_entered, merge_queue_left,<br/>new_commits, entered)
+        Note over L: Policy.Select marks deliveries<br/>(event.notify set only for those)
         L->>L: set-diff prev vs curr (pr_added, pr_removed)
         L->>B: Emit events (seq assigned, UTC ts)
         B-->>C: pushed NDJSON lines (emit order per connection)
@@ -254,6 +255,22 @@ detector to the notifier built by its factory (`tui.DefaultNotifierFactory`)
 from `notifications.*` config; `notify.NewNotifier(notify.Options{Mode, Sound})`
 is the single constructor both the TUI and `cmd/pronto` use, so the config
 package never has to duplicate backend-selection logic.
+
+**Which events notify** is a per-tab / per-section policy, resolved from
+`notifications.<tab>.triggers` and `notifications.<tab>.<section>` config
+(`NotificationConfig.Policy()`, a `notify.Policy` mapping `notify.Scope` →
+trigger set). `config.Classify` places every PR in its scopes (a tab-level
+scope and a section-level scope per tab: mine / priority / inbox, plus focus).
+`Detector.DetectChanges` takes `[]notify.Observed` (PR + scopes) and returns
+*every* transition unfiltered, each carrying the scopes to evaluate; the
+`entered` trigger fires when a PR gains a scope. `Policy.Select` then keeps the
+wanted notifications and collapses per-PR `pr_opened`/`entered` duplicates to
+the most specific one. The daemon emits every trigger event on the bus (so
+`pronto watch`/`wait` see everything) and sets `Event.Notify` — the rendered
+banner — only on policy-selected events; the TUI in daemon mode delivers
+exactly those, verbatim. Standalone TUI runs the same Classify → Detect →
+Select path locally. Section names are `model.Section`, shared with the TUI
+dividers via `model.EffectiveSections` (stack-aware).
 
 Two delivery backends, selected by `notifications.mode` (default `native`):
 
@@ -376,7 +393,8 @@ IO-blocked goroutines the runtime profiler cannot see) and the runtime
 - **One daemon, many consumers.** Only `pronto serve` polls in push mode;
   watchers never hit GitHub directly, so rate limits stay flat.
 - **Events reuse the notification vocabulary** (`internal/notify` triggers)
-  plus structural events (`pr_added`, `pr_removed`, `queue_refreshed`) so
+  plus structural events (`pr_added`, `pr_removed`, `queue_refreshed`; a PR closed
+without merging yields both `pr_closed` and `pr_removed`) so
   daemon consumers and TUI notifications stay consistent.
 - **Warm start.** The daemon serves the cached queue snapshot immediately on
   startup and treats it as the change-detection baseline, so a restart reports

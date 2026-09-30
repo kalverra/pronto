@@ -24,22 +24,6 @@ const (
 	ViewCustom    = "custom"
 )
 
-// Supported PR groups for desktop notifications.
-const (
-	GroupFocus    = "focus"
-	GroupMine     = "mine"
-	GroupPriority = "priority"
-	GroupInbox    = "inbox"
-)
-
-// ValidNotificationGroups lists supported PR groups for desktop notifications.
-var ValidNotificationGroups = []string{GroupFocus, GroupMine, GroupPriority, GroupInbox}
-
-// DefaultNotificationGroups lists the PR groups notified when none are configured.
-func DefaultNotificationGroups() []string {
-	return []string{GroupFocus, GroupMine, GroupPriority}
-}
-
 // Supported desktop notification delivery modes. Vocabulary is owned by the
 // notify package; these aliases exist for configuration ergonomics.
 const (
@@ -55,19 +39,13 @@ type NotificationConfig struct {
 	Mode   string            `json:"mode"   mapstructure:"mode"   toml:"mode"`
 	Popups bool              `json:"popups" mapstructure:"popups" toml:"popups"`
 	Sound  bool              `json:"sound"  mapstructure:"sound"  toml:"sound"`
-	Groups []string          `json:"groups" mapstructure:"groups" toml:"groups"`
 	Sounds map[string]string `json:"sounds" mapstructure:"sounds" toml:"sounds"`
 	Images map[string]string `json:"images" mapstructure:"images" toml:"images"`
-}
 
-// HasGroup reports whether desktop notifications are enabled for the specified PR group.
-func (n NotificationConfig) HasGroup(group string) bool {
-	for _, g := range n.Groups {
-		if strings.EqualFold(g, group) {
-			return true
-		}
-	}
-	return false
+	Focus    FocusNotify `json:"focus"    mapstructure:"focus"    toml:"focus"`
+	Mine     MineNotify  `json:"mine"     mapstructure:"mine"     toml:"mine"`
+	Priority InboxNotify `json:"priority" mapstructure:"priority" toml:"priority"`
+	Inbox    InboxNotify `json:"inbox"    mapstructure:"inbox"    toml:"inbox"`
 }
 
 // ServerConfig specifies configuration for the daemon socket API.
@@ -139,17 +117,8 @@ func (c *Config) Validate() error {
 	if !validValue(spec("notifications.mode").Valid, c.Notifications.Mode) {
 		return fmt.Errorf("unknown notifications.mode: %q", c.Notifications.Mode)
 	}
-	if len(c.Notifications.Groups) == 0 {
-		c.Notifications.Groups = DefaultNotificationGroups()
-	}
-	for _, g := range c.Notifications.Groups {
-		if !validValue(ValidNotificationGroups, g) {
-			return fmt.Errorf(
-				"unknown notification group: %q; valid groups: %s",
-				g,
-				strings.Join(ValidNotificationGroups, ", "),
-			)
-		}
+	if _, err := c.Notifications.resolve(); err != nil {
+		return err
 	}
 	for trigger, sound := range c.Notifications.Sounds {
 		if !validValue(spec("notifications.sounds").Valid, trigger) {
@@ -213,6 +182,12 @@ func LoadFile(path string) (Config, error) {
 		if !errors.As(err, &notFound) && !errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf("read config file %q: %w", path, err)
 		}
+	}
+
+	if v.IsSet("notifications.groups") {
+		return Config{}, errors.New(
+			"notifications.groups was removed; configure [notifications.focus|mine|priority|inbox] " +
+				"triggers instead (see docs/config.md)")
 	}
 
 	var cfg Config

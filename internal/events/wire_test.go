@@ -47,5 +47,11 @@ func TestTriggerStrings(t *testing.T) {
 		"conflict",
 		"review_received",
 		"pr_merged",
+		"pr_opened",
+		"pr_closed",
+		"merge_queue_entered",
+		"merge_queue_left",
+		"new_commits",
+		"entered",
 	}, strs)
 }

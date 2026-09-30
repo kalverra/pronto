@@ -97,6 +97,7 @@ type Model struct {
 	notifierFactory       NotifierFactory
 	detector              *notify.Detector
 	notifCfg              *config.NotificationConfig
+	notifPolicy           notify.Policy
 	notificationsDisabled bool
 	detectionDisabled     bool
 	logger                zerolog.Logger
@@ -597,6 +598,11 @@ func New(q model.Queue, opts ...Option) Model {
 		m.notifierFactory = DefaultNotifierFactory
 	}
 	if !m.notificationsDisabled {
+		if m.notifCfg != nil {
+			m.notifPolicy = m.notifCfg.Policy()
+		} else {
+			m.notifPolicy = config.DefaultNotificationConfig().Policy()
+		}
 		if m.notifier == nil {
 			if m.notifCfg != nil {
 				m.notifier = m.notifierFactory(*m.notifCfg)
@@ -604,7 +610,7 @@ func New(q model.Queue, opts ...Option) Model {
 				// No config loaded: build the notifier from the same defaults
 				// LoadFile would produce (popups on, native with terminal
 				// fallback), so a bare Model still notifies.
-				m.notifier = m.notifierFactory(config.NotificationConfig{Popups: true, Mode: config.NotifyNative})
+				m.notifier = m.notifierFactory(config.DefaultNotificationConfig())
 			}
 		}
 		if !m.detectionDisabled {
@@ -615,7 +621,7 @@ func New(q model.Queue, opts ...Option) Model {
 				}
 				m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, dOpts...)
 			}
-			m.detector.Seed(m.monitoredPRs(q))
+			m.detector.Seed(m.observe(q))
 		}
 	}
 	if m.viewPR == nil {
@@ -772,29 +778,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case EventMsg:
-		ev := msg.Event
-		var cmds []tea.Cmd
-		if m.eventsCh != nil {
-			cmds = append(cmds, WaitForEventCmd(m.eventsCh))
-		}
-		switch ev.Type {
-		case events.TypeFetchProgress:
-			if p, ok := ev.Payload.(events.FetchProgressPayload); ok {
-				m.loadingLoaded = p.Loaded
-				m.loadingTotal = p.Total
-			}
-		case events.TypeQueueRefreshed:
-			if m.src != nil && !m.loading && !m.staleSnapshot {
-				m.refreshing = true
-				cmds = append(cmds, FetchQueueCmd(m.ctx, m.src))
-			}
-		default:
-			if isTriggerEvent(ev.Type) {
-				n := notificationFromEvent(ev, m.notifCfg)
-				cmds = append(cmds, notifySingleCmd(m.ctx, m.notifier, m.logger, n))
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m.handleEventMsg(msg.Event)
 
 	case OpenURLMsg:
 		return m, nil
@@ -832,6 +816,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) handleEventMsg(ev events.Event) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	if m.eventsCh != nil {
+		cmds = append(cmds, WaitForEventCmd(m.eventsCh))
+	}
+	switch ev.Type {
+	case events.TypeFetchProgress:
+		if p, ok := ev.Payload.(events.FetchProgressPayload); ok {
+			m.loadingLoaded = p.Loaded
+			m.loadingTotal = p.Total
+		}
+	case events.TypeQueueRefreshed:
+		if m.src != nil && !m.loading && !m.staleSnapshot {
+			m.refreshing = true
+			cmds = append(cmds, FetchQueueCmd(m.ctx, m.src))
+		}
+	default:
+		if isTriggerEvent(ev.Type) && ev.Notify != nil {
+			n := notificationFromEvent(ev)
+			cmds = append(cmds, notifySingleCmd(m.ctx, m.notifier, m.logger, n))
+		}
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) handleClosePRMsg(msg ClosePRMsg) (tea.Model, tea.Cmd) {
@@ -1299,77 +1308,31 @@ func (m Model) handleQueueLoaded(msg QueueLoadedMsg) (Model, tea.Cmd) {
 	var notifCmd tea.Cmd
 	if wasInitial {
 		if m.detector != nil {
-			m.detector.Seed(m.monitoredPRs(msg.Queue))
+			m.detector.Seed(m.observe(msg.Queue))
 		}
 	} else if m.detector != nil && !m.isDaemon() {
-		prevMonitored := m.monitoredPRs(m.queue)
-		currMonitored := m.monitoredPRs(msg.Queue)
-		notifCmd = notifyCmd(m.ctx, m.detector, m.notifier, m.logger, prevMonitored, currMonitored)
+		notifCmd = notifyCmd(
+			m.ctx, m.detector, m.notifPolicy, m.notifier, m.logger,
+			m.observe(m.queue), m.observe(msg.Queue),
+		)
 	}
 
 	m = m.applyQueue(msg.Queue)
 	return m, notifCmd
 }
 
-func (m Model) monitoredPRs(q model.Queue) []model.PullRequest {
-	groups := config.DefaultNotificationGroups()
-	if m.notifCfg != nil && len(m.notifCfg.Groups) > 0 {
-		groups = m.notifCfg.Groups
-	}
-	hasGroup := func(group string) bool {
-		for _, g := range groups {
-			if strings.EqualFold(g, group) {
-				return true
-			}
+// observe places every PR in q into its notification scopes. Manual focus
+// decisions win; focus rules apply to the rest.
+func (m Model) observe(q model.Queue) []notify.Observed {
+	return config.Classify(q, m.priorityCfg, m.focusCfg, func(k model.PRKey) (bool, bool) {
+		switch {
+		case m.focusedKeys[k]:
+			return true, true
+		case m.manualUnfocused[k]:
+			return false, true
 		}
-		return false
-	}
-
-	seen := make(map[model.PRKey]bool)
-	var monitored []model.PullRequest
-
-	if hasGroup(config.GroupMine) {
-		for _, pr := range q.Authored {
-			if !seen[pr.Key()] {
-				seen[pr.Key()] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	if hasGroup(config.GroupPriority) {
-		priority, _ := m.priorityCfg.Partition(q.Inbox)
-		for _, pr := range priority {
-			if !seen[pr.Key()] {
-				seen[pr.Key()] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	if hasGroup(config.GroupInbox) {
-		for _, pr := range q.Inbox {
-			if !seen[pr.Key()] {
-				seen[pr.Key()] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	if hasGroup(config.GroupFocus) {
-		for _, pr := range append(slices.Clone(q.Authored), q.Inbox...) {
-			k := pr.Key()
-			if seen[k] {
-				continue
-			}
-			if m.isFocused(pr) {
-				seen[k] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	return monitored
+		return false, false
+	}, m.now)
 }
 
 func (m Model) isDaemon() bool {
@@ -1383,48 +1346,30 @@ func isTriggerEvent(t events.Type) bool {
 	return slices.Contains(events.TriggerTypes, t)
 }
 
-func notificationFromEvent(ev events.Event, cfg *config.NotificationConfig) notify.Notification {
+// notificationFromEvent builds the notification for an event the daemon's
+// policy selected. Text, URL, image, and sound are used verbatim.
+func notificationFromEvent(ev events.Event) notify.Notification {
+	p := ev.Notify
 	n := notify.Notification{
-		Trigger:  ev.Type,
-		PRNumber: ev.PR,
-		PRTitle:  ev.Title,
-		Repo:     ev.Repo,
-		URL:      fmt.Sprintf("https://github.com/%s/pull/%d", ev.Repo, ev.PR),
+		Trigger:   ev.Type,
+		PRNumber:  ev.PR,
+		PRTitle:   ev.Title,
+		Repo:      ev.Repo,
+		Title:     p.Title,
+		Message:   p.Message,
+		URL:       p.URL,
+		ImagePath: p.Image,
+		Sound:     p.Sound,
 	}
-	switch ev.Type {
-	case events.TypeCIPassed:
-		n.Title = fmt.Sprintf("CI Passed (#%d)", ev.PR)
-		n.Message = fmt.Sprintf("Checks passed for %q (%s#%d)", ev.Title, ev.Repo, ev.PR)
-	case events.TypeCIFailed:
-		n.Title = fmt.Sprintf("CI Failed (#%d)", ev.PR)
-		n.Message = fmt.Sprintf("CI failed for %q (%s#%d)", ev.Title, ev.Repo, ev.PR)
-	case events.TypeConflict:
-		n.Title = fmt.Sprintf("Merge Conflict (#%d)", ev.PR)
-		n.Message = fmt.Sprintf("Merge conflict in %q (%s#%d)", ev.Title, ev.Repo, ev.PR)
-	case events.TypePRMerged:
-		n.Title = fmt.Sprintf("PR Merged (#%d)", ev.PR)
-		n.Message = fmt.Sprintf("Merged: %q (%s#%d)", ev.Title, ev.Repo, ev.PR)
-	case events.TypeReviewReceived:
-		n.Title = fmt.Sprintf("Review on #%d", ev.PR)
-		var author, state string
-		if p, ok := ev.Payload.(events.ReviewPayload); ok {
-			author = p.Author
-			state = p.State
-			n.SubmittedAt = p.SubmittedAt
+	if ev.Type == events.TypeReviewReceived {
+		var rp events.ReviewPayload
+		if typed, ok := ev.Payload.(events.ReviewPayload); ok {
+			rp = typed
 		} else if raw, err := json.Marshal(ev.Payload); err == nil {
-			var p events.ReviewPayload
-			if json.Unmarshal(raw, &p) == nil {
-				author = p.Author
-				state = p.State
-				n.SubmittedAt = p.SubmittedAt
-			}
+			_ = json.Unmarshal(raw, &rp)
 		}
-		n.Author = author
-		n.ReviewState = state
-		stateText := formatReviewState(state)
-		n.Message = fmt.Sprintf("@%s %s: %q (%s#%d)", author, stateText, ev.Title, ev.Repo, ev.PR)
+		n.Author, n.ReviewState, n.SubmittedAt = rp.Author, rp.State, rp.SubmittedAt
 	}
-	notifyAssets(cfg).Apply(&n)
 	return n
 }
 
@@ -1473,19 +1418,6 @@ func refreshQueueCmd(ctx context.Context, refresher any) tea.Cmd {
 			return QueueLoadedMsg{Err: fmt.Errorf("queue refresh: %w", err)}
 		}
 		return nil
-	}
-}
-
-func formatReviewState(state string) string {
-	switch state {
-	case "APPROVED":
-		return "Approved"
-	case "CHANGES_REQUESTED":
-		return "Changes requested"
-	case "COMMENTED":
-		return "Commented"
-	default:
-		return state
 	}
 }
 

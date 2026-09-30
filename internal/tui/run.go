@@ -72,9 +72,10 @@ func updateCheckCmd(ctx context.Context, client update.RESTClient, version strin
 func notifyCmd(
 	ctx context.Context,
 	detector *notify.Detector,
+	policy notify.Policy,
 	notifier notify.Notifier,
 	logger zerolog.Logger,
-	prev, curr []model.PullRequest,
+	prev, curr []notify.Observed,
 ) tea.Cmd {
 	if detector == nil {
 		return nil
@@ -88,6 +89,7 @@ func notifyCmd(
 			logger.Error().Err(err).Msg("change detection failed")
 			return nil
 		}
+		notes = policy.Select(notes)
 		if len(notes) == 0 {
 			return nil
 		}

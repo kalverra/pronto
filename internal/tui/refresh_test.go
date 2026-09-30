@@ -720,6 +720,11 @@ func TestModel_TriggerEventRendersPopupAndBanner(t *testing.T) {
 		Repo:  "kalverra/pronto",
 		PR:    42,
 		Title: "Add event-driven TUI",
+		Notify: &events.NotificationPayload{
+			Title:   "CI Passed (#42)",
+			Message: "Checks passed for \"Add event-driven TUI\" (kalverra/pronto#42)",
+			URL:     "https://github.com/kalverra/pronto/pull/42",
+		},
 	}
 
 	updated, cmd := m.Update(tui.EventMsg{Event: ev})

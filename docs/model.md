@@ -220,3 +220,16 @@ Queue holds the user's authored and inbox pull requests.
 | `ReviewRequestedEvent` | represents a review requested event. |
 | `PullRequestCommit` | represents a pull request commit. |
 
+### Section
+
+| Value | Description |
+| ----- | ----------- |
+| `attention` | holds incoming PRs ready for your review (Inbox/Priority "Needs your attention"). |
+| `action_required` | holds your PRs needing action: changes requested, failing CI, or a conflict. |
+| `merge_queue` | holds your PRs currently in a merge queue. |
+| `ready_to_merge` | holds your approved PRs that are clean (or behind) and ready to merge. |
+| `in_review` | holds your PRs waiting on review or CI. |
+| `blocked` | holds incoming PRs blocked on checks, conflicts, the author, or a merge queue, and drafts. |
+| `drafts` | holds your draft PRs. |
+| `stale` | holds PRs with no recent activity (both your PRs and incoming PRs). |
+

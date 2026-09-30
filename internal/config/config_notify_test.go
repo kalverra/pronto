@@ -3,12 +3,16 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kalverra/pronto/internal/config"
+	"github.com/kalverra/pronto/internal/events"
+	"github.com/kalverra/pronto/internal/model"
+	"github.com/kalverra/pronto/internal/notify"
 )
 
 func TestLoadFile_NotificationsDefaults(t *testing.T) {
@@ -19,47 +23,142 @@ func TestLoadFile_NotificationsDefaults(t *testing.T) {
 	assert.True(t, cfg.Notifications.Popups, "popups should default to true")
 	assert.False(t, cfg.Notifications.Sound, "sound should default to false")
 	assert.Equal(t, config.NotifyNative, cfg.Notifications.Mode, "mode should default to native")
-	assert.Equal(t, []string{config.GroupFocus, config.GroupMine, config.GroupPriority}, cfg.Notifications.Groups)
-	assert.True(t, cfg.Notifications.HasGroup(config.GroupFocus))
-	assert.True(t, cfg.Notifications.HasGroup(config.GroupMine))
-	assert.False(t, cfg.Notifications.HasGroup(config.GroupInbox))
 	assert.Empty(t, cfg.Notifications.Sounds)
 	assert.Empty(t, cfg.Notifications.Images)
 }
 
-func TestLoad_NotificationGroupsCustom(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("PRONTO_CONFIG_DIR", tmpDir)
+func triggerNames(set notify.TriggerSet) []string {
+	out := make([]string, 0, len(set))
+	for t, ok := range set {
+		if ok {
+			out = append(out, string(t))
+		}
+	}
+	return out
+}
 
-	tomlContent := `
-[notifications]
-groups = ["inbox"]
-`
-	err := os.WriteFile(filepath.Join(tmpDir, "pronto.toml"), []byte(tomlContent), 0o600)
-	require.NoError(t, err)
+func allTriggersExcept(except ...notify.Trigger) []string {
+	var out []string
+	for _, t := range events.TriggerTypes {
+		if !slices.Contains(except, t) {
+			out = append(out, string(t))
+		}
+	}
+	return out
+}
+
+func TestLoad_NotificationPolicyDefaults(t *testing.T) {
+	t.Setenv("PRONTO_CONFIG_DIR", t.TempDir())
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
-	assert.Equal(t, []string{config.GroupInbox}, cfg.Notifications.Groups)
-	assert.False(t, cfg.Notifications.HasGroup(config.GroupFocus))
-	assert.False(t, cfg.Notifications.HasGroup(config.GroupMine))
-	assert.True(t, cfg.Notifications.HasGroup(config.GroupInbox))
+	policy := cfg.Notifications.Policy()
+
+	tab := func(t notify.Tab) notify.Scope { return notify.Scope{Tab: t} }
+	sec := func(t notify.Tab, s model.Section) notify.Scope { return notify.Scope{Tab: t, Section: s} }
+
+	assert.ElementsMatch(t, allTriggersExcept(notify.TriggerEntered), triggerNames(policy[tab(notify.TabFocus)]))
+	assert.ElementsMatch(t, allTriggersExcept(notify.TriggerEntered),
+		triggerNames(policy[sec(notify.TabFocus, model.SectionBlocked)]), "focus sections inherit")
+	assert.ElementsMatch(t, allTriggersExcept(notify.TriggerNewCommits, notify.TriggerEntered),
+		triggerNames(policy[tab(notify.TabMine)]))
+	assert.ElementsMatch(t, allTriggersExcept(notify.TriggerNewCommits, notify.TriggerEntered),
+		triggerNames(policy[sec(notify.TabMine, model.SectionReadyToMerge)]))
+
+	assert.ElementsMatch(t, []string{"entered"}, triggerNames(policy[tab(notify.TabPriority)]))
+	assert.ElementsMatch(t, []string{"entered"}, triggerNames(policy[sec(notify.TabPriority, model.SectionAttention)]))
+	assert.Empty(t, triggerNames(policy[sec(notify.TabPriority, model.SectionBlocked)]))
+	assert.Empty(t, triggerNames(policy[sec(notify.TabPriority, model.SectionStale)]))
+
+	for _, sc := range append([]notify.Scope{tab(notify.TabInbox)}, sec(notify.TabInbox, model.SectionAttention),
+		sec(notify.TabInbox, model.SectionBlocked), sec(notify.TabInbox, model.SectionStale)) {
+		assert.Empty(t, triggerNames(policy[sc]), "inbox scope %v", sc)
+	}
 }
 
-func TestLoad_NotificationGroupsInvalid(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("PRONTO_CONFIG_DIR", tmpDir)
-
-	tomlContent := `
-[notifications]
-groups = ["invalid-group"]
-`
-	err := os.WriteFile(filepath.Join(tmpDir, "pronto.toml"), []byte(tomlContent), 0o600)
+func TestZeroValueNotificationConfig_UsesDefaultPolicy(t *testing.T) {
+	t.Setenv("PRONTO_CONFIG_DIR", t.TempDir())
+	cfg, err := config.Load()
 	require.NoError(t, err)
+	assert.Equal(t, cfg.Notifications.Policy(), config.NotificationConfig{}.Policy())
+}
 
-	_, err = config.Load()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid-group")
+func loadNotifyTOML(t *testing.T, content string) (config.Config, error) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("PRONTO_CONFIG_DIR", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pronto.toml"), []byte(content), 0o600))
+	return config.Load()
+}
+
+func TestLoad_NotificationPolicyTokens(t *testing.T) { //nolint:paralleltest // loadNotifyTOML sets env
+	cfg, err := loadNotifyTOML(t, `
+[notifications.mine]
+triggers = ["ci_failed", "review_received"]
+in_review = ["inherit", "!review_received", "pr_merged"]
+drafts = []
+ready_to_merge = ["all"]
+
+[notifications.inbox]
+triggers = ["pr_merged"]
+`)
+	require.NoError(t, err)
+	p := cfg.Notifications.Policy()
+
+	mine := notify.Scope{Tab: notify.TabMine}
+	assert.ElementsMatch(t, []string{"ci_failed", "review_received"}, triggerNames(p[mine]))
+	assert.ElementsMatch(t, []string{"ci_failed", "pr_merged"},
+		triggerNames(p[notify.Scope{Tab: notify.TabMine, Section: model.SectionInReview}]))
+	assert.Empty(t, triggerNames(p[notify.Scope{Tab: notify.TabMine, Section: model.SectionDrafts}]),
+		"explicit [] is empty, not default")
+	assert.ElementsMatch(t, events.TriggerStrings(),
+		triggerNames(p[notify.Scope{Tab: notify.TabMine, Section: model.SectionReadyToMerge}]))
+	assert.ElementsMatch(t, []string{"ci_failed", "review_received"},
+		triggerNames(p[notify.Scope{Tab: notify.TabMine, Section: model.SectionStale}]), "unset section inherits")
+	assert.ElementsMatch(t, []string{"pr_merged"}, triggerNames(p[notify.Scope{Tab: notify.TabInbox}]))
+}
+
+func TestLoad_NotificationPolicyEmptyTabTriggers(t *testing.T) { //nolint:paralleltest // loadNotifyTOML sets env
+	cfg, err := loadNotifyTOML(t, "[notifications.mine]\ntriggers = []\n")
+	require.NoError(t, err)
+	assert.Empty(t, triggerNames(cfg.Notifications.Policy()[notify.Scope{Tab: notify.TabMine}]))
+}
+
+func TestLoad_NotificationPolicyEnvOverride(t *testing.T) {
+	t.Setenv("PRONTO_NOTIFICATIONS_MINE_TRIGGERS", "all,!new_commits,!entered,!ci_passed")
+	cfg, err := loadNotifyTOML(t, "")
+	require.NoError(t, err)
+	assert.ElementsMatch(t,
+		allTriggersExcept(notify.TriggerNewCommits, notify.TriggerEntered, notify.TriggerCIPassed),
+		triggerNames(cfg.Notifications.Policy()[notify.Scope{Tab: notify.TabMine}]))
+}
+
+func TestLoad_NotificationPolicyInvalid(t *testing.T) { //nolint:paralleltest // loadNotifyTOML sets env
+	cases := map[string]struct{ toml, wantErr string }{
+		"unknown token": {
+			"[notifications.priority]\nblocked = [\"foo\"]\n",
+			`notifications.priority.blocked: unknown trigger token "foo"`,
+		},
+		"inherit at tab level": {
+			"[notifications.focus]\ntriggers = [\"inherit\"]\n",
+			"notifications.focus.triggers",
+		},
+		"negated all": {
+			"[notifications.mine]\ntriggers = [\"!all\"]\n",
+			"notifications.mine.triggers",
+		},
+		"legacy groups": {
+			"[notifications]\ngroups = [\"focus\"]\n",
+			"notifications.groups was removed",
+		},
+	}
+	for name, tc := range cases { //nolint:paralleltest // loadNotifyTOML sets env
+		t.Run(name, func(t *testing.T) {
+			_, err := loadNotifyTOML(t, tc.toml)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
 
 func TestLoadFile_NotificationsFull(t *testing.T) {

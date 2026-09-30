@@ -75,6 +75,12 @@ func TestStartupModel_DaemonSource_DeliversTriggerEventToNotifier(t *testing.T) 
 		Repo:  "kalverra/pronto",
 		PR:    7,
 		Title: "Fix auth middleware",
+		Notify: &events.NotificationPayload{
+			Title:   "CI Passed (#7)",
+			Message: "Checks passed for \"Fix auth middleware\" (kalverra/pronto#7)",
+			URL:     "https://github.com/kalverra/pronto/pull/7",
+			Image:   "/icons/ci-passed.png",
+		},
 	}
 	_, cmd := m.Update(tui.EventMsg{Event: ev})
 
@@ -89,7 +95,27 @@ func TestStartupModel_DaemonSource_DeliversTriggerEventToNotifier(t *testing.T) 
 	assert.Equal(t, "https://github.com/kalverra/pronto/pull/7", notes[0].URL)
 }
 
-func TestStartupModel_DaemonSource_AttachesDefaultImage(t *testing.T) {
+func TestStartupModel_DaemonSource_IgnoresEventsWithoutNotify(t *testing.T) {
+	t.Parallel()
+
+	notifier := &mockNotifier{}
+	m := tui.StartupModel(
+		context.Background(),
+		&fakeDaemonSource{q: model.Queue{}},
+		nil,
+		tui.WithNotificationConfig(config.NotificationConfig{Popups: true}),
+		tui.WithNotifier(notifier),
+	)
+
+	ev := events.Event{Type: events.TypeCIPassed, Repo: "kalverra/pronto", PR: 7, Title: "Quiet"}
+	_, cmd := m.Update(tui.EventMsg{Event: ev})
+
+	_, ok := drainNotification(t, cmd)
+	assert.False(t, ok, "policy did not select this event: no notification")
+	assert.Empty(t, notifier.getNotes())
+}
+
+func TestStartupModel_DaemonSource_UsesNotifyPayloadVerbatim(t *testing.T) {
 	t.Parallel()
 
 	notifier := &mockNotifier{}
@@ -106,17 +132,25 @@ func TestStartupModel_DaemonSource_AttachesDefaultImage(t *testing.T) {
 		Repo:  "kalverra/pronto",
 		PR:    7,
 		Title: "Fix auth middleware",
+		Notify: &events.NotificationPayload{
+			Title:   "CI Passed (#7)",
+			Message: "Checks passed for \"Fix auth middleware\" (kalverra/pronto#7)",
+			URL:     "https://github.com/kalverra/pronto/pull/7",
+			Image:   "/icons/ci-passed.png",
+		},
 	}
 	_, cmd := m.Update(tui.EventMsg{Event: ev})
 
 	notifMsg, ok := drainNotification(t, cmd)
 	require.True(t, ok)
 	require.Len(t, notifMsg.Notifications, 1)
-	assert.Contains(t, notifMsg.Notifications[0].ImagePath, "ci-passed.png")
+	assert.Equal(t, "/icons/ci-passed.png", notifMsg.Notifications[0].ImagePath)
+	assert.Equal(t, "CI Passed (#7)", notifMsg.Notifications[0].Title)
 
 	notes := notifier.getNotes()
 	require.Len(t, notes, 1)
-	assert.Contains(t, notes[0].ImagePath, "ci-passed.png")
+	assert.Equal(t, "/icons/ci-passed.png", notes[0].ImagePath)
+	assert.Equal(t, "https://github.com/kalverra/pronto/pull/7", notes[0].URL)
 }
 
 func TestDefaultNotifierFactory(t *testing.T) {
@@ -148,10 +182,11 @@ func TestModel_NotificationDeliveryFailure_IsLogged(t *testing.T) {
 	)
 
 	ev := events.Event{
-		Type:  events.TypeCIFailed,
-		Repo:  "kalverra/pronto",
-		PR:    9,
-		Title: "Broken",
+		Type:   events.TypeCIFailed,
+		Repo:   "kalverra/pronto",
+		PR:     9,
+		Title:  "Broken",
+		Notify: &events.NotificationPayload{Title: "CI Failed (#9)", Message: "CI failed"},
 	}
 	_, cmd := m.Update(tui.EventMsg{Event: ev})
 

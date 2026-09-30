@@ -25,6 +25,18 @@ const (
 	TriggerReviewReceived Trigger = events.TypeReviewReceived
 	// TriggerPRMerged indicates the pull request has been merged.
 	TriggerPRMerged Trigger = events.TypePRMerged
+	// TriggerPROpened indicates the pull request was created since the last poll.
+	TriggerPROpened Trigger = events.TypePROpened
+	// TriggerPRClosed indicates the pull request was closed without merging.
+	TriggerPRClosed Trigger = events.TypePRClosed
+	// TriggerMergeQueueEntered indicates the pull request entered a merge queue.
+	TriggerMergeQueueEntered Trigger = events.TypeMergeQueueEntered
+	// TriggerMergeQueueLeft indicates the pull request left a merge queue but is still open.
+	TriggerMergeQueueLeft Trigger = events.TypeMergeQueueLeft
+	// TriggerNewCommits indicates someone else pushed new commits to the pull request.
+	TriggerNewCommits Trigger = events.TypeNewCommits
+	// TriggerEntered indicates the pull request entered a tab or tab section.
+	TriggerEntered Trigger = events.TypeEntered
 )
 
 // Triggers lists all triggers that can cause notifications.
@@ -47,6 +59,11 @@ type Notification struct {
 	Sound   string
 	Title   string
 	Message string
+	// Scopes are the tab/section scopes the policy evaluates this
+	// notification against.
+	Scopes []Scope
+	// Entered is the scope gained; set for TriggerEntered only.
+	Entered *Scope
 }
 
 // Notifier defines the interface for delivering notifications to the user.
@@ -70,8 +87,18 @@ func (m MultiNotifier) Notify(ctx context.Context, n Notification) error {
 	return errors.Join(errs...)
 }
 
-// PRStatusChecker checks whether a pull request has been merged.
-type PRStatusChecker func(ctx context.Context, repo string, number int) (merged bool, err error)
+// PRState is the GitHub lifecycle state of a pull request.
+type PRState string
+
+// Pull request lifecycle states as reported by GitHub.
+const (
+	PRStateOpen   PRState = "OPEN"
+	PRStateClosed PRState = "CLOSED"
+	PRStateMerged PRState = "MERGED"
+)
+
+// PRStatusChecker reports the lifecycle state of a pull request.
+type PRStatusChecker func(ctx context.Context, repo string, number int) (PRState, error)
 
 // Assets holds per-trigger image and sound overrides, resolved once from user
 // config and applied to every notification before delivery.
@@ -111,6 +138,15 @@ func WithBotFilter(filter bool) DetectorOption {
 func WithAssets(assets Assets) DetectorOption {
 	return func(d *Detector) {
 		d.assets = assets
+	}
+}
+
+// WithClock overrides the detector's time source (used for pr_opened timing).
+func WithClock(now func() time.Time) DetectorOption {
+	return func(d *Detector) {
+		if now != nil {
+			d.clock = now
+		}
 	}
 }
 

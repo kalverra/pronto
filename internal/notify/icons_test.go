@@ -89,10 +89,10 @@ func TestDetector_ReviewStateDefaultIcons(t *testing.T) {
 				},
 			}
 
-			notes, err := d.DetectMineChanges(
+			notes, err := d.DetectChanges(
 				context.Background(),
-				[]model.PullRequest{prevPR},
-				[]model.PullRequest{currPR},
+				obs(prevPR),
+				obs(currPR),
 			)
 			require.NoError(t, err)
 			require.Len(t, notes, 1)
@@ -119,7 +119,7 @@ func TestDetector_DefaultIcon_Fallback(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prevPR}, []model.PullRequest{currPR})
+	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
 	assert.Equal(
@@ -149,7 +149,7 @@ func TestDetector_UserImageOverridesDefaultIcon(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prevPR}, []model.PullRequest{currPR})
+	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
 	assert.Equal(t, "/custom/fail.png", notes[0].ImagePath)
@@ -175,7 +175,7 @@ func TestDetector_UserImagePartial_KeepsDefaultsForOthers(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectMineChanges(context.Background(), []model.PullRequest{prevPR}, []model.PullRequest{currPR})
+	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
 	assert.Equal(

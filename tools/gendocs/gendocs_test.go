@@ -42,6 +42,10 @@ func TestGenerate_WritesAllDocs(t *testing.T) {
 	assert.Contains(t, string(docs["config.md"]), "pr_view")
 	assert.Contains(t, string(docs["config.md"]), "PRONTO_PR_VIEW")
 	assert.Contains(t, string(docs["config.md"]), "notifications.popups")
+	assert.Contains(t, string(docs["config.md"]), "## Notification policy")
+	assert.Contains(t, string(docs["config.md"]), "notifications.priority.blocked")
+	assert.Contains(t, string(docs["config.md"]), "`merge_queue_entered`")
+	assert.Contains(t, string(docs["config.md"]), "`priority › attention`")
 
 	assert.Contains(t, string(docs["model.md"]), "PullRequest")
 	assert.Contains(t, string(docs["model.md"]), "repo_name_with_owner")

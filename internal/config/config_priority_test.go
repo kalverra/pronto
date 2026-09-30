@@ -26,7 +26,6 @@ func TestLoad_PriorityDefaults(t *testing.T) {
 	assert.Empty(t, cfg.Priority.Authors)
 	assert.Empty(t, cfg.Priority.Repos)
 	assert.Empty(t, cfg.Priority.Rules)
-	assert.Equal(t, []string{config.GroupFocus, config.GroupMine, config.GroupPriority}, cfg.Notifications.Groups)
 }
 
 func TestLoad_PriorityFull(t *testing.T) {

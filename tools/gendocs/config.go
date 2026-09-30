@@ -46,6 +46,12 @@ func renderConfig(pkgDir string) (string, error) {
 	}
 	b.WriteString("\n")
 
+	policy, err := renderNotificationPolicy(pkgDir)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(policy)
+
 	if dir := funcDoc(info, "Dir"); dir != "" {
 		b.WriteString("## Config file resolution\n\n")
 		b.WriteString(dir + "\n\n")
@@ -67,7 +73,24 @@ func renderExampleTOML() string {
 	b.WriteString("mode = \"native\"\n")
 	b.WriteString("popups = true\n")
 	b.WriteString("sound = false\n")
-	b.WriteString("groups = [\"focus\", \"mine\", \"priority\"]\n\n")
+	b.WriteString("\n")
+
+	b.WriteString("# Triggers per tab: \"all\", trigger names, \"!trigger\" to remove; sections take\n")
+	b.WriteString("# the same tokens plus \"inherit\" (the tab's set).\n")
+	b.WriteString("[notifications.focus]\n")
+	b.WriteString("triggers = [\"all\", \"!entered\"]\n\n")
+
+	b.WriteString("[notifications.mine]\n")
+	b.WriteString("triggers = [\"all\", \"!new_commits\", \"!entered\"]\n")
+	b.WriteString("# in_review = [\"inherit\", \"!review_received\"]\n\n")
+
+	b.WriteString("[notifications.priority]\n")
+	b.WriteString("triggers = [\"entered\"]\n")
+	b.WriteString("attention = [\"inherit\"]\n")
+	b.WriteString("blocked = [\"inherit\", \"!entered\"]\n\n")
+
+	b.WriteString("[notifications.inbox]\n")
+	b.WriteString("triggers = []\n\n")
 
 	b.WriteString("[notifications.sounds]\n")
 	b.WriteString("# ci_passed = \"Glass\"\n\n")

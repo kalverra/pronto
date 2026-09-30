@@ -24,6 +24,18 @@ const (
 	TypeReviewReceived Type = "review_received"
 	// TypePRMerged indicates a PR was merged.
 	TypePRMerged Type = "pr_merged"
+	// TypePROpened indicates a PR was created since the previous poll.
+	TypePROpened Type = "pr_opened"
+	// TypePRClosed indicates a PR was closed without merging.
+	TypePRClosed Type = "pr_closed"
+	// TypeMergeQueueEntered indicates a PR entered a merge queue.
+	TypeMergeQueueEntered Type = "merge_queue_entered"
+	// TypeMergeQueueLeft indicates a PR left a merge queue but is still open.
+	TypeMergeQueueLeft Type = "merge_queue_left"
+	// TypeNewCommits indicates new commits were pushed to a PR by someone other than the viewer.
+	TypeNewCommits Type = "new_commits"
+	// TypeEntered indicates a PR gained a tab or tab section it was not in on the previous poll, e.g. a review request landing in Priority or a PR becoming ready for your review (see EnteredPayload).
+	TypeEntered Type = "entered"
 	// TypePRAdded indicates a PR newly appeared in the queue.
 	TypePRAdded Type = "pr_added"
 	// TypePRRemoved indicates a PR left the queue without merging.
@@ -38,15 +50,21 @@ const (
 
 // ValidTypes lists every known event type.
 var ValidTypes = map[Type]bool{
-	TypeCIPassed:       true,
-	TypeCIFailed:       true,
-	TypeConflict:       true,
-	TypeReviewReceived: true,
-	TypePRMerged:       true,
-	TypePRAdded:        true,
-	TypePRRemoved:      true,
-	TypeQueueRefreshed: true,
-	TypeFetchProgress:  true,
+	TypeCIPassed:          true,
+	TypeCIFailed:          true,
+	TypeConflict:          true,
+	TypeReviewReceived:    true,
+	TypePRMerged:          true,
+	TypePROpened:          true,
+	TypePRClosed:          true,
+	TypeMergeQueueEntered: true,
+	TypeMergeQueueLeft:    true,
+	TypeNewCommits:        true,
+	TypeEntered:           true,
+	TypePRAdded:           true,
+	TypePRRemoved:         true,
+	TypeQueueRefreshed:    true,
+	TypeFetchProgress:     true,
 }
 
 // TriggerTypes lists event types that represent PR notification triggers.
@@ -56,6 +74,12 @@ var TriggerTypes = []Type{
 	TypeConflict,
 	TypeReviewReceived,
 	TypePRMerged,
+	TypePROpened,
+	TypePRClosed,
+	TypeMergeQueueEntered,
+	TypeMergeQueueLeft,
+	TypeNewCommits,
+	TypeEntered,
 }
 
 // TriggerStrings returns TriggerTypes as a slice of strings.
@@ -72,6 +96,22 @@ type ReviewPayload struct {
 	Author      string    `json:"author"`
 	State       string    `json:"state"`
 	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+// EnteredPayload carries the scope a PR entered (entered events).
+type EnteredPayload struct {
+	Tab     string `json:"tab"`
+	Section string `json:"section,omitempty"`
+}
+
+// NotificationPayload is the rendered desktop notification for an event the
+// daemon's notification policy selected. Nil means "do not notify".
+type NotificationPayload struct {
+	Title   string `json:"title"`
+	Message string `json:"message"`
+	URL     string `json:"url,omitempty"`
+	Image   string `json:"image,omitempty"`
+	Sound   string `json:"sound,omitempty"`
 }
 
 // QueueRefreshedPayload carries details for queue_refreshed events.
@@ -98,6 +138,9 @@ type Event struct {
 	PR      int       `json:"pr,omitempty"`
 	Title   string    `json:"title,omitempty"`
 	Payload any       `json:"payload,omitempty"`
+	// Notify is set when the notification policy selected this event for
+	// desktop delivery; clients deliver it verbatim.
+	Notify *NotificationPayload `json:"notify,omitempty"`
 }
 
 // Subscription filters the event stream. Empty fields match anything; set

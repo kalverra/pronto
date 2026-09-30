@@ -79,6 +79,7 @@ type Daemon struct {
 	opts     Options
 	bus      *events.Bus
 	detector *notify.Detector
+	policy   notify.Policy
 	kickCh   chan struct{}
 	ready    chan struct{}
 
@@ -124,6 +125,7 @@ func New(opts Options) *Daemon {
 		opts:     opts,
 		bus:      opts.Bus,
 		detector: notify.NewDetector(opts.Checker, detectorOpts...),
+		policy:   opts.NotificationConfig.Policy(),
 		kickCh:   make(chan struct{}, 1),
 		ready:    make(chan struct{}),
 	}
@@ -358,82 +360,24 @@ func (d *Daemon) warmStart(ctx context.Context) {
 	d.mu.Unlock()
 
 	if fresh {
-		d.detector.Seed(d.monitoredPRs(ctx, q))
+		d.detector.Seed(d.observe(ctx, q))
 	}
 }
 
-func (d *Daemon) monitoredPRs(ctx context.Context, q model.Queue) []model.PullRequest {
-	groups := d.opts.NotificationConfig.Groups
-	if len(groups) == 0 {
-		groups = config.DefaultNotificationGroups()
-	}
-	hasGroup := func(group string) bool {
-		for _, g := range groups {
-			if strings.EqualFold(g, group) {
-				return true
+// observe places every PR in q into its notification scopes. Manual focus
+// comes from the cached focus store; rules apply to the rest.
+func (d *Daemon) observe(ctx context.Context, q model.Queue) []notify.Observed {
+	var override config.FocusOverride
+	if d.opts.Store != nil {
+		if keys, _, ok := d.opts.Store.Focus(ctx); ok {
+			cached := make(map[model.PRKey]bool, len(keys))
+			for _, k := range keys {
+				cached[k] = true
 			}
-		}
-		return false
-	}
-
-	seen := make(map[model.PRKey]bool)
-	var monitored []model.PullRequest
-
-	if hasGroup(config.GroupMine) {
-		for _, pr := range q.Authored {
-			if !seen[pr.Key()] {
-				seen[pr.Key()] = true
-				monitored = append(monitored, pr)
-			}
+			override = func(k model.PRKey) (bool, bool) { return true, cached[k] }
 		}
 	}
-
-	if hasGroup(config.GroupPriority) {
-		priority, _ := d.opts.PriorityConfig.Partition(q.Inbox)
-		for _, pr := range priority {
-			if !seen[pr.Key()] {
-				seen[pr.Key()] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	if hasGroup(config.GroupInbox) {
-		for _, pr := range q.Inbox {
-			if !seen[pr.Key()] {
-				seen[pr.Key()] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	if hasGroup(config.GroupFocus) {
-		var cachedFocus map[model.PRKey]bool
-		if d.opts.Store != nil {
-			if keys, _, ok := d.opts.Store.Focus(ctx); ok {
-				cachedFocus = make(map[model.PRKey]bool, len(keys))
-				for _, k := range keys {
-					cachedFocus[k] = true
-				}
-			}
-		}
-		for _, pr := range append(slices.Clone(q.Authored), q.Inbox...) {
-			k := pr.Key()
-			if seen[k] {
-				continue
-			}
-			isFoc := cachedFocus != nil && cachedFocus[k]
-			if !isFoc {
-				isFoc = d.opts.FocusConfig.Matches(pr)
-			}
-			if isFoc {
-				seen[k] = true
-				monitored = append(monitored, pr)
-			}
-		}
-	}
-
-	return monitored
+	return config.Classify(q, d.opts.PriorityConfig, d.opts.FocusConfig, override, time.Now())
 }
 
 func (d *Daemon) refresh(ctx context.Context) {
@@ -486,19 +430,24 @@ func (d *Daemon) refresh(ctx context.Context) {
 	if !hadBaseline {
 		// First observed state is the baseline: seed the detector and
 		// emit no per-PR events.
-		d.detector.Seed(d.monitoredPRs(ctx, q))
+		d.detector.Seed(d.observe(ctx, q))
 	} else {
-		prevMonitored := d.monitoredPRs(ctx, prevQueue)
-		currMonitored := d.monitoredPRs(ctx, q)
+		prevObs := d.observe(ctx, prevQueue)
+		currObs := d.observe(ctx, q)
 		merged := make(map[model.PRKey]bool)
-		if notes, derr := d.detector.DetectChanges(ctx, prevMonitored, currMonitored); derr != nil {
+		if notes, derr := d.detector.DetectChanges(ctx, prevObs, currObs); derr != nil {
 			d.opts.Logger.Error().Err(derr).Msg("change detection failed")
 		} else {
+			// Every transition is emitted; only policy-selected ones carry Notify.
+			wanted := make(map[noteKey]bool)
+			for _, n := range d.policy.Select(notes) {
+				wanted[keyOf(n)] = true
+			}
 			for _, n := range notes {
 				if n.Trigger == notify.TriggerPRMerged {
 					merged[model.PRKey{Repo: n.Repo, Number: n.PRNumber}] = true
 				}
-				d.bus.Emit(notificationEvent(n))
+				d.bus.Emit(notificationEvent(n, wanted[keyOf(n)]))
 			}
 		}
 		for _, ev := range DiffEvents(prevQueue, q, merged) {
@@ -522,19 +471,50 @@ func (d *Daemon) refresh(ctx context.Context) {
 	})
 }
 
-// notificationEvent converts a detector notification into an event.
-func notificationEvent(n notify.Notification) events.Event {
+// noteKey identifies one notification within a poll.
+type noteKey struct {
+	trigger notify.Trigger
+	repo    string
+	pr      int
+	entered notify.Scope
+}
+
+func keyOf(n notify.Notification) noteKey {
+	k := noteKey{trigger: n.Trigger, repo: n.Repo, pr: n.PRNumber}
+	if n.Entered != nil {
+		k.entered = *n.Entered
+	}
+	return k
+}
+
+// notificationEvent converts a detector notification into an event. Notify is
+// populated only when the notification policy selected it for delivery.
+func notificationEvent(n notify.Notification, deliver bool) events.Event {
 	ev := events.Event{
 		Type:  events.Type(string(n.Trigger)),
 		Repo:  n.Repo,
 		PR:    n.PRNumber,
 		Title: n.PRTitle,
 	}
-	if n.Trigger == notify.TriggerReviewReceived {
+	switch n.Trigger {
+	case notify.TriggerReviewReceived:
 		ev.Payload = events.ReviewPayload{
 			Author:      n.Author,
 			State:       n.ReviewState,
 			SubmittedAt: n.SubmittedAt,
+		}
+	case notify.TriggerEntered:
+		if n.Entered != nil {
+			ev.Payload = events.EnteredPayload{Tab: string(n.Entered.Tab), Section: string(n.Entered.Section)}
+		}
+	}
+	if deliver {
+		ev.Notify = &events.NotificationPayload{
+			Title:   n.Title,
+			Message: n.Message,
+			URL:     n.URL,
+			Image:   n.ImagePath,
+			Sound:   n.Sound,
 		}
 	}
 	return ev

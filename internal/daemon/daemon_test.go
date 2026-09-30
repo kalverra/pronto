@@ -20,6 +20,7 @@ import (
 	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
+	"github.com/kalverra/pronto/internal/notify"
 	"github.com/kalverra/pronto/internal/server"
 	"github.com/kalverra/pronto/internal/source"
 )
@@ -363,7 +364,7 @@ func TestDaemon_MergedPRCheckerEmitsMergedWithoutRemoved(t *testing.T) {
 	t.Parallel()
 
 	a := pr(42, "Feature A", "kalverra/pronto")
-	checker := func(context.Context, string, int) (bool, error) { return true, nil }
+	checker := func(context.Context, string, int) (notify.PRState, error) { return notify.PRStateMerged, nil }
 
 	src := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{a}}},
@@ -386,7 +387,7 @@ func TestDaemon_UnmergedVanishedPREmitsRemoved(t *testing.T) {
 	t.Parallel()
 
 	a := pr(42, "Feature A", "kalverra/pronto")
-	checker := func(context.Context, string, int) (bool, error) { return false, nil }
+	checker := func(context.Context, string, int) (notify.PRState, error) { return notify.PRStateOpen, nil }
 
 	src := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{a}}},
@@ -953,10 +954,11 @@ func TestDaemon_Run_ReturnsEarlyOnOccupiedSocket(t *testing.T) {
 	assert.Less(t, duration, 1*time.Second, "Run must return early without waiting for refresh")
 }
 
-func TestDaemon_NotificationGroups_InboxAndFocus(t *testing.T) {
+func TestDaemon_Policy_InboxEventsEmittedWithoutNotify(t *testing.T) {
 	t.Parallel()
 
-	// 1. When groups includes "inbox", changes on inbox PR emit notification events.
+	// Default policy notifies nothing for plain inbox PRs, but the event stream
+	// still carries every transition.
 	inboxRunning := pr(101, "Colleague Feature", "kalverra/pronto")
 	inboxRunning.Author = "colleague"
 	inboxRunning.Checks = runningChecks()
@@ -968,51 +970,69 @@ func TestDaemon_NotificationGroups_InboxAndFocus(t *testing.T) {
 		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{inboxFailed}}},
 	}}
 
-	bus := runDaemon(t, daemon.Options{
-		Source: src,
-		NotificationConfig: config.NotificationConfig{
-			Groups: []string{config.GroupInbox},
-		},
-	})
+	bus := runDaemon(t, daemon.Options{Source: src})
 	c := collect(t, bus)
 
 	ev := c.waitFor(t, events.TypeCIFailed)
 	assert.Equal(t, 101, ev.PR)
 	assert.Equal(t, "Colleague Feature", ev.Title)
+	assert.Nil(t, ev.Notify, "inbox tab notifies nothing by default")
 }
 
-func TestDaemon_NotificationGroups_Priority(t *testing.T) {
+func TestDaemon_Policy_MineCIFailedCarriesNotify(t *testing.T) {
+	t.Parallel()
+
+	running := pr(7, "My Feature", "kalverra/pronto")
+	running.Author = "kalverra"
+	running.URL = "https://github.com/kalverra/pronto/pull/7"
+	running.Checks = runningChecks()
+	failed := running
+	failed.Checks = failedChecks()
+
+	src := &scriptedSource{results: []fetchResult{
+		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{running}}},
+		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{failed}}},
+	}}
+
+	bus := runDaemon(t, daemon.Options{Source: src})
+	c := collect(t, bus)
+
+	ev := c.waitFor(t, events.TypeCIFailed)
+	require.NotNil(t, ev.Notify)
+	assert.Equal(t, "CI Failed (#7)", ev.Notify.Title)
+	assert.Contains(t, ev.Notify.Message, "My Feature")
+}
+
+func TestDaemon_Policy_PriorityEnteringAttention(t *testing.T) {
 	t.Parallel()
 
 	direct := pr(101, "Direct Ask", "kalverra/pronto")
 	direct.Author = "colleague"
 	direct.DirectRequest = true
-	direct.Checks = runningChecks()
-	team := pr(102, "Team Ask", "kalverra/pronto")
-	team.Author = "colleague"
-	team.Checks = runningChecks()
-
-	directFailed, teamFailed := direct, team
-	directFailed.Checks = failedChecks()
-	teamFailed.Checks = failedChecks()
+	direct.Checks = runningChecks() // running checks => blocked section
+	ready := direct
+	ready.Checks = passingChecks() // => attention section
 
 	src := &scriptedSource{results: []fetchResult{
-		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{direct, team}}},
-		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{directFailed, teamFailed}}},
+		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{direct}}},
+		{queue: model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{ready}}},
 	}}
 
 	bus := runDaemon(t, daemon.Options{
-		Source:             src,
-		PriorityConfig:     config.DefaultPriorityConfig(),
-		NotificationConfig: config.NotificationConfig{Groups: []string{config.GroupPriority}},
+		Source:         src,
+		PriorityConfig: config.DefaultPriorityConfig(),
 	})
 	c := collect(t, bus)
 
-	ev := c.waitFor(t, events.TypeCIFailed)
-	assert.Equal(t, 101, ev.PR, "only the direct-request PR is in the priority group")
-	for _, rest := range c.drain(t, 200*time.Millisecond) {
-		if rest.Type == events.TypeCIFailed {
-			assert.NotEqual(t, 102, rest.PR, "team-only PR must not notify under the priority group")
+	ev := c.waitFor(t, events.TypeEntered)
+	assert.Equal(t, 101, ev.PR)
+	require.NotNil(t, ev.Notify, "entering priority/attention is a default notification")
+	assert.Equal(t, "Ready for Review (#101)", ev.Notify.Title)
+	assert.Equal(t, events.EnteredPayload{Tab: "priority", Section: "attention"}, ev.Payload)
+
+	for _, rest := range append([]events.Event{ev}, c.drain(t, 200*time.Millisecond)...) {
+		if rest.Type == events.TypeCIPassed {
+			assert.Nil(t, rest.Notify, "priority tab only notifies entered by default")
 		}
 	}
 }

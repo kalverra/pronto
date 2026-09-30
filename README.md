@@ -45,7 +45,7 @@ pronto agent
 
 ## Config
 
-See [configuration](docs/configuration.md) for all config values and details. Below are some commonly-tuned settings.
+See [configuration](docs/config.md) for all config values and details. Below are some commonly-tuned settings.
 
 ### Enable Notifications
 
@@ -64,6 +64,9 @@ sound  = true
 
 [notifications.sounds]
 ci_passed = "Glass"   # any macOS system sound name, or "default"
+
+[notifications.images]
+ci_failed = "~/icons/red.png"   # override the default per-trigger icon
 ```
 
 Check the setup and send a test notification:
@@ -72,6 +75,62 @@ Check the setup and send a test notification:
 pronto notify        # show config, backends, native helper state, and per-trigger assets
 pronto notify --test # deliver a test notification through the configured channels
 ```
+
+### What Notifies
+
+You choose which events notify **per tab and per section**. Triggers:
+
+| Trigger | Fires when |
+| ------- | ---------- |
+| `ci_passed` / `ci_failed` | checks flip to passing / failing |
+| `conflict` | a PR newly has merge conflicts |
+| `review_received` | someone reviews a PR (not you, not bots) |
+| `pr_merged` / `pr_closed` | a PR is merged / closed without merging |
+| `pr_opened` | a PR was created since the last poll |
+| `merge_queue_entered` / `merge_queue_left` | a PR enters / leaves the merge queue |
+| `new_commits` | someone other than you pushes to a PR |
+| `entered` | a PR gains a tab or section, e.g. lands in Priority or becomes ready for your review |
+
+Each tab (`focus`, `mine`, `priority`, `inbox`) has a `triggers` list, and each of its sections
+(`attention`, `action_required`, `merge_queue`, `ready_to_merge`, `in_review`, `blocked`, `drafts`,
+`stale`) can override it. Lists are tokens evaluated left to right: a trigger name adds it,
+`!name` removes it, `all` adds everything, `inherit` (sections only) starts from the tab's set, and
+`[]` means nothing. A PR notifies if *any* tab or section it sits in subscribes to the trigger.
+
+Defaults:
+
+| Tab | Notifies |
+| --- | -------- |
+| Focus | every event except `entered` |
+| Mine | every event except `new_commits` and `entered` |
+| Priority | `entered`: a PR newly assigned or directly requested of you, or one becoming ready for your review |
+| Inbox | nothing |
+
+```toml
+# Mine: only CI and merge events, plus review activity while a PR is in review.
+[notifications.mine]
+triggers  = ["ci_failed", "ci_passed", "pr_merged"]
+in_review = ["inherit", "review_received"]
+
+# Priority: also tell me when a PR I'm requested on gets new commits or CI results,
+# but stay quiet about stale ones.
+[notifications.priority]
+triggers = ["entered", "new_commits", "ci_passed"]
+stale    = []
+
+# Inbox: ping when a PR becomes ready for review.
+[notifications.inbox]
+attention = ["entered"]
+
+# Focus: mute completely.
+[notifications.focus]
+triggers = []
+```
+
+Tab lists can also come from the environment, e.g. `PRONTO_NOTIFICATIONS_MINE_TRIGGERS="all,!new_commits"`.
+Every event is still emitted on the event stream (`pronto watch`, `pronto wait`) regardless of policy;
+only policy-selected ones show a desktop banner. The old `notifications.groups` key was removed.
+See [configuration](docs/config.md#notification-policy) for the full key, default, and section reference.
 
 ### Category Rules
 
