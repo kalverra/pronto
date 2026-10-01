@@ -660,6 +660,8 @@ func (s *GraphQLSource) planHydration(
 				cached.UpdatedAt = d.ident.UpdatedAt
 				cached.Author = d.ident.Author.Login
 				cached.URL = d.ident.URL
+				cached.BaseRefName = d.ident.BaseRefName
+				cached.DefaultBranch = d.ident.Repository.DefaultBranchRef.Name
 				cached.Assigned = d.assigned
 				cached.DirectRequest = d.directRequest
 				cached.Stack = convertStack(d.ident.Stack, d.ident.StackEntry)

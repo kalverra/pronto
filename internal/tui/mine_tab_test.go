@@ -124,3 +124,82 @@ func TestModel_MineStackedPRInMergeQueueNotDegraded(t *testing.T) {
 	assert.Contains(t, view, "▌ ACTION REQUIRED")
 	assert.Contains(t, view, "QUEUED")
 }
+
+func TestModel_MinePRInMergeQueueWithPreQueueCheckFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	enqueuedAt := now.Add(-30 * time.Minute)
+
+	pr := model.PullRequest{
+		Number:            23849,
+		Title:             "fix(dockerfile): better version pins",
+		Author:            "kalverra",
+		RepoName:          "chainlink",
+		RepoNameWithOwner: "smartcontractkit/chainlink",
+		Mergeable:         "MERGEABLE",
+		MergeStateStatus:  "UNSTABLE",
+		IsInMergeQueue:    true,
+		UpdatedAt:         now.Add(-10 * time.Minute),
+		Checks: model.ChecksSummary{
+			Total:  235,
+			Done:   235,
+			Failed: 1,
+		},
+		MergeQueue: &model.MergeQueueInfo{
+			Position:   1,
+			State:      "AWAITING_CHECKS",
+			EnqueuedAt: &enqueuedAt,
+		},
+		MergeQueueChecks: model.ChecksSummary{
+			State:   "PENDING",
+			Total:   15,
+			Running: 10,
+			Done:    5,
+			Failed:  0,
+		},
+		Stack: &model.PRStack{
+			ID:       "stack-23852",
+			Number:   23852,
+			Size:     2,
+			Position: 1,
+		},
+	}
+
+	q := model.Queue{
+		Authored: []model.PullRequest{pr},
+	}
+
+	m := tui.New(q, tui.WithViewer("kalverra"), tui.WithNow(now), tui.WithDimensions(140, 30))
+
+	// 1. In Mine Tab:
+	mMine, _ := sendKey(m, tea.KeyTab)
+	mineView := mMine.View()
+	assert.Contains(t, mineView, "▌ MERGE QUEUE")
+	assert.NotContains(t, mineView, "▌ ACTION REQUIRED")
+	assert.Contains(t, mineView, "QUEUED")
+	assert.NotContains(t, mineView, "FAILING CI")
+	assert.Contains(t, mineView, "5/15")
+
+	// 2. In Focus Tab (when focused):
+	mFocused, _ := sendRune(mMine, 'f')
+	mFocus, _ := sendRune(mFocused, '1')
+	focusView := mFocus.View()
+	assert.Contains(t, focusView, "▌ MERGE QUEUE")
+	assert.NotContains(t, focusView, "▌ ACTION REQUIRED")
+
+	// 3. Details Modal:
+	mDetails, _ := sendKey(mMine, tea.KeyEnter)
+	detailsView := mDetails.View()
+	assert.Contains(t, detailsView, "QUEUED")
+	assert.Contains(t, detailsView, "IN MERGE QUEUE (#1)")
+	assert.Contains(t, detailsView, "CI Checks (Merge Queue)")
+	assert.NotContains(t, detailsView, "FAILING CI")
+
+	// 4. Explain Modal:
+	mExplain, _ := sendRune(mMine, '?')
+	explainView := mExplain.View()
+	assert.Contains(t, explainView, "In merge queue")
+	assert.Contains(t, explainView, "PR is in merge queue")
+	assert.NotContains(t, explainView, "Failing CI checks")
+}

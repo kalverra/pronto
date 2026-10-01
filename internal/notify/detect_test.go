@@ -226,7 +226,7 @@ func TestDetector_ReviewReceived_Approved(t *testing.T) {
 	assert.Equal(t, 1, n.PRNumber)
 	assert.Equal(t, "alice", n.Author)
 	assert.Equal(t, "APPROVED", n.ReviewState)
-	assert.Contains(t, n.Title, "Review")
+	assert.Equal(t, "🟢 Approved (#1)", n.Title)
 	assert.Contains(t, n.Message, "alice")
 	assert.Contains(t, n.Message, "Approved")
 }
@@ -595,7 +595,7 @@ func TestDetector_Titles_OmitPRontoPrefix(t *testing.T) {
 	notes, err := d.DetectChanges(context.Background(), obs(prev), obs(curr))
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
-	assert.Equal(t, "CI Passed (#1)", notes[0].Title)
+	assert.Equal(t, "✅ CI Passed (#1)", notes[0].Title)
 	assert.NotContains(t, notes[0].Title, "PRonto")
 
 	// CI Failed
@@ -609,7 +609,7 @@ func TestDetector_Titles_OmitPRontoPrefix(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, notesFailed, 1)
-	assert.Equal(t, "CI Failed (#1)", notesFailed[0].Title)
+	assert.Equal(t, "❌ CI Failed (#1)", notesFailed[0].Title)
 	assert.NotContains(t, notesFailed[0].Title, "PRonto")
 }
 
@@ -629,7 +629,7 @@ func TestDetector_Conflict_Notifies(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, notes, 1, "conflict transition must generate notification")
 	assert.Equal(t, notify.TriggerConflict, notes[0].Trigger)
-	assert.Equal(t, "Merge Conflict (#1)", notes[0].Title)
+	assert.Equal(t, "⚠️ Merge Conflict (#1)", notes[0].Title)
 	assert.NotContains(t, notes[0].Title, "PRonto")
 
 	// Seed suppresses existing conflict

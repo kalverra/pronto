@@ -394,3 +394,32 @@ func TestModel_Stack_InteractiveToggle(t *testing.T) {
 	assert.NotContains(t, colView, "[1..2]")
 	assert.NotContains(t, colView, "Alpha child")
 }
+
+func TestStack_QueuedStatus(t *testing.T) {
+	t.Parallel()
+
+	pr := model.PullRequest{
+		Number:         23849,
+		IsInMergeQueue: true,
+		Checks: model.ChecksSummary{
+			Total:  235,
+			Failed: 1,
+		},
+		MergeQueueChecks: model.ChecksSummary{
+			Total:   15,
+			Running: 10,
+			Done:    5,
+		},
+	}
+
+	assert.Equal(t, tui.StatusQueued, tui.DeterminePRStatus(pr))
+	badge := tui.RenderChildStatusBadge(pr)
+	assert.Contains(t, badge, "◆ Queued")
+	glyph := tui.RenderStatusGlyph(tui.StatusQueued)
+	assert.Contains(t, glyph, "◆")
+
+	ciStatus := tui.DeterminePRCIStatus(pr)
+	assert.Equal(t, tui.CIStatusRunning, ciStatus)
+	ciGlyph := tui.RenderCIGlyph(ciStatus)
+	assert.Contains(t, ciGlyph, "◌")
+}

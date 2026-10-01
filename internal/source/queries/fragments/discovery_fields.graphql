@@ -13,7 +13,12 @@ fragment DiscoveryFields on PullRequest {
     __typename
     login
   }
-  repository { nameWithOwner }
+  repository {
+    nameWithOwner
+    defaultBranchRef {
+      name
+    }
+  }
   stack {
     id
     number

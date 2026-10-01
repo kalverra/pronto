@@ -168,8 +168,12 @@ func resolveTokens(tokens []string, inherit notify.TriggerSet) (notify.TriggerSe
 			return nil, fmt.Errorf("%q is not supported; use [] for an empty set", tok)
 		case strings.HasPrefix(tok, tokenNot) && slices.Contains(events.TriggerTypes, events.Type(tok[1:])):
 			delete(set, events.Type(tok[1:]))
+		case tok == tokenNot+"merge_queue_kicked_out":
+			delete(set, events.TypeMergeQueueLeft)
 		case slices.Contains(events.TriggerTypes, events.Type(tok)):
 			set[events.Type(tok)] = true
+		case tok == "merge_queue_kicked_out":
+			set[events.TypeMergeQueueLeft] = true
 		default:
 			return nil, fmt.Errorf(
 				"unknown trigger token %q; valid: %s, %s, %s<trigger>, <trigger> (%s)",

@@ -3,16 +3,21 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 
 	"github.com/cli/go-gh/v2"
-
-	"github.com/kalverra/pronto/internal/model"
 )
 
 // DefaultPRStatusChecker reports the lifecycle state of a PR, via the gh CLI.
 func DefaultPRStatusChecker(ctx context.Context, repo string, number int) (PRState, error) {
-	target := model.PRKey{Repo: repo, Number: number}.String()
-	stdout, _, err := gh.ExecContext(ctx, "pr", "view", target, "--json", "state")
+	numStr := strconv.Itoa(number)
+	var args []string
+	if repo != "" {
+		args = []string{"pr", "view", numStr, "-R", repo, "--json", "state"}
+	} else {
+		args = []string{"pr", "view", numStr, "--json", "state"}
+	}
+	stdout, _, err := gh.ExecContext(ctx, args...)
 	if err != nil {
 		return "", err
 	}

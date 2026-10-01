@@ -85,6 +85,29 @@ func TestExplainMine(t *testing.T) {
 		}
 		assert.True(t, hasQueuedStatus, "must include Status:QUEUED term")
 	})
+
+	t.Run("queued pr with failing checks retains Status:QUEUED", func(t *testing.T) {
+		t.Parallel()
+		pr := model.PullRequest{
+			Number:         104,
+			IsInMergeQueue: true,
+			Checks: model.ChecksSummary{
+				Total:  235,
+				Failed: 1,
+			},
+			UpdatedAt: now.Add(-1 * time.Hour),
+		}
+
+		b := score.ExplainMine(pr, now, weights)
+		hasQueuedStatus := false
+		for _, term := range b.Terms {
+			if term.Name == "Status:QUEUED" {
+				hasQueuedStatus = true
+				assert.InDelta(t, weights.BaseQueued, term.Contribution, 0.001)
+			}
+		}
+		assert.True(t, hasQueuedStatus, "must include Status:QUEUED term")
+	})
 }
 
 func TestRankMine_Order(t *testing.T) {

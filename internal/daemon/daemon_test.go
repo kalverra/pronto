@@ -999,7 +999,7 @@ func TestDaemon_Policy_MineCIFailedCarriesNotify(t *testing.T) {
 
 	ev := c.waitFor(t, events.TypeCIFailed)
 	require.NotNil(t, ev.Notify)
-	assert.Equal(t, "CI Failed (#7)", ev.Notify.Title)
+	assert.Equal(t, "❌ CI Failed (#7)", ev.Notify.Title)
 	assert.Contains(t, ev.Notify.Message, "My Feature")
 }
 
@@ -1027,7 +1027,7 @@ func TestDaemon_Policy_PriorityEnteringAttention(t *testing.T) {
 	ev := c.waitFor(t, events.TypeEntered)
 	assert.Equal(t, 101, ev.PR)
 	require.NotNil(t, ev.Notify, "entering priority/attention is a default notification")
-	assert.Equal(t, "Ready for Review (#101)", ev.Notify.Title)
+	assert.Equal(t, "👀 Ready for Review (#101)", ev.Notify.Title)
 	assert.Equal(t, events.EnteredPayload{Tab: "priority", Section: "attention"}, ev.Payload)
 
 	for _, rest := range append([]events.Event{ev}, c.drain(t, 200*time.Millisecond)...) {

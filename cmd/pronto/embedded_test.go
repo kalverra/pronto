@@ -103,9 +103,10 @@ func TestResolveTUISource_NoDaemon_StartsEmbeddedDaemon(t *testing.T) {
 	require.NoError(t, dialErr)
 	defer c.Close()
 
-	snap, snapErr := c.Snapshot(context.Background())
-	require.NoError(t, snapErr)
-	assert.Equal(t, "kalverra", snap.Queue.Viewer)
+	assert.Eventually(t, func() bool {
+		snap, snapErr := c.Snapshot(context.Background())
+		return snapErr == nil && snap.Queue.Viewer == "kalverra"
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestResolveTUISource_BindRace_FallsBackToClientMode(t *testing.T) {

@@ -64,11 +64,11 @@ func (pr PullRequest) ActionStatus() ActionStatus {
 	if pr.MergeStatus.HasConflict() || pr.Mergeable == "CONFLICTING" || pr.MergeStateStatus == "DIRTY" {
 		return ActionStatusConflict
 	}
-	if pr.Checks.IsFailing() {
-		return ActionStatusFailingCI
-	}
 	if pr.InMergeQueue() {
 		return ActionStatusQueued
+	}
+	if pr.Checks.IsFailing() {
+		return ActionStatusFailingCI
 	}
 	if pr.ReviewDecision == "CHANGES_REQUESTED" {
 		return ActionStatusChangesReq

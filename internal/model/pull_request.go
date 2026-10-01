@@ -53,6 +53,7 @@ type PullRequest struct {
 	HeadRefName       string    `json:"head_ref_name,omitempty"`
 	HeadRefOID        string    `json:"head_ref_oid"`
 	BaseRefName       string    `json:"base_ref_name,omitempty"`
+	DefaultBranch     string    `json:"default_branch,omitempty"`
 	Additions         int       `json:"additions"`
 	Deletions         int       `json:"deletions"`
 	ChangedFiles      int       `json:"changed_files"`
@@ -102,6 +103,17 @@ type PRStack struct {
 // IsPartOfStack reports whether the PR belongs to a pull request stack.
 func (pr PullRequest) IsPartOfStack() bool {
 	return pr.Stack != nil && pr.Stack.Size > 1
+}
+
+// IsDefaultBranch reports whether the pull request targets the repository's default branch.
+func (pr PullRequest) IsDefaultBranch() bool {
+	if pr.DefaultBranch != "" && pr.BaseRefName != "" {
+		return pr.BaseRefName == pr.DefaultBranch
+	}
+	if pr.BaseRefName != "" {
+		return pr.BaseRefName == "main" || pr.BaseRefName == "master" || pr.BaseRefName == "develop"
+	}
+	return true
 }
 
 // InMergeQueue reports whether the pull request has entered a merge queue.

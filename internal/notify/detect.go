@@ -205,7 +205,7 @@ func (d *Detector) detectPR(prevObs, currObs Observed, exists bool, lastDetect t
 	if !exists && !currPR.CreatedAt.IsZero() && currPR.CreatedAt.After(lastDetect) &&
 		d.tryMarkSeen(openedKey(currPR.RepoNameWithOwner, currPR.Number)) {
 		results = append(results, d.note(currPR, TriggerPROpened, currPR.URL, currPR.Author,
-			fmt.Sprintf("PR Opened (#%d)", currPR.Number),
+			fmt.Sprintf("✨ PR Opened (#%d)", currPR.Number),
 			fmt.Sprintf("@%s opened %q (%s)", currPR.Author, currPR.Title, currPR.Key()),
 			currObs.Scopes))
 	}
@@ -217,7 +217,7 @@ func (d *Detector) detectPR(prevObs, currObs Observed, exists bool, lastDetect t
 	if !prevPR.Checks.IsPassing() && currPR.Checks.IsPassing() &&
 		d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "passed") {
 		results = append(results, d.note(currPR, TriggerCIPassed, checksURL(currPR.URL), currPR.Author,
-			fmt.Sprintf("CI Passed (#%d)", currPR.Number),
+			fmt.Sprintf("✅ CI Passed (#%d)", currPR.Number),
 			fmt.Sprintf("Checks passed for %q (%s)", currPR.Title, currPR.Key()),
 			scopes))
 	}
@@ -226,7 +226,7 @@ func (d *Detector) detectPR(prevObs, currObs Observed, exists bool, lastDetect t
 	if !prevPR.Checks.IsFailing() && currPR.Checks.IsFailing() &&
 		d.markCISeen(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID, "failed") {
 		results = append(results, d.note(currPR, TriggerCIFailed, failedCheckURL(currPR), currPR.Author,
-			fmt.Sprintf("CI Failed (#%d)", currPR.Number),
+			fmt.Sprintf("❌ CI Failed (#%d)", currPR.Number),
 			fmt.Sprintf("CI failed for %q (%s)", currPR.Title, currPR.Key()),
 			scopes))
 	}
@@ -235,7 +235,7 @@ func (d *Detector) detectPR(prevObs, currObs Observed, exists bool, lastDetect t
 	if !prevPR.MergeStatus.HasConflict() && currPR.MergeStatus.HasConflict() {
 		if d.tryMarkSeen(conflictKey(currPR.RepoNameWithOwner, currPR.Number)) {
 			results = append(results, d.note(currPR, TriggerConflict, currPR.URL, currPR.Author,
-				fmt.Sprintf("Merge Conflict (#%d)", currPR.Number),
+				fmt.Sprintf("⚠️ Merge Conflict (#%d)", currPR.Number),
 				fmt.Sprintf("Merge conflict in %q (%s)", currPR.Title, currPR.Key()),
 				scopes))
 		}
@@ -250,7 +250,7 @@ func (d *Detector) detectPR(prevObs, currObs Observed, exists bool, lastDetect t
 		if prevPR.HeadRefOID != "" && currPR.HeadRefOID != prevPR.HeadRefOID && !d.isViewer(currPR.Author) &&
 			d.tryMarkSeen(commitKey(currPR.RepoNameWithOwner, currPR.Number, currPR.HeadRefOID)) {
 			results = append(results, d.note(currPR, TriggerNewCommits, commitsURL(currPR.URL), currPR.Author,
-				fmt.Sprintf("New Commits (#%d)", currPR.Number),
+				fmt.Sprintf("🔄 New Commits (#%d)", currPR.Number),
 				fmt.Sprintf("New commits on %q (%s)", currPR.Title, currPR.Key()),
 				scopes))
 		}
@@ -312,7 +312,7 @@ func (d *Detector) detectMergeQueue(prevPR, currPR model.PullRequest, scopes []S
 	case !prevPR.InMergeQueue() && currPR.InMergeQueue():
 		if d.tryMarkSeen(mergeQueueKey(repo, num)) {
 			return []Notification{d.note(currPR, TriggerMergeQueueEntered, currPR.URL, currPR.Author,
-				fmt.Sprintf("Merge Queue (#%d)", num),
+				fmt.Sprintf("⏳ Merge Queue (#%d)", num),
 				fmt.Sprintf("Entered merge queue: %q (%s)", currPR.Title, currPR.Key()),
 				scopes)}
 		}
@@ -320,9 +320,22 @@ func (d *Detector) detectMergeQueue(prevPR, currPR model.PullRequest, scopes []S
 		d.mu.Lock()
 		delete(d.seenKeys, mergeQueueKey(repo, num))
 		d.mu.Unlock()
-		return []Notification{d.note(currPR, TriggerMergeQueueLeft, currPR.URL, currPR.Author,
-			fmt.Sprintf("Left Merge Queue (#%d)", num),
-			fmt.Sprintf("Left merge queue: %q (%s)", currPR.Title, currPR.Key()),
+
+		url := currPR.URL
+		detail := ""
+		switch {
+		case currPR.Checks.IsFailing():
+			detail = " (checks failed)"
+			if fURL := failedCheckURL(currPR); fURL != "" {
+				url = fURL
+			}
+		case currPR.MergeStatus.HasConflict():
+			detail = " (conflicts)"
+		}
+
+		return []Notification{d.note(currPR, TriggerMergeQueueLeft, url, currPR.Author,
+			fmt.Sprintf("🚨 Kicked out of Merge Queue (#%d)", num),
+			fmt.Sprintf("Kicked out of merge queue%s: %q (%s)", detail, currPR.Title, currPR.Key()),
 			scopes)}
 	}
 	return nil
@@ -374,6 +387,16 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 		}
 
 		stateText := formatReviewState(rev.State)
+		title := fmt.Sprintf("💬 Review on #%d", currPR.Number)
+		switch rev.State {
+		case "APPROVED":
+			title = fmt.Sprintf("🟢 Approved (#%d)", currPR.Number)
+		case "CHANGES_REQUESTED":
+			title = fmt.Sprintf("🔴 Changes Requested (#%d)", currPR.Number)
+		case "COMMENTED":
+			title = fmt.Sprintf("💬 Commented (#%d)", currPR.Number)
+		}
+
 		n := Notification{
 			Trigger:     TriggerReviewReceived,
 			PRNumber:    currPR.Number,
@@ -384,7 +407,7 @@ func (d *Detector) detectPRReviews(currPR, prevPR model.PullRequest, exists bool
 			ReviewState: rev.State,
 			CommitOID:   rev.CommitOID,
 			SubmittedAt: rev.SubmittedAt,
-			Title:       fmt.Sprintf("Review on #%d", currPR.Number),
+			Title:       title,
 			Message: fmt.Sprintf(
 				"@%s %s: %q (%s)",
 				rev.Author,
@@ -455,12 +478,23 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 			var n Notification
 			switch state {
 			case PRStateMerged:
+				if !pr.IsDefaultBranch() {
+					return nil
+				}
 				if !d.tryMarkSeen(mergeKey(pr.RepoNameWithOwner, pr.Number)) {
 					return nil
 				}
+				targetBranch := pr.BaseRefName
+				if targetBranch == "" {
+					targetBranch = pr.DefaultBranch
+				}
+				msg := fmt.Sprintf("Merged: %q (%s)", pr.Title, pr.Key())
+				if targetBranch != "" {
+					msg = fmt.Sprintf("Merged to %s: %q (%s)", targetBranch, pr.Title, pr.Key())
+				}
 				n = d.note(pr, TriggerPRMerged, pr.URL, pr.Author,
-					fmt.Sprintf("PR Merged (#%d)", pr.Number),
-					fmt.Sprintf("Merged: %q (%s)", pr.Title, pr.Key()),
+					fmt.Sprintf("🟣 PR Merged (#%d)", pr.Number),
+					msg,
 					target.obs.Scopes)
 				n.CommitOID = ""
 			case PRStateClosed:
@@ -468,7 +502,7 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 					return nil
 				}
 				n = d.note(pr, TriggerPRClosed, pr.URL, pr.Author,
-					fmt.Sprintf("PR Closed (#%d)", pr.Number),
+					fmt.Sprintf("⚪ PR Closed (#%d)", pr.Number),
 					fmt.Sprintf("Closed: %q (%s)", pr.Title, pr.Key()),
 					target.obs.Scopes)
 				n.CommitOID = ""

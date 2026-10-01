@@ -121,6 +121,82 @@ func (r Rule) Matches(pr model.PullRequest) bool {
 	return false
 }
 
+// Explain returns a description of why pr matched RuleSet, or empty string if no match.
+func (c RuleSet) Explain(pr model.PullRequest) string {
+	if c.ExcludeBots && pr.IsAuthorBot() {
+		return ""
+	}
+	for _, a := range c.Authors {
+		if matchAuthor(a, pr.Author) {
+			return fmt.Sprintf("matched author @%s in authors rule", strings.TrimPrefix(strings.TrimSpace(a), "@"))
+		}
+	}
+	for _, r := range c.Repos {
+		if matchRepo(r, pr) {
+			return fmt.Sprintf("matched repo %s in repos rule", r)
+		}
+	}
+	for _, rule := range c.Rules {
+		if exp := rule.Explain(pr); exp != "" {
+			return exp
+		}
+	}
+	return ""
+}
+
+// Explain returns a description of why pr matched this rule, or empty string if no match.
+func (r Rule) Explain(pr model.PullRequest) string {
+	if r.Repo != "" && !matchRepo(r.Repo, pr) {
+		return ""
+	}
+	hasCriteria := len(r.Authors) > 0 || len(r.Keywords) > 0 || len(r.Files) > 0 || len(r.Directories) > 0 ||
+		len(r.Paths) > 0 || len(r.Regex) > 0
+	if !hasCriteria {
+		if r.Repo != "" {
+			return fmt.Sprintf("matched repo %q", r.Repo)
+		}
+		return ""
+	}
+	prefix := ""
+	if r.Repo != "" {
+		prefix = fmt.Sprintf("repo %q: ", r.Repo)
+	}
+	for _, a := range r.Authors {
+		if matchAuthor(a, pr.Author) {
+			return prefix + "matched author @" + strings.TrimPrefix(strings.TrimSpace(a), "@")
+		}
+	}
+	if len(r.Keywords) > 0 {
+		titleLower := strings.ToLower(pr.Title)
+		for _, kw := range r.Keywords {
+			if kw != "" && strings.Contains(titleLower, strings.ToLower(kw)) {
+				return prefix + fmt.Sprintf("matched keyword %q in title", kw)
+			}
+		}
+	}
+	for _, f := range r.Files {
+		if matchFile(f, pr.Files) {
+			return prefix + fmt.Sprintf("matched file %q", f)
+		}
+	}
+	for _, d := range r.Directories {
+		if matchDirectory(d, pr.Files) {
+			return prefix + fmt.Sprintf("matched directory %q", d)
+		}
+	}
+	for _, p := range r.Paths {
+		if matchPath(p, pr.Files) {
+			return prefix + fmt.Sprintf("matched path %q", p)
+		}
+	}
+	for _, p := range r.Regex {
+		if matchRegex(p, pr.Files) {
+			return prefix + fmt.Sprintf("matched regex %q", p)
+		}
+	}
+	return ""
+}
+
 func matchAuthor(expected, actual string) bool {
 	expected = strings.TrimPrefix(strings.TrimSpace(expected), "@")
 	actual = strings.TrimPrefix(strings.TrimSpace(actual), "@")

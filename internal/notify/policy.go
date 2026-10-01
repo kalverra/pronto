@@ -116,17 +116,26 @@ func enteredText(scope Scope, pr model.PullRequest) (title, message string) {
 	num := pr.Number
 	switch {
 	case scope.Section == "" && scope.Tab == TabPriority:
-		return titled("Priority", num), "Now in Priority: " + quoted(pr)
+		return titled("🔥 Priority", num), "Now in Priority: " + quoted(pr)
 	case scope.Section == model.SectionAttention && (scope.Tab == TabPriority || scope.Tab == TabInbox):
-		return titled("Ready for Review", num), "Ready for your review: " + quoted(pr)
+		return titled("👀 Ready for Review", num), "Ready for your review: " + quoted(pr)
 	case scope.Tab == TabMine && scope.Section == model.SectionReadyToMerge:
-		return titled("Ready to Merge", num), "Ready to merge: " + quoted(pr)
+		return titled("🚀 Ready to Merge", num), "Ready to merge: " + quoted(pr)
+	case scope.Section == model.SectionActionRequired:
+		return titled(
+				"⚡ Action Required",
+				num,
+			), "Now in " + titleWords(
+				string(scope.Tab),
+			) + " › Action Required: " + quoted(
+				pr,
+			)
 	case scope.Section == "":
 		name := titleWords(string(scope.Tab))
-		return titled(name, num), "Now in " + name + ": " + quoted(pr)
+		return titled("📌 "+name, num), "Now in " + name + ": " + quoted(pr)
 	}
 	sec := titleWords(string(scope.Section))
-	return titled(sec, num), "Now in " + titleWords(string(scope.Tab)) + " › " + sec + ": " + quoted(pr)
+	return titled("📌 "+sec, num), "Now in " + titleWords(string(scope.Tab)) + " › " + sec + ": " + quoted(pr)
 }
 
 func titled(name string, num int) string {

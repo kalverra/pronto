@@ -91,7 +91,10 @@ type rawLogin struct {
 }
 
 type rawRepo struct {
-	NameWithOwner string `json:"nameWithOwner"`
+	NameWithOwner    string `json:"nameWithOwner"`
+	DefaultBranchRef struct {
+		Name string `json:"name"`
+	} `json:"defaultBranchRef"`
 }
 
 type rawFiles struct {
@@ -400,7 +403,7 @@ func convertPR(
 		}
 	}
 
-	isInMergeQueue := ident.IsInMergeQueue
+	isInMergeQueue := ident.IsInMergeQueue || (fresh.MergeQueueEntry != nil)
 	mergeStatus := model.ComputeMergeStatus(fresh.Mergeable, fresh.MergeStateStatus, ident.IsDraft)
 	mergeStatus.IsInMergeQueue = isInMergeQueue
 	checksSummary := model.ComputeChecksSummaryWithRollup(requiredContexts, checks, rollup)
@@ -423,6 +426,7 @@ func convertPR(
 		HeadRefName:       ident.HeadRefName,
 		HeadRefOID:        ident.HeadRefOID,
 		BaseRefName:       ident.BaseRefName,
+		DefaultBranch:     ident.Repository.DefaultBranchRef.Name,
 		Stack:             prStack,
 		Additions:         stable.Additions,
 		Deletions:         stable.Deletions,

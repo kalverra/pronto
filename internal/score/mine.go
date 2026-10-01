@@ -62,7 +62,7 @@ func DefaultMineWeights() MineWeights {
 func ExplainMine(pr model.PullRequest, now time.Time, w MineWeights) Breakdown {
 	if pr.MergeStatus.Badge() == "" && (pr.Mergeable != "" || pr.MergeStateStatus != "" || pr.IsInMergeQueue) {
 		pr.MergeStatus = model.ComputeMergeStatus(pr.Mergeable, pr.MergeStateStatus, pr.IsDraft)
-		pr.MergeStatus.IsInMergeQueue = pr.IsInMergeQueue
+		pr.MergeStatus.IsInMergeQueue = pr.InMergeQueue()
 	}
 
 	terms := []Term{mineStatusTerm(pr, now, w)}
@@ -97,18 +97,18 @@ func mineStatusTerm(pr model.PullRequest, now time.Time, w MineWeights) Term {
 	case pr.IsDraft || pr.MergeStatus.IsDraft:
 		statusName = "Status:DRAFT"
 		baseScore = w.BaseDraft
-	case pr.ReviewDecision == "CHANGES_REQUESTED":
-		statusName = "Status:CHANGES_REQUESTED"
-		baseScore = w.BaseChangesRequested
-	case pr.Checks.IsFailing():
-		statusName = "Status:FAILING_CI"
-		baseScore = w.BaseCIFailing
 	case pr.MergeStatus.HasConflict() || pr.Mergeable == "CONFLICTING" || pr.MergeStateStatus == "DIRTY":
 		statusName = "Status:CONFLICT"
 		baseScore = w.BaseConflict
 	case pr.InMergeQueue():
 		statusName = "Status:QUEUED"
 		baseScore = w.BaseQueued
+	case pr.ReviewDecision == "CHANGES_REQUESTED":
+		statusName = "Status:CHANGES_REQUESTED"
+		baseScore = w.BaseChangesRequested
+	case pr.Checks.IsFailing():
+		statusName = "Status:FAILING_CI"
+		baseScore = w.BaseCIFailing
 	case pr.MergeStatus.IsClean() || pr.MergeStateStatus == "CLEAN":
 		statusName = "Status:CLEAN"
 		baseScore = w.BaseClean

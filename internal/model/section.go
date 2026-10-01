@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Section names a category divider shown in a TUI tab.
 type Section string
@@ -71,13 +74,33 @@ func (c InboxCategory) Section() Section {
 	return ""
 }
 
-// EffectiveSections returns each PR's section, stack-aware: every member of a
-// stack takes the most urgent (lowest) category among members of the same
-// family. Authored PRs in a merge queue are excluded from the stack minimum
+// SectionDetail holds the effective section and human-readable explanation for a PR.
+type SectionDetail struct {
+	Section Section `json:"section"`
+	Reason  string  `json:"reason"`
+}
+
+type stackLeaderMine struct {
+	cat MineCategory
+	pr  PullRequest
+}
+
+type stackLeaderInbox struct {
+	cat InboxCategory
+	pr  PullRequest
+}
+
+// EffectiveSectionDetails returns each PR's section and explanation, stack-aware:
+// every member of a stack takes the most urgent (lowest) category among members of
+// the same family. Authored PRs in a merge queue are excluded from the stack minimum
 // and keep their own category.
-func EffectiveSections(prs []PullRequest, isAuthored func(PullRequest) bool, now time.Time) map[PRKey]Section {
-	mineStack := make(map[string]MineCategory)
-	inboxStack := make(map[string]InboxCategory)
+func EffectiveSectionDetails(
+	prs []PullRequest,
+	isAuthored func(PullRequest) bool,
+	now time.Time,
+) map[PRKey]SectionDetail {
+	mineStack := make(map[string]stackLeaderMine)
+	inboxStack := make(map[string]stackLeaderInbox)
 	for _, pr := range prs {
 		if !pr.IsPartOfStack() {
 			continue
@@ -87,45 +110,62 @@ func EffectiveSections(prs []PullRequest, isAuthored func(PullRequest) bool, now
 			if pr.InMergeQueue() {
 				continue
 			}
-			if cat := pr.MineCategory(now); !hasMine(mineStack, key) || cat < mineStack[key] {
-				mineStack[key] = cat
-			}
-			continue
-		}
-		if cat := pr.InboxCategory(now); !hasInbox(inboxStack, key) || cat < inboxStack[key] {
-			inboxStack[key] = cat
-		}
-	}
-
-	out := make(map[PRKey]Section, len(prs))
-	for _, pr := range prs {
-		if isAuthored(pr) {
 			cat := pr.MineCategory(now)
-			if pr.IsPartOfStack() && !pr.InMergeQueue() {
-				if eff, ok := mineStack[pr.StackKey()]; ok {
-					cat = eff
-				}
+			if cur, ok := mineStack[key]; !ok || cat < cur.cat {
+				mineStack[key] = stackLeaderMine{cat: cat, pr: pr}
 			}
-			out[pr.Key()] = cat.Section()
 			continue
 		}
 		cat := pr.InboxCategory(now)
+		if cur, ok := inboxStack[key]; !ok || cat < cur.cat {
+			inboxStack[key] = stackLeaderInbox{cat: cat, pr: pr}
+		}
+	}
+
+	out := make(map[PRKey]SectionDetail, len(prs))
+	for _, pr := range prs {
+		if isAuthored(pr) {
+			cat := pr.MineCategory(now)
+			reason := pr.ExplainMineCategory(now)
+			if pr.IsPartOfStack() && !pr.InMergeQueue() {
+				if leader, ok := mineStack[pr.StackKey()]; ok && leader.cat < cat {
+					cat = leader.cat
+					reason = fmt.Sprintf(
+						"Inherited from stack entry #%d (%s)",
+						leader.pr.Number,
+						leader.pr.ExplainMineCategory(now),
+					)
+				}
+			}
+			out[pr.Key()] = SectionDetail{Section: cat.Section(), Reason: reason}
+			continue
+		}
+		cat := pr.InboxCategory(now)
+		reason := pr.ExplainInboxCategory(now)
 		if pr.IsPartOfStack() {
-			if eff, ok := inboxStack[pr.StackKey()]; ok {
-				cat = eff
+			if leader, ok := inboxStack[pr.StackKey()]; ok && leader.cat < cat {
+				cat = leader.cat
+				reason = fmt.Sprintf(
+					"Inherited from stack entry #%d (%s)",
+					leader.pr.Number,
+					leader.pr.ExplainInboxCategory(now),
+				)
 			}
 		}
-		out[pr.Key()] = cat.Section()
+		out[pr.Key()] = SectionDetail{Section: cat.Section(), Reason: reason}
 	}
 	return out
 }
 
-func hasMine(m map[string]MineCategory, k string) bool {
-	_, ok := m[k]
-	return ok
-}
-
-func hasInbox(m map[string]InboxCategory, k string) bool {
-	_, ok := m[k]
-	return ok
+// EffectiveSections returns each PR's section, stack-aware: every member of a
+// stack takes the most urgent (lowest) category among members of the same
+// family. Authored PRs in a merge queue are excluded from the stack minimum
+// and keep their own category.
+func EffectiveSections(prs []PullRequest, isAuthored func(PullRequest) bool, now time.Time) map[PRKey]Section {
+	details := EffectiveSectionDetails(prs, isAuthored, now)
+	out := make(map[PRKey]Section, len(details))
+	for k, d := range details {
+		out[k] = d.Section
+	}
+	return out
 }

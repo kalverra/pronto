@@ -820,7 +820,7 @@ func (m Model) View() string {
 
 	// Help bar
 	b.WriteString("\n")
-	helpText := "enter: details • ↑/↓: navigate • s: sort • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why score • r: refresh • q: quit"
+	helpText := "enter: details • ↑/↓: navigate • s: sort • space/e: expand • tab: switch • o: open • f: focus • x: close stale • n: notifs • ?: why • r: refresh • q: quit"
 	if m.loading {
 		helpText = "q: quit • ?: help"
 	} else if m.IsNotificationFocused() {
@@ -1842,6 +1842,62 @@ func (m Model) renderModal() string {
 	}
 	b.WriteString("\n")
 
+	// Category Explanation
+	exp := m.ExplainPR(*scored)
+	categoryHeader := exp.TabName
+	if exp.SectionName != "" {
+		categoryHeader += " › " + exp.SectionName
+	}
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render("Category: " + categoryHeader))
+	b.WriteString("\n")
+	if exp.TabReason != "" {
+		fmt.Fprintf(&b, "  • %s: %s\n", exp.TabName, exp.TabReason)
+	}
+	if exp.BaseTabName != "" && exp.BaseTabReason != "" {
+		fmt.Fprintf(&b, "  • Base: %s (%s)\n", exp.BaseTabName, exp.BaseTabReason)
+	}
+	if exp.SectionReason != "" {
+		fmt.Fprintf(&b, "  • %s: %s\n", exp.SectionName, exp.SectionReason)
+	}
+	if exp.FocusReason != "" {
+		fmt.Fprintf(&b, "  • %s\n", exp.FocusReason)
+	}
+	b.WriteString("\n")
+
+	// Notifications
+	notifHeader := "Notifications:"
+	if exp.PopupsOff {
+		notifHeader += " (desktop popups disabled in config)"
+	}
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(notifHeader))
+	b.WriteString("\n")
+
+	greenCheck := lipgloss.NewStyle().Foreground(lipgloss.Color("#3fb950")).Render("✓")
+	redCross := lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149")).Render("✗")
+
+	if len(exp.WillNotify) > 0 {
+		fmt.Fprintf(&b, "  Will notify (%d):\n", len(exp.WillNotify))
+		var items []string
+		for _, t := range exp.WillNotify {
+			items = append(items, greenCheck+" "+string(t))
+		}
+		b.WriteString(formatTriggerList(items, 72, "    ") + "\n")
+	} else {
+		b.WriteString("  Will notify: (none)\n")
+	}
+
+	if len(exp.WontNotify) > 0 {
+		fmt.Fprintf(&b, "  Won't notify (%d):\n", len(exp.WontNotify))
+		var items []string
+		for _, t := range exp.WontNotify {
+			items = append(items, redCross+" "+string(t))
+		}
+		b.WriteString(formatTriggerList(items, 72, "    ") + "\n")
+	} else {
+		b.WriteString("  Won't notify: (none)\n")
+	}
+	b.WriteString("\n")
+
 	fmt.Fprintf(&b, "Score: %.1f\n\n", scored.Breakdown.Total)
 
 	for _, term := range scored.Breakdown.Terms {
@@ -1859,6 +1915,27 @@ func (m Model) renderModal() string {
 	b.WriteString(lipgloss.NewStyle().Faint(true).Render("Press '?' or 'esc' to close"))
 
 	return modalBoxStyle.Render(b.String())
+}
+
+func formatTriggerList(items []string, maxWidth int, indent string) string {
+	var lines []string
+	var curLine string
+	for _, item := range items {
+		itemLen := lipgloss.Width(item)
+		switch {
+		case curLine == "":
+			curLine = indent + item
+		case lipgloss.Width(curLine)+2+itemLen > maxWidth:
+			lines = append(lines, curLine)
+			curLine = indent + item
+		default:
+			curLine += "  " + item
+		}
+	}
+	if curLine != "" {
+		lines = append(lines, curLine)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderDetailsModal() string {
@@ -1915,6 +1992,9 @@ func (m Model) renderDetailsModal() string {
 	mergeStr := pr.Mergeable
 	if pr.InMergeQueue() {
 		mergeStr = "IN MERGE QUEUE"
+		if pr.MergeQueue != nil && pr.MergeQueue.Position > 0 {
+			mergeStr = fmt.Sprintf("IN MERGE QUEUE (#%d)", pr.MergeQueue.Position)
+		}
 	}
 	fmt.Fprintf(
 		&b,
@@ -1944,30 +2024,9 @@ func (m Model) renderDetailsModal() string {
 	}
 
 	// Reviews
-	if len(pr.LatestReviews) > 0 {
+	if reviewsStr := renderDetailsReviews(refTime, pr.LatestReviews); reviewsStr != "" {
 		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Reviews:"))
-		b.WriteString("\n")
-		for _, rev := range pr.LatestReviews {
-			stateStyle := lipgloss.NewStyle()
-			var icon string
-			switch rev.State {
-			case "APPROVED":
-				stateStyle = stateStyle.Foreground(lipgloss.Color("42"))
-				icon = "✓"
-			case "CHANGES_REQUESTED":
-				stateStyle = stateStyle.Foreground(lipgloss.Color("196"))
-				icon = "✗"
-			default:
-				stateStyle = stateStyle.Foreground(lipgloss.Color("245"))
-				icon = "•"
-			}
-			age := ""
-			if !rev.SubmittedAt.IsZero() {
-				age = fmt.Sprintf(" (%s ago)", humanAge(refTime.Sub(rev.SubmittedAt)))
-			}
-			fmt.Fprintf(&b, "  %s @%s %s%s\n", icon, rev.Author, stateStyle.Render(rev.State), faintStyle.Render(age))
-		}
+		b.WriteString(reviewsStr)
 	}
 
 	// CI Checks
@@ -2014,10 +2073,40 @@ func (m Model) renderDetailsModal() string {
 	b.WriteString(
 		lipgloss.NewStyle().
 			Faint(true).
-			Render("v: gh pr view • o: browser • ?: why score • esc/q/enter: close"),
+			Render("v: gh pr view • o: browser • ?: why • esc/q/enter: close"),
 	)
 
 	return modalBoxStyle.Render(b.String())
+}
+
+func renderDetailsReviews(refTime time.Time, reviews []model.Review) string {
+	if len(reviews) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render("Reviews:"))
+	b.WriteString("\n")
+	for _, rev := range reviews {
+		stateStyle := lipgloss.NewStyle()
+		var icon string
+		switch rev.State {
+		case "APPROVED":
+			stateStyle = stateStyle.Foreground(lipgloss.Color("42"))
+			icon = "✓"
+		case "CHANGES_REQUESTED":
+			stateStyle = stateStyle.Foreground(lipgloss.Color("196"))
+			icon = "✗"
+		default:
+			stateStyle = stateStyle.Foreground(lipgloss.Color("245"))
+			icon = "•"
+		}
+		age := ""
+		if !rev.SubmittedAt.IsZero() {
+			age = fmt.Sprintf(" (%s ago)", humanAge(refTime.Sub(rev.SubmittedAt)))
+		}
+		fmt.Fprintf(&b, "  %s @%s %s%s\n", icon, rev.Author, stateStyle.Render(rev.State), faintStyle.Render(age))
+	}
+	return b.String()
 }
 
 func (m Model) spinnerChar() string {

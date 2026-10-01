@@ -132,6 +132,7 @@ PullRequest represents a pull request in the review queue.
 | `HeadRefName` | `head_ref_name` | `string` | yes | — |
 | `HeadRefOID` | `head_ref_oid` | `string` |  | — |
 | `BaseRefName` | `base_ref_name` | `string` | yes | — |
+| `DefaultBranch` | `default_branch` | `string` | yes | — |
 | `Additions` | `additions` | `int` |  | — |
 | `Deletions` | `deletions` | `int` |  | — |
 | `ChangedFiles` | `changed_files` | `int` |  | — |
@@ -182,6 +183,15 @@ Queue holds the user's authored and inbox pull requests.
 | `Inbox` | `inbox` | `[]PullRequest` | yes | — |
 | `Viewer` | `viewer` | `string` | yes | Viewer is the authenticated user's login; Teams are their org-qualified teams ("org/slug"). Sources populate both so scoring call sites can attribute review requests to the viewer or their teams. |
 | `Teams` | `teams` | `[]string` | yes | — |
+
+## SectionDetail
+
+SectionDetail holds the effective section and human-readable explanation for a PR.
+
+| Field | JSON | Type | Omitempty | Description |
+| ----- | ---- | ---- | --------- | ----------- |
+| `Section` | `section` | `Section` |  | — |
+| `Reason` | `reason` | `string` |  | — |
 
 ## Enumerated values
 

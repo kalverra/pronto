@@ -557,6 +557,18 @@ func TestPullRequest_ActionStatus(t *testing.T) {
 			wantBadge: "QUEUED",
 		},
 		{
+			name: "queued PR with failing checks remains queued",
+			pr: model.PullRequest{
+				IsInMergeQueue: true,
+				Checks: model.ChecksSummary{
+					Total:  235,
+					Failed: 1,
+				},
+			},
+			wantState: model.ActionStatusQueued,
+			wantBadge: "QUEUED",
+		},
+		{
 			name: "generic blocked when checks and reviews unspecified",
 			pr: model.PullRequest{
 				MergeStateStatus: "BLOCKED",

@@ -650,7 +650,7 @@ func (m Model) applyQueue(q model.Queue) Model {
 	for i, pr := range q.Inbox {
 		if pr.MergeStatus.Badge() == "" && (pr.Mergeable != "" || pr.MergeStateStatus != "" || pr.IsInMergeQueue) {
 			pr.MergeStatus = model.ComputeMergeStatus(pr.Mergeable, pr.MergeStateStatus, pr.IsDraft)
-			pr.MergeStatus.IsInMergeQueue = pr.IsInMergeQueue
+			pr.MergeStatus.IsInMergeQueue = pr.InMergeQueue()
 		}
 		inboxPRs[i] = pr
 	}
@@ -663,7 +663,7 @@ func (m Model) applyQueue(q model.Queue) Model {
 	for i, pr := range q.Authored {
 		if pr.MergeStatus.Badge() == "" && (pr.Mergeable != "" || pr.MergeStateStatus != "" || pr.IsInMergeQueue) {
 			pr.MergeStatus = model.ComputeMergeStatus(pr.Mergeable, pr.MergeStateStatus, pr.IsDraft)
-			pr.MergeStatus.IsInMergeQueue = pr.IsInMergeQueue
+			pr.MergeStatus.IsInMergeQueue = pr.InMergeQueue()
 		}
 		authoredPRs[i] = pr
 	}

@@ -77,9 +77,32 @@ func TestPullRequest_MineCategory(t *testing.T) {
 			wantCat: model.MineCategoryQueued,
 		},
 		{
+			name: "queued pr with failing checks remains queued",
+			pr: model.PullRequest{
+				Number:         61,
+				IsInMergeQueue: true,
+				UpdatedAt:      now.Add(-2 * time.Hour),
+				Checks: model.ChecksSummary{
+					Total:  235,
+					Failed: 1,
+				},
+			},
+			wantCat: model.MineCategoryQueued,
+		},
+		{
+			name: "queued pr with changes requested remains queued",
+			pr: model.PullRequest{
+				Number:         62,
+				IsInMergeQueue: true,
+				UpdatedAt:      now.Add(-2 * time.Hour),
+				ReviewDecision: "CHANGES_REQUESTED",
+			},
+			wantCat: model.MineCategoryQueued,
+		},
+		{
 			name: "queued pr by merge state status",
 			pr: model.PullRequest{
-				Number:           61,
+				Number:           63,
 				MergeStateStatus: "QUEUED",
 				UpdatedAt:        now.Add(-2 * time.Hour),
 			},

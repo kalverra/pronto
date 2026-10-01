@@ -24,6 +24,8 @@ const (
 	StatusApproved
 	// StatusDraft means the PR is a work in progress.
 	StatusDraft
+	// StatusQueued means the PR has entered a merge queue.
+	StatusQueued
 )
 
 // PRCIStatus represents the CI pipeline status of a PR within a stack.
@@ -68,6 +70,7 @@ var (
 	styleGlyphRun    = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
 	styleGlyphPass   = lipgloss.NewStyle().Foreground(accentGreen)
 	styleGlyphDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("#b1bac4"))
+	styleGlyphQueued = lipgloss.NewStyle().Foreground(accentViolet)
 
 	styleStackTag = lipgloss.NewStyle().Foreground(accentViolet).Bold(true)
 	styleRangeTag = lipgloss.NewStyle().Foreground(accentCharcoal)
@@ -80,10 +83,14 @@ func DeterminePRStatus(pr model.PullRequest) PRStatus {
 	if pr.IsDraft || pr.MergeStatus.IsDraft || pr.ActionStatus() == model.ActionStatusDraft {
 		return StatusDraft
 	}
-	if pr.Checks.IsFailing() || pr.ActionStatus() == model.ActionStatusFailingCI {
+	if pr.InMergeQueue() || pr.ActionStatus() == model.ActionStatusQueued {
+		return StatusQueued
+	}
+	displayChecks := pr.DisplayChecks()
+	if displayChecks.IsFailing() || pr.ActionStatus() == model.ActionStatusFailingCI {
 		return StatusCIFailed
 	}
-	if pr.Checks.IsRunning() || pr.ActionStatus() == model.ActionStatusCIRunning {
+	if displayChecks.IsRunning() || pr.ActionStatus() == model.ActionStatusCIRunning {
 		return StatusCIRunning
 	}
 	if pr.ReviewDecision == "APPROVED" || pr.ActionStatus() == model.ActionStatusClean {
@@ -95,6 +102,8 @@ func DeterminePRStatus(pr model.PullRequest) PRStatus {
 // RenderStatusGlyph renders the single-character glyph for a PRStatus.
 func RenderStatusGlyph(st PRStatus) string {
 	switch st {
+	case StatusQueued:
+		return styleGlyphQueued.Render("◆")
 	case StatusCIFailed:
 		return styleGlyphFail.Render("✖")
 	case StatusNeedsReview:
@@ -114,6 +123,8 @@ func RenderStatusGlyph(st PRStatus) string {
 func RenderChildStatusBadge(pr model.PullRequest) string {
 	st := DeterminePRStatus(pr)
 	switch st {
+	case StatusQueued:
+		return styleGlyphQueued.Render("◆ Queued")
 	case StatusCIFailed:
 		return styleGlyphFail.Render("✖ Failing CI")
 	case StatusNeedsReview:
@@ -133,9 +144,11 @@ func RenderChildStatusBadge(pr model.PullRequest) string {
 func RenderMicroStatusRibbon(prs []PRItem) string {
 	n := len(prs)
 	if n > 10 {
-		var rev, fail, run, pass, draft int
+		var rev, fail, run, pass, draft, queued int
 		for _, pr := range prs {
 			switch pr.Status {
+			case StatusQueued:
+				queued++
 			case StatusNeedsReview:
 				rev++
 			case StatusCIFailed:
@@ -149,6 +162,9 @@ func RenderMicroStatusRibbon(prs []PRItem) string {
 			}
 		}
 		var parts []string
+		if queued > 0 {
+			parts = append(parts, fmt.Sprintf("%d%s", queued, styleGlyphQueued.Render("◆")))
+		}
 		if rev > 0 {
 			parts = append(parts, fmt.Sprintf("%d%s", rev, styleGlyphReview.Render("●")))
 		}
@@ -180,13 +196,14 @@ func RenderMicroStatusRibbon(prs []PRItem) string {
 
 // DeterminePRCIStatus maps a PullRequest to a PRCIStatus enum.
 func DeterminePRCIStatus(pr model.PullRequest) PRCIStatus {
-	if pr.Checks.IsFailing() || pr.ActionStatus() == model.ActionStatusFailingCI {
+	checks := pr.DisplayChecks()
+	if checks.IsFailing() || pr.ActionStatus() == model.ActionStatusFailingCI {
 		return CIStatusFailed
 	}
-	if pr.Checks.IsRunning() || pr.ActionStatus() == model.ActionStatusCIRunning {
+	if checks.IsRunning() || pr.ActionStatus() == model.ActionStatusCIRunning {
 		return CIStatusRunning
 	}
-	if pr.Checks.IsPassing() {
+	if checks.IsPassing() {
 		return CIStatusPassing
 	}
 	return CIStatusNone

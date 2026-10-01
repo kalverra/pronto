@@ -239,3 +239,15 @@ func TestExpandPath(t *testing.T) {
 	assert.Equal(t, "relative/path.wav", config.ExpandPath("relative/path.wav"))
 	assert.Empty(t, config.ExpandPath(""))
 }
+
+func TestNotificationPolicy_MergeQueueKickedOutAlias(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.NotificationConfig{
+		Mine: config.MineNotify{
+			Triggers: []string{"merge_queue_kicked_out"},
+		},
+	}
+	policy := cfg.Policy()
+	assert.True(t, policy[notify.Scope{Tab: notify.TabMine}][notify.TriggerMergeQueueLeft])
+}

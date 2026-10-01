@@ -1,6 +1,10 @@
 package config
 
-import "github.com/kalverra/pronto/internal/model"
+import (
+	"fmt"
+
+	"github.com/kalverra/pronto/internal/model"
+)
 
 // PriorityConfig selects incoming pull requests for the Priority tab: those
 // matching the embedded rules, plus (when DirectRequests is set) those whose
@@ -26,6 +30,35 @@ func (c PriorityConfig) Matches(pr model.PullRequest) bool {
 		return true
 	}
 	return c.RuleSet.Matches(pr)
+}
+
+// Explain reports why pr belongs in Priority, or empty string if it does not.
+// allInbox provides the full inbox list to detect stack promotions.
+func (c PriorityConfig) Explain(pr model.PullRequest, allInbox []model.PullRequest) string {
+	if c.ExcludeBots && pr.IsAuthorBot() {
+		return ""
+	}
+	if c.DirectRequests && pr.DirectRequest {
+		return "Direct review requested from you"
+	}
+	if c.DirectRequests && pr.Assigned {
+		return "Assigned to you"
+	}
+	if reason := c.RuleSet.Explain(pr); reason != "" {
+		return "Matched priority rule: " + reason
+	}
+	if pr.IsPartOfStack() && len(allInbox) > 0 {
+		for _, other := range allInbox {
+			if other.Key() == pr.Key() || !other.IsPartOfStack() || other.StackKey() != pr.StackKey() {
+				continue
+			}
+			if c.Matches(other) {
+				otherReason := c.Explain(other, nil)
+				return fmt.Sprintf("Promoted by stack entry #%d (%s)", other.Number, otherReason)
+			}
+		}
+	}
+	return ""
 }
 
 // Partition splits incoming PRs into Priority and the rest. A stack moves

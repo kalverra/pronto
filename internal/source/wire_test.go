@@ -56,6 +56,27 @@ func TestDiscoveryFields_IncludesStack(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, discoveryFragment, "stack {")
 	assert.Contains(t, discoveryFragment, "stackEntry {")
+	assert.Contains(t, discoveryFragment, "defaultBranchRef {")
+}
+
+func TestConvertPR_DefaultBranch(t *testing.T) {
+	t.Parallel()
+	ident := rawIdentity{
+		Number:      101,
+		BaseRefName: "develop",
+		Repository: rawRepo{
+			NameWithOwner: "acme/repo",
+			DefaultBranchRef: struct {
+				Name string `json:"name"`
+			}{Name: "develop"},
+		},
+	}
+	pr := convertPR(ident, stableFields{}, rawFresh{}, false, convertOpts{})
+	assert.Equal(t, "develop", pr.DefaultBranch)
+	assert.True(t, pr.IsDefaultBranch())
+
+	pr.BaseRefName = "feature"
+	assert.False(t, pr.IsDefaultBranch())
 }
 
 func TestDiscoveryFields_IncludesRefNames(t *testing.T) {

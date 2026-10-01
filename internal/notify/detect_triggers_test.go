@@ -51,7 +51,8 @@ func TestDetector_MergeQueueTransitions(t *testing.T) {
 	notes = detect(t, d, obsIn(queued, mine), obsIn(base, mine))
 	require.Len(t, notes, 1)
 	assert.Equal(t, notify.TriggerMergeQueueLeft, notes[0].Trigger)
-	assert.Contains(t, notes[0].Message, "Left merge queue")
+	assert.Contains(t, notes[0].Title, "Kicked out of Merge Queue")
+	assert.Contains(t, notes[0].Message, "Kicked out of merge queue")
 }
 
 func TestDetector_MergeQueueLeft_NotFiredWhenVanishes(t *testing.T) {
@@ -143,7 +144,7 @@ func TestDetector_Entered(t *testing.T) {
 		require.NotNil(t, notes[0].Entered)
 		assert.Equal(t, attn, *notes[0].Entered)
 		assert.Equal(t, []notify.Scope{attn}, notes[0].Scopes)
-		assert.Equal(t, "Ready for Review (#1)", notes[0].Title)
+		assert.Equal(t, "👀 Ready for Review (#1)", notes[0].Title)
 	})
 
 	t.Run("new PR enters all its scopes", func(t *testing.T) {
@@ -151,7 +152,7 @@ func TestDetector_Entered(t *testing.T) {
 		d := notify.NewDetector(nil)
 		notes := detect(t, d, nil, obsIn(pr, prio, attn))
 		require.Len(t, notes, 2)
-		assert.Equal(t, "Priority (#1)", notes[0].Title)
+		assert.Equal(t, "🔥 Priority (#1)", notes[0].Title)
 	})
 
 	t.Run("not on seeded baseline", func(t *testing.T) {
@@ -185,12 +186,12 @@ func TestDetector_Entered(t *testing.T) {
 		rtm := scope(notify.TabMine, model.SectionReadyToMerge)
 		notes := detect(t, d, obsIn(pr), obsIn(pr, rtm))
 		require.Len(t, notes, 1)
-		assert.Equal(t, "Ready to Merge (#1)", notes[0].Title)
+		assert.Equal(t, "🚀 Ready to Merge (#1)", notes[0].Title)
 
 		other := scope(notify.TabFocus, model.SectionActionRequired)
 		notes = detect(t, d, obsIn(pr), obsIn(pr, other))
 		require.Len(t, notes, 1)
-		assert.Equal(t, "Action Required (#1)", notes[0].Title)
+		assert.Equal(t, "⚡ Action Required (#1)", notes[0].Title)
 		assert.Contains(t, notes[0].Message, "Now in Focus › Action Required")
 	})
 }
@@ -237,4 +238,82 @@ func TestDetector_ScopesUnionPrevAndCurr(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []notify.Scope{a, b}, ci.Scopes)
+}
+
+func TestDetector_MergeQueueKickedOut_FailingChecks(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil)
+	mine := scope(notify.TabMine, "")
+	queued := makeBasePR(1, "Queued PR")
+	queued.IsInMergeQueue = true
+
+	kicked := makeBasePR(1, "Queued PR")
+	kicked.Checks = model.ChecksSummary{
+		Total:     2,
+		Failed:    1,
+		FailedURL: "https://github.com/kalverra/pronto/actions/runs/123",
+	}
+
+	notes := detect(t, d, obsIn(queued, mine), obsIn(kicked, mine))
+	var mqNote *notify.Notification
+	for _, n := range notes {
+		if n.Trigger == notify.TriggerMergeQueueLeft {
+			mqNote = &n
+		}
+	}
+	require.NotNil(t, mqNote)
+	assert.Equal(t, "🚨 Kicked out of Merge Queue (#1)", mqNote.Title)
+	assert.Contains(t, mqNote.Message, "Kicked out of merge queue (checks failed)")
+	assert.Equal(t, "https://github.com/kalverra/pronto/actions/runs/123", mqNote.URL)
+}
+
+func TestDetector_MergeQueueKickedOut_Conflict(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil)
+	mine := scope(notify.TabMine, "")
+	queued := makeBasePR(1, "Queued PR")
+	queued.IsInMergeQueue = true
+
+	kicked := makeBasePR(1, "Queued PR")
+	kicked.MergeStatus = model.MergeStatus{Mergeable: "CONFLICTING"}
+
+	notes := detect(t, d, obsIn(queued, mine), obsIn(kicked, mine))
+	var mqNote *notify.Notification
+	for _, n := range notes {
+		if n.Trigger == notify.TriggerMergeQueueLeft {
+			mqNote = &n
+		}
+	}
+	require.NotNil(t, mqNote)
+	assert.Equal(t, "🚨 Kicked out of Merge Queue (#1)", mqNote.Title)
+	assert.Contains(t, mqNote.Message, "Kicked out of merge queue (conflicts)")
+}
+
+func TestDetector_Vanished_DefaultBranchFiltering(t *testing.T) {
+	t.Parallel()
+
+	checker := func(context.Context, string, int) (notify.PRState, error) {
+		return notify.PRStateMerged, nil
+	}
+	d := notify.NewDetector(checker)
+	mine := scope(notify.TabMine, model.SectionReadyToMerge)
+
+	// Merged into non-default feature branch: must be skipped.
+	prFeature := makeBasePR(10, "Stack Child")
+	prFeature.BaseRefName = "feature-parent"
+	prFeature.DefaultBranch = "develop"
+	notes := detect(t, d, obsIn(prFeature, mine), nil)
+	assert.Empty(t, notes, "merging into non-default branch must not trigger pr_merged")
+
+	// Merged into default branch: must notify with branch name.
+	prDefault := makeBasePR(11, "Trunk Feature")
+	prDefault.BaseRefName = "develop"
+	prDefault.DefaultBranch = "develop"
+	notes = detect(t, d, obsIn(prDefault, mine), nil)
+	require.Len(t, notes, 1)
+	assert.Equal(t, notify.TriggerPRMerged, notes[0].Trigger)
+	assert.Equal(t, "🟣 PR Merged (#11)", notes[0].Title)
+	assert.Contains(t, notes[0].Message, "Merged to develop")
 }
