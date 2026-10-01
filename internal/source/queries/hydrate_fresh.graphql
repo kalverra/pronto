@@ -7,6 +7,7 @@ query HydrateFresh($ids: [ID!]!) {
   }
   nodes(ids: $ids) {
     ... on PullRequest {
+      ...DiscoveryFields
       ...FreshFields
     }
   }

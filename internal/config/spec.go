@@ -147,7 +147,19 @@ var Specs = []KeySpec{
 		Key:  "server.poll_interval",
 		Env:  "PRONTO_POLL_INTERVAL",
 		Type: "duration",
-		Doc:  "Daemon poll interval as a Go duration string, e.g. \"30s\"; default 60s; minimum 10s.",
+		Doc:  "Base interval between discovery searches (new, updated, and departed PRs) as a Go duration string, e.g. \"30s\"; default 60s; minimum 10s. Discovery backs off toward `server.idle_interval` while nothing changes.",
+	},
+	{
+		Key:  "server.hot_interval",
+		Env:  "PRONTO_HOT_INTERVAL",
+		Type: "duration",
+		Doc:  "Fast-lane refresh interval for PRs whose state is actively moving (CI running, in a merge queue, merge state computing), as a Go duration string; default 20s; minimum 10s. Hot ticks re-hydrate only those PRs and skip discovery.",
+	},
+	{
+		Key:  "server.idle_interval",
+		Env:  "PRONTO_IDLE_INTERVAL",
+		Type: "duration",
+		Doc:  "Longest wait between discovery searches once several in a row found no change, as a Go duration string; default 3m; never below `server.poll_interval`.",
 	},
 	{
 		Key:     "server.pprof_addr",

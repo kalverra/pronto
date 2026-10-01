@@ -1,18 +1,36 @@
-query SearchDiscovery($query: String!, $cursor: String, $first: Int!) {
+query SearchDiscovery(
+  $authored: String!
+  $requested: String!
+  $assigned: String!
+  $direct: String!
+  $first: Int!
+) {
   rateLimit {
     cost
     limit
     remaining
     resetAt
   }
-  search(query: $query, type: ISSUE, first: $first, after: $cursor) {
+  authored: search(query: $authored, type: ISSUE, first: $first) {
+    ...DiscoveryPage
+  }
+  requested: search(query: $requested, type: ISSUE, first: $first) {
+    ...DiscoveryPage
+  }
+  assigned: search(query: $assigned, type: ISSUE, first: $first) {
+    ...DiscoveryPage
+  }
+  # Subset of requested: only the IDs are needed to flag direct requests.
+  direct: search(query: $direct, type: ISSUE, first: $first) {
     issueCount
     pageInfo {
       hasNextPage
       endCursor
     }
     nodes {
-      ...DiscoveryFields
+      ... on PullRequest {
+        id
+      }
     }
   }
 }

@@ -2,7 +2,6 @@ package notify_test
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -348,7 +347,7 @@ func TestDetector_PRMerged(t *testing.T) {
 		return notify.PRStateMerged, nil
 	}
 
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(perPR(checker))
 	prevPR := makeBasePR(42, "Refactor core engine")
 	// PR 42 is absent from currPRs (merged and closed)
 	currPRs := obs()
@@ -374,7 +373,7 @@ func TestDetector_PRClosedWithoutMerge_NotifiesClosed(t *testing.T) {
 		return notify.PRStateClosed, nil
 	}
 
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(perPR(checker))
 	prevPR := makeBasePR(42, "Abandoned experiment")
 	currPRs := obs()
 
@@ -523,7 +522,7 @@ func TestDetector_DisappearedPR_RetryOnCheckerError(t *testing.T) {
 		return notify.PRStateMerged, nil // merged on retry
 	}
 
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(perPR(checker))
 	prevPR := makeBasePR(42, "Refactor core engine")
 
 	// First tick: checker errors, no notification yet
@@ -583,9 +582,9 @@ func TestDetector_AssetsSounds(t *testing.T) {
 func TestDetector_Titles_OmitPRontoPrefix(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(func(_ context.Context, _ string, _ int) (notify.PRState, error) {
+	d := notify.NewDetector(perPR(func(_ context.Context, _ string, _ int) (notify.PRState, error) {
 		return notify.PRStateMerged, nil
-	})
+	}))
 
 	// CI Passed
 	prev := makeBasePR(1, "Feature A")
@@ -680,7 +679,7 @@ func TestDetector_VanishedPR_CheckerTimeout(t *testing.T) {
 		}
 
 		d := notify.NewDetector(
-			checker,
+			perPR(checker),
 			notify.WithCheckerTimeout(50*time.Millisecond),
 		)
 
@@ -695,49 +694,69 @@ func TestDetector_VanishedPR_CheckerTimeout(t *testing.T) {
 	})
 }
 
-//nolint:paralleltest // synctest bubbles cannot run in parallel
-func TestDetector_VanishedPR_CheckerBoundedParallelism(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var (
-			active         atomic.Int32
-			maxConcurrency atomic.Int32
-		)
-
-		checker := func(_ context.Context, _ string, _ int) (notify.PRState, error) {
-			cur := active.Add(1)
-			for {
-				old := maxConcurrency.Load()
-				if cur <= old || maxConcurrency.CompareAndSwap(old, cur) {
-					break
-				}
+// All PRs that vanished in one poll are looked up in a single batched call.
+// perPR adapts a one-PR-at-a-time state function into a batched checker.
+func perPR(fn func(ctx context.Context, repo string, number int) (notify.PRState, error)) notify.PRStatusChecker {
+	return func(ctx context.Context, keys []model.PRKey) (map[model.PRKey]notify.PRState, error) {
+		out := make(map[model.PRKey]notify.PRState, len(keys))
+		for _, k := range keys {
+			state, err := fn(ctx, k.Repo, k.Number)
+			if err != nil {
+				return nil, err
 			}
-			time.Sleep(30 * time.Millisecond)
-			active.Add(-1)
-			return notify.PRStateMerged, nil
+			out[k] = state
 		}
+		return out, nil
+	}
+}
 
-		const parallelism = 2
-		d := notify.NewDetector(
-			checker,
-			notify.WithCheckerParallelism(parallelism),
-			notify.WithCheckerTimeout(2*time.Second),
-		)
+func TestDetector_VanishedPRs_OneBatchedLookup(t *testing.T) {
+	t.Parallel()
 
-		var prev []model.PullRequest
-		for i := 1; i <= 6; i++ {
-			prev = append(prev, makeBasePR(i, "PR"))
+	var calls [][]model.PRKey
+	checker := func(_ context.Context, keys []model.PRKey) (map[model.PRKey]notify.PRState, error) {
+		calls = append(calls, keys)
+		out := make(map[model.PRKey]notify.PRState, len(keys))
+		for _, k := range keys {
+			out[k] = notify.PRStateMerged
 		}
+		return out, nil
+	}
+	d := notify.NewDetector(checker)
 
-		notes, err := d.DetectChanges(context.Background(), obs(prev...), nil)
-		require.NoError(t, err)
-		assert.Len(t, notes, 6)
-		assert.Equal(
-			t,
-			int32(parallelism),
-			maxConcurrency.Load(),
-			"concurrency must reach and be bounded by configured parallelism",
-		)
-	})
+	var prev []model.PullRequest
+	for i := 1; i <= 6; i++ {
+		prev = append(prev, makeBasePR(i, "PR"))
+	}
+
+	notes, err := d.DetectChanges(context.Background(), obs(prev...), nil)
+	require.NoError(t, err)
+	assert.Len(t, notes, 6)
+	require.Len(t, calls, 1, "vanished PRs must share one lookup")
+	assert.Len(t, calls[0], 6)
+}
+
+// A PR missing from a successful lookup (deleted, access lost) produces no
+// notification and is not retried on later polls.
+func TestDetector_VanishedPR_MissingFromLookupNotRetried(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	checker := func(_ context.Context, _ []model.PRKey) (map[model.PRKey]notify.PRState, error) {
+		calls++
+		return map[model.PRKey]notify.PRState{}, nil
+	}
+	d := notify.NewDetector(checker)
+
+	pr := makeBasePR(1, "Gone")
+	notes, err := d.DetectChanges(context.Background(), obs(pr), nil)
+	require.NoError(t, err)
+	assert.Empty(t, notes)
+
+	notes, err = d.DetectChanges(context.Background(), nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, notes)
+	assert.Equal(t, 1, calls, "an unknown PR must not be looked up again")
 }
 
 func TestDetector_NotificationsHaveSubmittedAt(t *testing.T) {
@@ -746,7 +765,7 @@ func TestDetector_NotificationsHaveSubmittedAt(t *testing.T) {
 	checker := func(_ context.Context, _ string, _ int) (notify.PRState, error) {
 		return notify.PRStateMerged, nil
 	}
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(perPR(checker))
 
 	tBefore := time.Now().Add(-time.Second)
 

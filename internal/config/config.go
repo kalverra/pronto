@@ -51,6 +51,8 @@ type NotificationConfig struct {
 // ServerConfig specifies configuration for the daemon socket API.
 type ServerConfig struct {
 	PollInterval      string `json:"poll_interval"       mapstructure:"poll_interval"       toml:"poll_interval"`
+	HotInterval       string `json:"hot_interval"        mapstructure:"hot_interval"        toml:"hot_interval"`
+	IdleInterval      string `json:"idle_interval"       mapstructure:"idle_interval"       toml:"idle_interval"`
 	PProfAddr         string `json:"pprof_addr"          mapstructure:"pprof_addr"          toml:"pprof_addr"`
 	LeakCheckInterval string `json:"leak_check_interval" mapstructure:"leak_check_interval" toml:"leak_check_interval"`
 }
@@ -142,9 +144,19 @@ func (c *Config) Validate() error {
 	if err := c.Priority.Validate(); err != nil {
 		return fmt.Errorf("priority: %w", err)
 	}
-	if c.Server.PollInterval != "" {
-		if _, err := time.ParseDuration(c.Server.PollInterval); err != nil {
-			return fmt.Errorf("invalid server.poll_interval %q: %w", c.Server.PollInterval, err)
+	for _, kv := range [][2]string{
+		{"server.poll_interval", c.Server.PollInterval},
+		{"server.hot_interval", c.Server.HotInterval},
+		{"server.idle_interval", c.Server.IdleInterval},
+	} {
+		key, v := kv[0], kv[1]
+		if v == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(v); err != nil {
+			return fmt.Errorf("invalid %s %q: %w", key, v, err)
+		} else if d <= 0 {
+			return fmt.Errorf("invalid %s %q: must be positive", key, v)
 		}
 	}
 	if c.Server.LeakCheckInterval != "" {

@@ -83,13 +83,15 @@ func TestFetch_PrimaryRateLimitBacksOffUntilObservedReset(t *testing.T) {
 
 	// Every subsequent discovery query is rejected with the primary limit 403.
 	fake.discoveryFailPrimaryLimit.Store(true)
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.ErrorIs(t, err, source.ErrPrimaryRateLimit)
+	assert.True(t, base.Add(2*time.Minute).Equal(src.NextFetch()),
+		"a paced poller must sleep until the observed reset")
 
 	// While backed off, Fetch short-circuits without any network activity.
 	discoveryCalls := fake.discoveryCalls.Load()
 	loginCalls := fake.loginCalls.Load()
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.ErrorIs(t, err, source.ErrPrimaryRateLimit)
 	assert.Equal(t, discoveryCalls, fake.discoveryCalls.Load(),
 		"backed-off fetch must not issue discovery queries")
@@ -99,7 +101,7 @@ func TestFetch_PrimaryRateLimitBacksOffUntilObservedReset(t *testing.T) {
 	// Once the observed reset time passes, fetching resumes.
 	now = base.Add(2*time.Minute + time.Second)
 	fake.discoveryFailPrimaryLimit.Store(false)
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.NoError(t, err)
 }
 

@@ -11,7 +11,6 @@ import (
 	"github.com/kalverra/pronto/internal/cache"
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/daemon"
-	"github.com/kalverra/pronto/internal/notify"
 	"github.com/kalverra/pronto/internal/profiling"
 	"github.com/kalverra/pronto/internal/source"
 )
@@ -19,11 +18,16 @@ import (
 // resolveServeSource returns the fetch source for the serve command: an
 // injected source when present (tests), otherwise a direct GraphQL source.
 // serve never proxies another daemon — a second serve must fail the bind.
-func resolveServeSource(src source.Source, debug bool, logger zerolog.Logger) (source.Source, cache.Store, error) {
+func resolveServeSource(
+	src source.Source,
+	debug bool,
+	logger zerolog.Logger,
+	pacing []source.GraphQLSourceOption,
+) (source.Source, cache.Store, error) {
 	if src != nil {
 		return src, nil, nil
 	}
-	return defaultSource(debug, logger)
+	return defaultSource(debug, pacing, logger)
 }
 
 func newServeCmd(src source.Source) *cobra.Command {
@@ -41,10 +45,6 @@ func newServeCmd(src source.Source) *cobra.Command {
 				defer func() { _ = closer.Close() }()
 			}
 
-			s, store, err := resolveServeSource(src, debug, logger)
-			if err != nil {
-				return err
-			}
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
@@ -81,6 +81,11 @@ func newServeCmd(src source.Source) *cobra.Command {
 				)
 			}
 
+			s, store, err := resolveServeSource(src, debug, logger, pacingOptions(cfg.Server, pollInterval))
+			if err != nil {
+				return err
+			}
+
 			leakInterval := daemon.DefaultLeakCheckInterval
 			if cfg.Server.LeakCheckInterval != "" {
 				parsed, err := time.ParseDuration(cfg.Server.LeakCheckInterval)
@@ -105,7 +110,7 @@ func newServeCmd(src source.Source) *cobra.Command {
 			d := daemon.New(daemon.Options{
 				Source:             s,
 				Store:              store,
-				Checker:            notify.DefaultPRStatusChecker,
+				Checker:            stateChecker(s),
 				Interval:           pollInterval,
 				LeakCheckInterval:  leakInterval,
 				LeakChecker:        profiling.RuntimeLeakChecker{},
@@ -120,6 +125,9 @@ func newServeCmd(src source.Source) *cobra.Command {
 			return d.Run(cmd.Context())
 		},
 	}
-	serveCmd.Flags().StringVar(&interval, "interval", "", "Poll interval, e.g. 30s (overrides server.poll_interval)")
+	serveCmd.Flags().StringVar(
+		&interval, "interval", "",
+		"Base discovery interval, e.g. 30s (overrides server.poll_interval)",
+	)
 	return serveCmd
 }

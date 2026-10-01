@@ -92,6 +92,7 @@ type prSpec struct {
 	stackSize              int
 	stackPos               int
 	stackBase              string
+	rollupState            string // head rollup state when checks exist; default SUCCESS
 }
 
 func (s prSpec) lightJSON() string {
@@ -118,8 +119,27 @@ func (s prSpec) lightJSON() string {
 	return fmt.Sprintf(`{
 		"id": %q, "number": %d, "title": %q, "url": "https://github.com/%s/pull/%d",
 		"isDraft": %t, "updatedAt": %q, "headRefOid": %q,
-		"author": {"login": %q}, "repository": {"nameWithOwner": %q}%s
-	}`, id, s.num, s.title, s.repo, s.num, s.isDraft, updatedAt, s.oid, s.author, s.repo, stackJSON)
+		"author": {"login": %q}, "repository": {"nameWithOwner": %q}%s,
+		"fpMergeable": %q, "fpMergeStateStatus": %q,
+		"fpLastCommit": {"nodes": [{"commit": {"statusCheckRollup": %s}}]}
+	}`, id, s.num, s.title, s.repo, s.num, s.isDraft, updatedAt, s.oid, s.author, s.repo, stackJSON,
+		s.mergeable, s.mergeState, s.rollupJSON())
+}
+
+// rollupJSON is the head commit's rollup state as both fetch phases report
+// it: SUCCESS whenever any check exists, null otherwise.
+func (s prSpec) rollupJSON() string {
+	if len(s.checkContexts) == 0 {
+		return "null"
+	}
+	return fmt.Sprintf(`{"state": %q}`, s.rollup())
+}
+
+func (s prSpec) rollup() string {
+	if s.rollupState == "" {
+		return "SUCCESS"
+	}
+	return s.rollupState
 }
 
 func (s prSpec) hydrateJSON() string {
@@ -212,9 +232,9 @@ func (s prSpec) hydrateJSON() string {
 		rollupJSON := "null"
 		if len(s.checkContexts) > 0 {
 			rollupJSON = fmt.Sprintf(`{
-				"state": "SUCCESS",
+				"state": %q,
 				"contexts": {"nodes": [%s]}
-			}`, strings.Join(checkNodes, ","))
+			}`, s.rollup(), strings.Join(checkNodes, ","))
 		}
 		commitNodeJSON := `"statusCheckRollup": ` + rollupJSON
 		if s.lastCommit != nil {
@@ -285,6 +305,8 @@ type fakeGitHub struct {
 	maxHydrateInFlight   atomic.Int32
 	orgsHasNextPage      bool
 	teamsHasNextPage     map[string]bool
+	statesCalls          atomic.Int32
+	prStates             map[string]string // "owner/name#num" → PR state
 	inFlight             atomic.Int32
 	maxInFlight          atomic.Int32
 	mu                   sync.Mutex
@@ -326,7 +348,11 @@ func (f *fakeGitHub) handler() http.Handler {
 		case strings.Contains(req.Query, "ViewerTeams"):
 			f.handleTeams(w)
 		case strings.Contains(req.Query, "SearchDiscovery"):
+			f.handleCombinedDiscovery(r.Context(), w, req.Query, req.Variables)
+		case strings.Contains(req.Query, "SearchPage"):
 			f.handleDiscovery(r.Context(), w, req.Query, req.Variables)
+		case strings.Contains(req.Query, "PullRequestStates"):
+			f.handleStates(w, req.Query, req.Variables)
 		case strings.Contains(req.Query, "Hydrate"):
 			f.handleHydrate(r.Context(), w, req.Query, req.Variables)
 		default:
@@ -368,7 +394,12 @@ func (f *fakeGitHub) handleTeams(w http.ResponseWriter) {
 	)
 }
 
-func (f *fakeGitHub) handleDiscovery(ctx context.Context, w http.ResponseWriter, query string, vars map[string]any) {
+// discoveryAliases are the search aliases of the combined discovery query.
+var discoveryAliases = []string{"authored", "requested", "assigned", "direct"}
+
+// beginDiscovery records one discovery request and applies the configured
+// delay; it reports false when ctx ended first.
+func (f *fakeGitHub) beginDiscovery(ctx context.Context, query string, vars map[string]any) (func(), bool) {
 	f.discoveryCalls.Add(1)
 	cur := f.discoveryInFlight.Add(1)
 	for {
@@ -377,13 +408,13 @@ func (f *fakeGitHub) handleDiscovery(ctx context.Context, w http.ResponseWriter,
 			break
 		}
 	}
-	defer f.discoveryInFlight.Add(-1)
+	done := func() { f.discoveryInFlight.Add(-1) }
 
 	if f.discoveryDelay > 0 {
 		select {
 		case <-time.After(f.discoveryDelay):
 		case <-ctx.Done():
-			return
+			return done, false
 		}
 	}
 
@@ -391,37 +422,92 @@ func (f *fakeGitHub) handleDiscovery(ctx context.Context, w http.ResponseWriter,
 	f.discoveryQuery = query
 	f.discoveryVars = append(f.discoveryVars, vars)
 	f.mu.Unlock()
+	return done, true
+}
 
-	qVar, _ := vars["query"].(string)
-	if err := matchErr(f.searchErrs, qVar); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+// searchQueries returns every search string a discovery request carries.
+func searchQueries(vars map[string]any) []string {
+	var out []string
+	if q, ok := vars["query"].(string); ok {
+		out = append(out, q)
 	}
+	for _, alias := range discoveryAliases {
+		if q, ok := vars[alias].(string); ok {
+			out = append(out, q)
+		}
+	}
+	return out
+}
 
+func (f *fakeGitHub) rateLimitJSON() string {
+	remaining, resetAt := f.rateLimit()
+	return fmt.Sprintf(`{"cost":1,"limit":5000,"remaining":%d,"resetAt":%q}`, remaining, resetAt)
+}
+
+// searchPageJSON renders page of a configured search as a connection.
+func searchPageJSON(pages []discoveryPage, page int) string {
+	if page >= len(pages) {
+		return `{"issueCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}`
+	}
+	p := pages[page]
+	cursor := "null"
+	if p.hasNextPage {
+		cursor = fmt.Sprintf(`"c%d"`, page)
+	}
+	return fmt.Sprintf(
+		`{"issueCount":%d,"pageInfo":{"hasNextPage":%t,"endCursor":%s},"nodes":[%s]}`,
+		p.issueCount, p.hasNextPage, cursor, p.nodes,
+	)
+}
+
+// discoveryFailure writes an injected discovery failure, if one applies.
+func (f *fakeGitHub) discoveryFailure(w http.ResponseWriter, vars map[string]any) bool {
+	for _, q := range searchQueries(vars) {
+		if err := matchErr(f.searchErrs, q); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return true
+		}
+	}
 	if f.discoveryFailPrimaryLimit.Load() {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = fmt.Fprint(w, `{"message":"API rate limit already exceeded for user ID 10038988."}`)
-		return
+		return true
 	}
+	return false
+}
 
-	pages := matchSearch(f.searches, qVar)
-	rateLimitJSON := ""
-	if strings.Contains(query, "rateLimit") {
-		remaining, resetAt := f.rateLimit()
-		rateLimitJSON = fmt.Sprintf(
-			`,"rateLimit":{"cost":1,"limit":5000,"remaining":%d,"resetAt":%q}`,
-			remaining,
-			resetAt,
-		)
-	}
-	if pages == nil {
-		_, _ = fmt.Fprintf(
-			w,
-			`{"data":{"search":{"issueCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}%s}}`,
-			rateLimitJSON,
-		)
+// handleCombinedDiscovery serves the first page of every aliased search.
+func (f *fakeGitHub) handleCombinedDiscovery(
+	ctx context.Context,
+	w http.ResponseWriter,
+	query string,
+	vars map[string]any,
+) {
+	done, ok := f.beginDiscovery(ctx, query, vars)
+	defer done()
+	if !ok || f.discoveryFailure(w, vars) {
 		return
 	}
+	data := map[string]any{}
+	for _, alias := range discoveryAliases {
+		q, _ := vars[alias].(string)
+		data[alias] = json.RawMessage(searchPageJSON(matchSearch(f.searches, q), 0))
+	}
+	if strings.Contains(query, "rateLimit") {
+		data["rateLimit"] = json.RawMessage(f.rateLimitJSON())
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+}
+
+// handleDiscovery serves one page of a single search (pages past the first,
+// or the per-search fallback).
+func (f *fakeGitHub) handleDiscovery(ctx context.Context, w http.ResponseWriter, query string, vars map[string]any) {
+	done, ok := f.beginDiscovery(ctx, query, vars)
+	defer done()
+	if !ok || f.discoveryFailure(w, vars) {
+		return
+	}
+	qVar, _ := vars["query"].(string)
 	page := 0
 	if cursor, ok := vars["cursor"].(string); ok && cursor != "" {
 		if _, err := fmt.Sscanf(cursor, "c%d", &page); err != nil {
@@ -429,28 +515,66 @@ func (f *fakeGitHub) handleDiscovery(ctx context.Context, w http.ResponseWriter,
 		}
 		page++
 	}
-	if page >= len(pages) {
-		_, _ = fmt.Fprintf(
-			w,
-			`{"data":{"search":{"issueCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}%s}}`,
-			rateLimitJSON,
-		)
-		return
+	data := map[string]any{
+		"search": json.RawMessage(searchPageJSON(matchSearch(f.searches, qVar), page)),
 	}
-	p := pages[page]
-	cursor := "null"
-	if p.hasNextPage {
-		cursor = fmt.Sprintf(`"c%d"`, page)
+	if strings.Contains(query, "rateLimit") {
+		data["rateLimit"] = json.RawMessage(f.rateLimitJSON())
 	}
-	_, _ = fmt.Fprintf(
-		w,
-		`{"data":{"search":{"issueCount":%d,"pageInfo":{"hasNextPage":%t,"endCursor":%s},"nodes":[%s]}%s}}`,
-		p.issueCount,
-		p.hasNextPage,
-		cursor,
-		p.nodes,
-		rateLimitJSON,
-	)
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+}
+
+// lightNode returns the discovery node for id from the configured searches,
+// so hydrate responses carry identity fields as GitHub's do.
+func (f *fakeGitHub) lightNode(id string) map[string]json.RawMessage {
+	for _, pages := range f.searches {
+		for _, p := range pages {
+			var nodes []map[string]json.RawMessage
+			if err := json.Unmarshal([]byte("["+p.nodes+"]"), &nodes); err != nil {
+				panic(err)
+			}
+			for _, n := range nodes {
+				var nodeID string
+				_ = json.Unmarshal(n["id"], &nodeID)
+				if nodeID == id {
+					return n
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// handleStates serves aliased repository.pullRequest.state lookups from
+// closedStates, defaulting to OPEN for known PRs and null otherwise.
+func (f *fakeGitHub) handleStates(w http.ResponseWriter, query string, vars map[string]any) {
+	f.statesCalls.Add(1)
+	data := map[string]any{}
+	for i := 0; ; i++ {
+		owner, ok := vars[fmt.Sprintf("o%d", i)].(string)
+		if !ok {
+			break
+		}
+		name, _ := vars[fmt.Sprintf("n%d", i)].(string)
+		num, _ := vars[fmt.Sprintf("p%d", i)].(float64)
+		key := fmt.Sprintf("%s/%s#%d", owner, name, int(num))
+		state, known := f.prStates[key]
+		if !known {
+			if _, exists := f.prForID(key); exists {
+				state, known = "OPEN", true
+			}
+		}
+		alias := fmt.Sprintf("r%d", i)
+		if !known {
+			data[alias] = nil
+			continue
+		}
+		data[alias] = map[string]any{"pullRequest": map[string]any{"state": state}}
+	}
+	if strings.Contains(query, "rateLimit") {
+		data["rateLimit"] = json.RawMessage(f.rateLimitJSON())
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 }
 
 func (f *fakeGitHub) handleHydrate(ctx context.Context, w http.ResponseWriter, query string, vars map[string]any) {
@@ -542,7 +666,16 @@ func (f *fakeGitHub) handleHydrate(ctx context.Context, w http.ResponseWriter, q
 			nodes[i] = nil
 			continue
 		}
-		nodes[i] = json.RawMessage(node)
+		var merged map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(node), &merged); err != nil {
+			panic(err)
+		}
+		for k, v := range f.lightNode(id) {
+			if _, ok := merged[k]; !ok {
+				merged[k] = v
+			}
+		}
+		nodes[i] = merged
 	}
 	resp := map[string]any{
 		"nodes": nodes,
@@ -756,6 +889,32 @@ func (f *fakeStore) hasPR(repo string, num int) bool {
 }
 
 // --- tests -----------------------------------------------------------------
+
+// forced returns a context for a user-initiated Fetch: discovery runs and hot
+// PRs re-hydrate regardless of pacing.
+func forced() context.Context {
+	return source.WithForceRefresh(context.Background())
+}
+
+// testClock is a manually advanced clock shared with a source via WithClock.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newTestClock() *testClock { return &testClock{now: time.Now()} }
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
 
 func discoverPRs(specs []prSpec) []discoveryPage {
 	nodes := make([]string, 0, len(specs))
@@ -1203,6 +1362,7 @@ func TestFetch_UnsettledCacheHitStillSkipsStableFields(t *testing.T) {
 
 	spec := prSpec{
 		num: 7, title: "Cached PR", repo: "org/repo", author: "alice", oid: "oid7",
+		updatedAt: time.Now(),
 		additions: 10, deletions: 2, changedFiles: 1, files: []string{"main.go"},
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		checkContexts: []checkSpec{{name: "ci", status: "IN_PROGRESS"}},
@@ -1211,7 +1371,7 @@ func TestFetch_UnsettledCacheHitStillSkipsStableFields(t *testing.T) {
 		login: "kalverra",
 		searches: map[string][]discoveryPage{
 			"review-requested:@me": discoverPRs(
-				[]prSpec{{num: 7, title: "Cached PR", repo: "org/repo", author: "alice", oid: "oid7"}},
+				[]prSpec{spec},
 			),
 		},
 		prs: map[string]map[int]string{
@@ -1240,7 +1400,7 @@ func TestFetch_UnsettledCacheHitStillSkipsStableFields(t *testing.T) {
 		files: []string{"changed.go"}, mergeable: "MERGEABLE", mergeState: "CLEAN",
 	}.hydrateJSON()
 
-	queue, err = src.Fetch(context.Background())
+	queue, err = src.Fetch(forced())
 	require.NoError(t, err)
 	require.Len(t, queue.Inbox, 1)
 	assert.Equal(t, 10, queue.Inbox[0].Additions, "stable fields must come from cache")
@@ -1484,7 +1644,9 @@ func TestFetch_CallerDeadlineGovernsFetch(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "caller deadline must cap the fetch below the default")
 }
 
-func TestFetch_DiscoveryIssuesExactlyFourSearches(t *testing.T) {
+// Discovery runs every search in one combined request, regardless of team
+// count, so a poll costs one round trip before hydration.
+func TestFetch_DiscoveryIsOneCombinedRequest(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeGitHub{
@@ -1500,12 +1662,38 @@ func TestFetch_DiscoveryIssuesExactlyFourSearches(t *testing.T) {
 	_, err := src.Fetch(context.Background())
 	require.NoError(t, err)
 
-	assert.Equal(
-		t,
-		int32(4),
-		fake.discoveryCalls.Load(),
-		"must issue exactly 4 discovery searches regardless of team count",
-	)
+	assert.Equal(t, int32(1), fake.discoveryCalls.Load(), "must issue exactly 1 discovery request")
+	require.Len(t, fake.discoveryVars, 1)
+	assert.ElementsMatch(t, []string{
+		"is:open is:pr author:@me archived:false",
+		"is:open is:pr review-requested:@me archived:false",
+		"is:open is:pr assignee:@me archived:false",
+		"is:open is:pr user-review-requested:@me archived:false",
+	}, searchQueries(fake.discoveryVars[0]))
+}
+
+// A combined discovery that fails outright falls back to one request per
+// search, so a failing non-primary search only costs its own results.
+func TestFetch_DiscoveryFallsBackPerSearch(t *testing.T) {
+	t.Parallel()
+
+	spec := prSpec{num: 1, title: "PR", repo: "org/repo", author: "alice", oid: "oid1"}
+	fake := &fakeGitHub{
+		login: "kalverra",
+		searches: map[string][]discoveryPage{
+			"review-requested:@me": discoverPRs([]prSpec{spec}),
+		},
+		searchErrs: map[string]error{"assignee:@me": errors.New("boom")},
+		prs:        map[string]map[int]string{"org/repo": {1: spec.hydrateJSON()}},
+	}
+
+	client := newTestGraphQLClient(t, fake.handler())
+	src := source.NewGraphQLSource(client, source.WithLogger(discardLogger()))
+
+	queue, err := src.Fetch(context.Background())
+	require.NoError(t, err)
+	require.Len(t, queue.Inbox, 1)
+	assert.Equal(t, int32(5), fake.discoveryCalls.Load(), "1 combined + 4 per-search requests")
 }
 
 func TestFetch_DoesNotIssueTeamReviewRequestedQuery(t *testing.T) {
@@ -1595,12 +1783,26 @@ func TestFetch_DiscoveryUsesMaxPageSize(t *testing.T) {
 func TestFetch_DiscoveryRespectsConcurrencyLimit(t *testing.T) {
 	t.Parallel()
 
+	// Every search has a second page, so four follow-up requests compete
+	// for the concurrency limit after the combined first page.
+	twoPages := func(spec prSpec) []discoveryPage {
+		return []discoveryPage{
+			{nodes: spec.lightJSON(), issueCount: 2, hasNextPage: true},
+			{nodes: spec.lightJSON(), issueCount: 2},
+		}
+	}
+	spec := prSpec{num: 1, title: "PR", repo: "org/repo", author: "alice", oid: "oid1"}
 	fake := &fakeGitHub{
 		login:          "kalverra",
 		orgTeams:       map[string][]string{},
 		discoveryDelay: 50 * time.Millisecond,
-		searches:       map[string][]discoveryPage{},
-		prs:            map[string]map[int]string{},
+		searches: map[string][]discoveryPage{
+			"author:@me":                twoPages(spec),
+			"review-requested:@me":      twoPages(spec),
+			"assignee:@me":              twoPages(spec),
+			"user-review-requested:@me": twoPages(spec),
+		},
+		prs: map[string]map[int]string{"org/repo": {1: spec.hydrateJSON()}},
 	}
 
 	client := newTestGraphQLClient(t, fake.handler())
@@ -1613,6 +1815,7 @@ func TestFetch_DiscoveryRespectsConcurrencyLimit(t *testing.T) {
 	_, err := src.Fetch(context.Background())
 	require.NoError(t, err)
 
+	assert.Equal(t, int32(5), fake.discoveryCalls.Load(), "1 combined + 4 follow-up pages")
 	assert.Equal(
 		t,
 		int32(2),
@@ -2292,7 +2495,7 @@ func TestFetch_RehydratesWhenUpdatedAtChanges(t *testing.T) {
 	spec2.updatedAt = now.Add(1 * time.Hour)
 	fake.searches["review-requested:@me"] = discoverPRs([]prSpec{spec2})
 
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fake.hydrateCalls.Load(), "updatedAt change must trigger rehydration")
 }
@@ -2302,6 +2505,7 @@ func TestFetch_RehydratesWhenChecksStillRunning(t *testing.T) {
 
 	spec := prSpec{
 		num: 1, title: "PR 1", repo: "org/repo", author: "alice", oid: "oid1",
+		updatedAt: time.Now(),
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		checkContexts: []checkSpec{{name: "ci", status: "IN_PROGRESS"}},
 	}
@@ -2324,7 +2528,7 @@ func TestFetch_RehydratesWhenChecksStillRunning(t *testing.T) {
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
 	// Second fetch: running checks must trigger rehydration
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fake.hydrateCalls.Load(), "running checks must trigger rehydration")
 }
@@ -2334,6 +2538,7 @@ func TestFetch_RehydratesWhenRequiredChecksHaveNotAppeared(t *testing.T) {
 
 	spec := prSpec{
 		num: 1, title: "PR 1", repo: "org/repo", author: "alice", oid: "oid1",
+		updatedAt: time.Now(),
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		requiredContexts: []string{"ci/build", "ci/lint"},
 		checkContexts: []checkSpec{
@@ -2359,7 +2564,7 @@ func TestFetch_RehydratesWhenRequiredChecksHaveNotAppeared(t *testing.T) {
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
 	// Second fetch: required check not in rollup must trigger rehydration
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.NoError(t, err)
 	assert.Equal(
 		t,
@@ -2374,6 +2579,7 @@ func TestFetch_RehydratesWhenMergeableUnknown(t *testing.T) {
 
 	spec := prSpec{
 		num: 1, title: "PR 1", repo: "org/repo", author: "alice", oid: "oid1",
+		updatedAt: time.Now(),
 		mergeable: "UNKNOWN", mergeState: "UNKNOWN",
 		checkContexts: []checkSpec{{name: "ci", status: "COMPLETED", conclusion: "SUCCESS"}},
 	}
@@ -2396,17 +2602,19 @@ func TestFetch_RehydratesWhenMergeableUnknown(t *testing.T) {
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
 	// Second fetch: UNKNOWN mergeable must trigger rehydration
-	_, err = src.Fetch(context.Background())
+	_, err = src.Fetch(forced())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fake.hydrateCalls.Load(), "UNKNOWN mergeable must trigger rehydration")
 }
 
+// A quiet PR (no activity for a day, not stale) is re-hydrated once the max
+// reuse age passes even when its fingerprint never moves.
 func TestFetch_RehydratesAfterMaxReuseAge(t *testing.T) {
 	t.Parallel()
 
 	spec := prSpec{
-		num: 1, title: "PR 1", repo: "org/repo", author: "alice", oid: "oid1",
-		updatedAt: time.Now(),
+		num: 1, title: "Quiet PR", repo: "org/repo", author: "alice", oid: "oid1",
+		updatedAt: time.Now().Add(-48 * time.Hour),
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		checkContexts: []checkSpec{{name: "ci", status: "COMPLETED", conclusion: "SUCCESS"}},
 	}
@@ -2420,12 +2628,14 @@ func TestFetch_RehydratesAfterMaxReuseAge(t *testing.T) {
 		},
 	}
 
+	clk := newTestClock()
 	store := newFakeStore()
 	client := newTestGraphQLClient(t, fake.handler())
 	src := source.NewGraphQLSource(
 		client,
 		source.WithLogger(discardLogger()),
 		source.WithCache(store),
+		source.WithClock(clk.Now),
 		source.WithMaxReuseAge(10*time.Minute),
 	)
 
@@ -2433,11 +2643,7 @@ func TestFetch_RehydratesAfterMaxReuseAge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
-	// Backdate savedAt in cache past max reuse age
-	store.mu.Lock()
-	store.prsAt["org/repo#1"] = time.Now().Add(-30 * time.Minute)
-	store.mu.Unlock()
-
+	clk.Advance(30 * time.Minute)
 	_, err = src.Fetch(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fake.hydrateCalls.Load(), "expired max reuse age must trigger rehydration")
@@ -2491,11 +2697,11 @@ func TestFetch_ReusedPRAdoptsCurrentDiscoveryFlags(t *testing.T) {
 	assert.Nil(t, q1.Authored[0].Stack)
 
 	// Second fetch:
-	// authoredSpec updates title, isDraft=true, and gains stack in discovery.
+	// authoredSpec updates title and gains stack in discovery (neither is
+	// part of the change fingerprint).
 	// inboxSpec is found by assignee:@me in addition to review-requested.
 	updatedAuthored := authoredSpec
 	updatedAuthored.title = "New Discovery Title"
-	updatedAuthored.isDraft = true
 	updatedAuthored.stackID = "PRS_123"
 	updatedAuthored.stackNum = 5
 	updatedAuthored.stackSize = 3
@@ -2509,13 +2715,12 @@ func TestFetch_ReusedPRAdoptsCurrentDiscoveryFlags(t *testing.T) {
 		"user-review-requested:@me": discoverPRs([]prSpec{inboxSpec}),
 	}
 
-	q2, err := src.Fetch(context.Background())
+	q2, err := src.Fetch(forced())
 	require.NoError(t, err)
 	require.Len(t, q2.Authored, 1)
 	require.Len(t, q2.Inbox, 1)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load(), "PRs must be reused without hydration")
 	assert.Equal(t, "New Discovery Title", q2.Authored[0].Title, "Title must be overlaid from discovery")
-	assert.True(t, q2.Authored[0].IsDraft, "IsDraft must be overlaid from discovery")
 	assert.Equal(t, 42, q2.Authored[0].Additions, "hydrated fields like Additions must come from cache")
 	require.NotNil(t, q2.Authored[0].Stack, "Stack must be overlaid from discovery")
 	assert.Equal(t, "PRS_123", q2.Authored[0].Stack.ID)
@@ -2530,7 +2735,6 @@ func TestFetch_MaxReuseAgeIsStaggered(t *testing.T) {
 	t.Parallel()
 
 	const nPRs = 40
-	now := time.Now()
 	baseMaxAge := 10 * time.Minute
 
 	specs := make([]prSpec, nPRs)
@@ -2539,7 +2743,7 @@ func TestFetch_MaxReuseAgeIsStaggered(t *testing.T) {
 		specs[i] = prSpec{
 			num: i + 1, title: fmt.Sprintf("PR %d", i+1), repo: "org/repo",
 			author: "alice", oid: fmt.Sprintf("oid%d", i+1),
-			updatedAt: now,
+			updatedAt: time.Now().Add(-48 * time.Hour), // quiet tier
 			mergeable: "MERGEABLE", mergeState: "CLEAN",
 			checkContexts: []checkSpec{{name: "ci", status: "COMPLETED", conclusion: "SUCCESS"}},
 		}
@@ -2556,34 +2760,25 @@ func TestFetch_MaxReuseAgeIsStaggered(t *testing.T) {
 		},
 	}
 
-	store := newFakeStore()
+	clk := newTestClock()
 	client := newTestGraphQLClient(t, fake.handler())
 	src := source.NewGraphQLSource(
 		client,
 		source.WithLogger(discardLogger()),
-		source.WithCache(store),
+		source.WithClock(clk.Now),
 		source.WithMaxReuseAge(baseMaxAge),
 	)
 
 	_, err := src.Fetch(context.Background())
 	require.NoError(t, err)
-	initialHydrates := fake.hydrateCalls.Load()
-	require.Positive(t, initialHydrates)
+	require.Positive(t, fake.hydrateCalls.Load())
 
-	// Probe at 0.85x base max age
-	probeAge := time.Duration(float64(baseMaxAge) * 0.85)
-	store.mu.Lock()
-	for k := range store.prsAt {
-		store.prsAt[k] = time.Now().Add(-probeAge)
-	}
-	store.mu.Unlock()
-
-	fake.hydrateCalls.Store(0)
 	fake.mu.Lock()
-	fake.hydrateQueries = nil
 	fake.hydrateVars = nil
 	fake.mu.Unlock()
 
+	// Probe at 0.85x base max age.
+	clk.Advance(time.Duration(float64(baseMaxAge) * 0.85))
 	_, err = src.Fetch(context.Background())
 	require.NoError(t, err)
 
@@ -2600,10 +2795,6 @@ func TestFetch_MaxReuseAgeIsStaggered(t *testing.T) {
 	assert.Less(t, rehydratedCount, nPRs, "at 0.85x max age, some PRs with higher jittered TTL must still be reused")
 }
 
-// A secondary rate limit 403 is account-global, so bisecting a failed batch
-// only multiplies requests made while limited (GitHub's docs warn that
-// continuing to make requests while secondary-limited risks a ban). The fetch
-// must abort immediately instead.
 func TestFetch_SecondaryRateLimitDoesNotBisect(t *testing.T) {
 	t.Parallel()
 
@@ -2643,14 +2834,14 @@ func TestFetch_SecondaryRateLimitDoesNotBisect(t *testing.T) {
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load(), "secondary rate limit must abort, not bisect")
 }
 
-// A PR with no activity for over a month is cheap to keep serving from cache:
-// reuse must ignore the max reuse age entirely (the PR cannot have changed),
-// while touching the cache file so the retention prune does not force a rehydrate cycle.
+// A PR inactive past the stale cutoff is reused until its fingerprint moves,
+// however long ago it was hydrated; its cache file is touched (at most daily)
+// so retention pruning does not evict it.
 func TestFetch_StalePRReusedBeyondMaxReuseAge(t *testing.T) {
 	t.Parallel()
 
 	spec := prSpec{
-		num: 1, title: "Stale PR", repo: "org/repo", author: "alice", oid: "oid1",
+		num: 1, title: "Quiet PR", repo: "org/repo", author: "alice", oid: "oid1",
 		updatedAt: time.Now().Add(-40 * 24 * time.Hour),
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		checkContexts: []checkSpec{{name: "ci", status: "COMPLETED", conclusion: "SUCCESS"}},
@@ -2665,12 +2856,14 @@ func TestFetch_StalePRReusedBeyondMaxReuseAge(t *testing.T) {
 		},
 	}
 
+	clk := newTestClock()
 	store := newFakeStore()
 	client := newTestGraphQLClient(t, fake.handler())
 	src := source.NewGraphQLSource(
 		client,
 		source.WithLogger(discardLogger()),
 		source.WithCache(store),
+		source.WithClock(clk.Now),
 		source.WithMaxReuseAge(10*time.Minute),
 	)
 
@@ -2678,15 +2871,18 @@ func TestFetch_StalePRReusedBeyondMaxReuseAge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
-	// Backdate savedAt past max reuse age; the stale activity cutoff must win.
-	store.mu.Lock()
-	store.prsAt["org/repo#1"] = time.Now().Add(-30 * time.Minute)
-	store.mu.Unlock()
-
+	clk.Advance(30 * time.Minute)
 	q2, err := src.Fetch(context.Background())
 	require.NoError(t, err)
 	require.Len(t, q2.Inbox, 1)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load(), "stale PR must be reused beyond max reuse age")
+	assert.Equal(t, int32(0), store.touchCalls.Load(), "a freshly saved PR needs no touch")
+
+	clk.Advance(25 * time.Hour)
+	_, err = src.Fetch(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), fake.hydrateCalls.Load(), "stale PR must still be reused a day later")
+	assert.Equal(t, int32(1), store.touchCalls.Load(), "reused stale PR must be touched once a day")
 
 	store.mu.Lock()
 	resaves := 0
@@ -2697,7 +2893,6 @@ func TestFetch_StalePRReusedBeyondMaxReuseAge(t *testing.T) {
 	}
 	store.mu.Unlock()
 	assert.Equal(t, 1, resaves, "reused stale PR must not be re-saved")
-	assert.Equal(t, int32(1), store.touchCalls.Load(), "reused stale PR must be touched so prune does not evict it")
 }
 
 // The stale activity cutoff is configurable: with a cutoff longer than the
@@ -2721,12 +2916,14 @@ func TestFetch_StaleActivityCutoffConfigurable(t *testing.T) {
 		},
 	}
 
+	clk := newTestClock()
 	store := newFakeStore()
 	client := newTestGraphQLClient(t, fake.handler())
 	src := source.NewGraphQLSource(
 		client,
 		source.WithLogger(discardLogger()),
 		source.WithCache(store),
+		source.WithClock(clk.Now),
 		source.WithMaxReuseAge(10*time.Minute),
 		source.WithStaleActivityAfter(365*24*time.Hour),
 	)
@@ -2735,21 +2932,20 @@ func TestFetch_StaleActivityCutoffConfigurable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
-	store.mu.Lock()
-	store.prsAt["org/repo#1"] = time.Now().Add(-30 * time.Minute)
-	store.mu.Unlock()
-
+	clk.Advance(30 * time.Minute)
 	_, err = src.Fetch(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fake.hydrateCalls.Load(), "beyond the configured cutoff the max reuse age must apply")
 }
 
+// A PR seeded from the on-disk cache (a restart) and reused is touched, not
+// re-saved, so its recorded hydration time stays honest.
 func TestFetch_ReusedPRIsTouchedNotResaved(t *testing.T) {
 	t.Parallel()
 
 	spec := prSpec{
-		num: 1, title: "Active PR", repo: "org/repo", author: "alice", oid: "oid1",
-		updatedAt: time.Now().Add(-1 * time.Hour),
+		num: 1, title: "Quiet PR", repo: "org/repo", author: "alice", oid: "oid1",
+		updatedAt: time.Now().Add(-40 * 24 * time.Hour),
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		checkContexts: []checkSpec{{name: "ci", status: "COMPLETED", conclusion: "SUCCESS"}},
 	}
@@ -2763,57 +2959,57 @@ func TestFetch_ReusedPRIsTouchedNotResaved(t *testing.T) {
 		},
 	}
 
+	clk := newTestClock()
 	store := newFakeStore()
 	client := newTestGraphQLClient(t, fake.handler())
-	src := source.NewGraphQLSource(
-		client,
-		source.WithLogger(discardLogger()),
-		source.WithCache(store),
-	)
+	newSource := func() *source.GraphQLSource {
+		return source.NewGraphQLSource(
+			client,
+			source.WithLogger(discardLogger()),
+			source.WithCache(store),
+			source.WithClock(clk.Now),
+		)
+	}
 
-	// First fetch: cold miss -> SavePR called.
-	_, err := src.Fetch(context.Background())
+	// First process: cold miss -> SavePR called.
+	_, err := newSource().Fetch(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 	assert.Equal(t, int32(0), store.touchCalls.Load())
 
 	store.mu.Lock()
 	originalSavedAt := store.prsAt["org/repo#1"]
+	store.mu.Unlock()
+
+	// Second process: PR is seeded from cache and reused -> TouchPR called,
+	// SavePR NOT called, prsAt NOT changed.
+	_, err = newSource().Fetch(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), fake.hydrateCalls.Load(), "should be reused without re-hydrating")
+	assert.Equal(t, int32(1), store.touchCalls.Load(), "reused PR must be touched")
+
+	store.mu.Lock()
 	saveCount := 0
 	for _, s := range store.saves {
 		if s == "pr:org/repo#1" {
 			saveCount++
 		}
 	}
-	store.mu.Unlock()
-	require.Equal(t, 1, saveCount)
-
-	// Second fetch: PR is reused -> TouchPR called, SavePR NOT called, prsAt NOT changed.
-	_, err = src.Fetch(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, int32(1), fake.hydrateCalls.Load(), "should be reused without re-hydrating")
-	assert.Equal(t, int32(1), store.touchCalls.Load(), "reused PR must be touched")
-
-	store.mu.Lock()
-	newSaveCount := 0
-	for _, s := range store.saves {
-		if s == "pr:org/repo#1" {
-			newSaveCount++
-		}
-	}
 	currentSavedAt := store.prsAt["org/repo#1"]
 	store.mu.Unlock()
 
-	assert.Equal(t, 1, newSaveCount, "SavePR must not be called on reuse")
+	assert.Equal(t, 1, saveCount, "SavePR must not be called on reuse")
 	assert.Equal(t, originalSavedAt, currentSavedAt, "prsAt must not advance on reuse")
 }
 
+// Reuse polls do not extend a PR's freshness: the reuse age counts from the
+// last hydration, not the last time the PR was seen.
 func TestFetch_RehydratesAfterMaxReuseAgeAcrossReusePolls(t *testing.T) {
 	t.Parallel()
 
 	spec := prSpec{
-		num: 1, title: "Active PR", repo: "org/repo", author: "alice", oid: "oid1",
-		updatedAt: time.Now().Add(-1 * time.Hour), // not stale
+		num: 1, title: "Quiet PR", repo: "org/repo", author: "alice", oid: "oid1",
+		updatedAt: time.Now().Add(-48 * time.Hour),
 		mergeable: "MERGEABLE", mergeState: "CLEAN",
 		checkContexts: []checkSpec{{name: "ci", status: "COMPLETED", conclusion: "SUCCESS"}},
 	}
@@ -2827,12 +3023,14 @@ func TestFetch_RehydratesAfterMaxReuseAgeAcrossReusePolls(t *testing.T) {
 		},
 	}
 
+	clk := newTestClock()
 	store := newFakeStore()
 	client := newTestGraphQLClient(t, fake.handler())
 	src := source.NewGraphQLSource(
 		client,
 		source.WithLogger(discardLogger()),
 		source.WithCache(store),
+		source.WithClock(clk.Now),
 		source.WithMaxReuseAge(10*time.Minute),
 	)
 
@@ -2841,26 +3039,19 @@ func TestFetch_RehydratesAfterMaxReuseAgeAcrossReusePolls(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
-	// Poll 2: second fetch within maxReuseAge -> reused (call count = 1).
+	// Poll 2: next discovery, within maxReuseAge -> reused (call count = 1).
+	clk.Advance(source.DefaultDiscoveryInterval)
 	_, err = src.Fetch(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fake.hydrateCalls.Load())
 
-	// Simulate passage of time past max reuse age from Poll 1's hydration time.
-	// Since Poll 2 touched instead of re-saving, backdating savedAt simulates
-	// maxReuseAge expiry across reuse polls.
-	store.mu.Lock()
-	store.prsAt["org/repo#1"] = time.Now().Add(-15 * time.Minute)
-	store.mu.Unlock()
-
-	// Poll 3: SavedAt is now older than maxReuseAge -> Poll 3 MUST rehydrate (call count = 2).
+	// Poll 3: past maxReuseAge from Poll 1's hydration -> rehydrate.
+	clk.Advance(14 * time.Minute)
 	_, err = src.Fetch(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fake.hydrateCalls.Load(), "must rehydrate once maxReuseAge expires across reuse polls")
 }
 
-// Identity resolution and search discovery must run concurrently in one errgroup,
-// so identity resolution does not block discovery searches.
 func TestFetch_IdentityAndDiscoveryRunConcurrently(t *testing.T) {
 	t.Parallel()
 
@@ -3053,7 +3244,7 @@ func TestFetch_SecondaryRateLimitWithCachedPRsDegrades(t *testing.T) {
 	fake.hydrateFailCode.Store(http.StatusForbidden)
 	fake.hydrateFailSecondary.Store(true)
 
-	queue, err := src.Fetch(context.Background())
+	queue, err := src.Fetch(forced())
 	require.NoError(t, err, "fetch should return partial queue when cached PRs exist")
 	require.Len(t, queue.Inbox, 2)
 

@@ -124,6 +124,8 @@ func renderExampleTOML() string {
 
 	b.WriteString("[server]\n")
 	b.WriteString("# poll_interval = \"30s\"\n")
+	b.WriteString("# hot_interval = \"20s\"\n")
+	b.WriteString("# idle_interval = \"3m\"\n")
 	b.WriteString("pprof_addr = \"\"\n")
 	b.WriteString("leak_check_interval = \"1h\"\n")
 

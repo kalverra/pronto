@@ -38,6 +38,8 @@ func TestSpecs_DescribeEveryConfigKey(t *testing.T) {
 		"focus.authors":                   "PRONTO_FOCUS_AUTHORS",
 		"focus.repos":                     "PRONTO_FOCUS_REPOS",
 		"server.poll_interval":            "PRONTO_POLL_INTERVAL",
+		"server.hot_interval":             "PRONTO_HOT_INTERVAL",
+		"server.idle_interval":            "PRONTO_IDLE_INTERVAL",
 		"server.pprof_addr":               "PRONTO_PPROF_ADDR",
 		"server.leak_check_interval":      "PRONTO_LEAK_CHECK_INTERVAL",
 	}

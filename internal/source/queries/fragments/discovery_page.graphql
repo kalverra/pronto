@@ -1,0 +1,10 @@
+fragment DiscoveryPage on SearchResultItemConnection {
+  issueCount
+  pageInfo {
+    hasNextPage
+    endCursor
+  }
+  nodes {
+    ...DiscoveryFields
+  }
+}

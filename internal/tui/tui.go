@@ -619,7 +619,10 @@ func New(q model.Queue, opts ...Option) Model {
 				if m.viewer != "" {
 					dOpts = append(dOpts, notify.WithViewer(m.viewer))
 				}
-				m.detector = notify.NewDetector(notify.DefaultPRStatusChecker, dOpts...)
+				// Standalone (non-daemon) sources only: production always runs
+				// a daemon, which owns vanished-PR state lookups. Inject one with
+				// WithDetector to check merged/closed state here.
+				m.detector = notify.NewDetector(nil, dOpts...)
 			}
 			m.detector.Seed(m.observe(q))
 		}

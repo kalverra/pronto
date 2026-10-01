@@ -360,11 +360,22 @@ func TestDaemon_ReviewEventCarriesPayload(t *testing.T) {
 	assert.Equal(t, "APPROVED", payload.State)
 }
 
+// allPRs is a checker reporting state for every PR it is asked about.
+func allPRs(state notify.PRState) notify.PRStatusChecker {
+	return func(_ context.Context, keys []model.PRKey) (map[model.PRKey]notify.PRState, error) {
+		out := make(map[model.PRKey]notify.PRState, len(keys))
+		for _, k := range keys {
+			out[k] = state
+		}
+		return out, nil
+	}
+}
+
 func TestDaemon_MergedPRCheckerEmitsMergedWithoutRemoved(t *testing.T) {
 	t.Parallel()
 
 	a := pr(42, "Feature A", "kalverra/pronto")
-	checker := func(context.Context, string, int) (notify.PRState, error) { return notify.PRStateMerged, nil }
+	checker := allPRs(notify.PRStateMerged)
 
 	src := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{a}}},
@@ -387,7 +398,7 @@ func TestDaemon_UnmergedVanishedPREmitsRemoved(t *testing.T) {
 	t.Parallel()
 
 	a := pr(42, "Feature A", "kalverra/pronto")
-	checker := func(context.Context, string, int) (notify.PRState, error) { return notify.PRStateOpen, nil }
+	checker := allPRs(notify.PRStateOpen)
 
 	src := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra", Authored: []model.PullRequest{a}}},

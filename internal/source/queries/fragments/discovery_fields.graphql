@@ -1,5 +1,6 @@
 fragment DiscoveryFields on PullRequest {
   id
+  state
   isInMergeQueue
   number
   title
@@ -28,5 +29,20 @@ fragment DiscoveryFields on PullRequest {
   stackEntry {
     id
     position
+  }
+  # Change fingerprint: cheap signals that move without bumping updatedAt
+  # (CI finishing, base-branch conflicts). Aliased so they never collide with
+  # the full FreshFields when both fragments are spread on one node.
+  fpMergeable: mergeable
+  fpMergeStateStatus: mergeStateStatus
+  fpReviewDecision: reviewDecision
+  fpLastCommit: commits(last: 1) {
+    nodes {
+      commit {
+        statusCheckRollup {
+          state
+        }
+      }
+    }
   }
 }

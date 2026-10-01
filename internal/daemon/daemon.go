@@ -26,8 +26,13 @@ import (
 )
 
 // DefaultInterval is the background refresh cadence when Options.Interval is
-// unset.
-const DefaultInterval = 60 * time.Second
+// unset. A source.Pacer source paces itself instead; for one, Interval only
+// bounds each fetch.
+const DefaultInterval = source.DefaultDiscoveryInterval
+
+// minPacedWait floors the wait a Pacer asks for, so a deadline already in
+// the past cannot spin the loop.
+const minPacedWait = time.Second
 
 // MinInterval is the lowest poll interval the serve command accepts. Below
 // roughly 10s a poller exhausts GitHub's 5,000 points/hour GraphQL budget.
@@ -84,6 +89,7 @@ type Daemon struct {
 	ready    chan struct{}
 
 	mu           sync.Mutex
+	boosted      map[model.PRKey]bool // focused/priority PRs, from the last classify
 	queue        model.Queue
 	fetchedAt    time.Time
 	refreshing   bool
@@ -177,8 +183,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.refresh(ctx)
 
-	ticker := time.NewTicker(d.opts.Interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(d.nextWait())
+	defer timer.Stop()
 
 	// A nil leakC (when leak checks are disabled) blocks forever, which is
 	// exactly the desired behavior in the select below.
@@ -199,15 +205,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 				return nil
 			}
 			return err
-		case <-ticker.C:
+		case <-timer.C:
 			d.refresh(ctx)
+			timer.Reset(d.nextWait())
 		case <-leakC:
 			d.checkLeaks()
 		case <-d.kickCh:
-			ticker.Reset(d.opts.Interval)
-			d.refresh(ctx)
+			d.refresh(source.WithForceRefresh(ctx))
+			timer.Reset(d.nextWait())
 		}
 	}
+}
+
+// nextWait is how long to sleep before the next poll: until the source's
+// NextFetch when it paces itself, otherwise the fixed interval.
+func (d *Daemon) nextWait() time.Duration {
+	if p, ok := d.opts.Source.(source.Pacer); ok {
+		return max(time.Until(p.NextFetch()), minPacedWait)
+	}
+	return d.opts.Interval
 }
 
 func (d *Daemon) saveFinalSnapshot(ctx context.Context) {
@@ -384,6 +400,7 @@ func (d *Daemon) refresh(ctx context.Context) {
 	d.mu.Lock()
 	d.refreshing = true
 	isCold := !d.hadWarmCache && d.fetchedAt.IsZero()
+	boosted := d.boosted
 	d.mu.Unlock()
 
 	timeout := d.opts.Interval
@@ -391,7 +408,7 @@ func (d *Daemon) refresh(ctx context.Context) {
 		timeout = source.ColdFetchTimeout
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	fetchCtx, cancel := context.WithTimeout(source.WithBoosted(ctx, boosted), timeout)
 	progressCtx := source.WithProgress(fetchCtx, func(loaded, total int) {
 		d.bus.Emit(events.Event{
 			Type:    events.TypeFetchProgress,
@@ -427,13 +444,16 @@ func (d *Daemon) refresh(ctx context.Context) {
 	d.seeded = true
 	d.mu.Unlock()
 
+	currObs := d.observe(ctx, q)
+	d.mu.Lock()
+	d.boosted = boostedKeys(currObs)
+	d.mu.Unlock()
 	if !hadBaseline {
 		// First observed state is the baseline: seed the detector and
 		// emit no per-PR events.
-		d.detector.Seed(d.observe(ctx, q))
+		d.detector.Seed(currObs)
 	} else {
 		prevObs := d.observe(ctx, prevQueue)
-		currObs := d.observe(ctx, q)
 		merged := make(map[model.PRKey]bool)
 		if notes, derr := d.detector.DetectChanges(ctx, prevObs, currObs); derr != nil {
 			d.opts.Logger.Error().Err(derr).Msg("change detection failed")
@@ -469,6 +489,21 @@ func (d *Daemon) refresh(ctx context.Context) {
 			Inbox:    len(q.Inbox),
 		},
 	})
+}
+
+// boostedKeys returns the PRs in the Focus or Priority tab: the ones the
+// user watches most closely, which the source refreshes a tier sooner.
+func boostedKeys(obs []notify.Observed) map[model.PRKey]bool {
+	keys := make(map[model.PRKey]bool)
+	for _, o := range obs {
+		for _, sc := range o.Scopes {
+			if sc.Tab == notify.TabFocus || sc.Tab == notify.TabPriority {
+				keys[o.PR.Key()] = true
+				break
+			}
+		}
+	}
+	return keys
 }
 
 // noteKey identifies one notification within a poll.

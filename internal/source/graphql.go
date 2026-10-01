@@ -3,14 +3,15 @@ package source
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
-	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
@@ -36,13 +37,18 @@ const (
 	// hydrateBatchSize is capped at 10: each alias expands deep fragments
 	// (files, checks, timeline, reviews), and GitHub's GraphQL gateway 502s
 	// when a batched query grows too expensive (empirically fails at ~20).
-	hydrateBatchSize          = 10
+	hydrateBatchSize = 10
+	// discoveryLimit bounds concurrent searches when discovery pages past the
+	// first combined request or falls back to one request per search.
 	discoveryLimit            = 3
 	defaultHydrateConcurrency = 4
 	// primaryRateLimitFallback bounds the backoff when a primary rate limit
 	// rejection arrives before any successful response has reported the
 	// window's resetAt: one retry per minute until the deadline is learned.
 	primaryRateLimitFallback = time.Minute
+	// touchEvery throttles cache retention touches for reused PRs; far
+	// shorter than the retention window, far longer than a poll.
+	touchEvery = 24 * time.Hour
 )
 
 // GraphQLClient represents a client capable of executing GraphQL queries against GitHub.
@@ -67,7 +73,8 @@ func WithCache(store cache.Store) GraphQLSourceOption {
 	}
 }
 
-// WithDiscoveryConcurrency configures the concurrency limit for discovery searches.
+// WithDiscoveryConcurrency configures the concurrency limit for follow-up
+// discovery searches (pages past the first, or the per-search fallback).
 func WithDiscoveryConcurrency(n int) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if n > 0 {
@@ -109,7 +116,8 @@ func WithCacheRetention(d time.Duration) GraphQLSourceOption {
 	}
 }
 
-// WithMaxReuseAge configures the base TTL for reusing fully-hydrated cached PRs.
+// WithMaxReuseAge configures the base TTL for reusing a hydrated PR in the
+// quiet tier (no activity for a day, not yet stale).
 func WithMaxReuseAge(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
@@ -119,13 +127,43 @@ func WithMaxReuseAge(d time.Duration) GraphQLSourceOption {
 }
 
 // WithStaleActivityAfter configures the inactivity age beyond which a cached
-// PR is reused indefinitely, ignoring the max reuse age: a PR untouched for
-// this long cannot have changed, so rehydrating it wastes the most expensive
-// queries in the fetch.
+// PR is reused until its discovery fingerprint changes, ignoring reuse ages:
+// a PR untouched for this long rarely changes, so rehydrating it wastes the
+// most expensive queries in the fetch.
 func WithStaleActivityAfter(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
 			s.staleActivityAfter = d
+		}
+	}
+}
+
+// WithDiscoveryInterval configures the base cadence of discovery searches
+// (new, updated, and departed PRs).
+func WithDiscoveryInterval(d time.Duration) GraphQLSourceOption {
+	return func(s *GraphQLSource) {
+		if d > 0 {
+			s.discoveryInterval = d
+		}
+	}
+}
+
+// WithHotInterval configures the fast-lane cadence for PRs whose state is
+// actively moving (CI running, in a merge queue, merge state computing).
+func WithHotInterval(d time.Duration) GraphQLSourceOption {
+	return func(s *GraphQLSource) {
+		if d > 0 {
+			s.hotInterval = d
+		}
+	}
+}
+
+// WithIdleInterval configures the longest wait between discovery searches
+// once several in a row found nothing new.
+func WithIdleInterval(d time.Duration) GraphQLSourceOption {
+	return func(s *GraphQLSource) {
+		if d > 0 {
+			s.idleInterval = d
 		}
 	}
 }
@@ -140,9 +178,18 @@ func WithClock(now func() time.Time) GraphQLSourceOption {
 	}
 }
 
-// GraphQLSource retrieves pull request queues via GitHub GraphQL API using a
-// two-phase fetch: light discovery searches, then batched hydration of the
-// deduplicated results.
+// GraphQLSource retrieves pull request queues via GitHub GraphQL API and
+// schedules its own refresh work (see Pacer). Each Fetch is one tick:
+//
+//   - A discovery tick runs one combined search request for new, changed, and
+//     departed PRs, then hydrates new PRs, PRs whose cheap change fingerprint
+//     moved, and PRs whose activity tier says they are due.
+//   - Between discoveries, a hot tick skips the searches and re-hydrates only
+//     due PRs by node ID — typically those with CI running or in a merge
+//     queue.
+//
+// Discovery backs off toward the idle interval while nothing changes, and
+// every cadence stretches when the hourly GraphQL budget runs low.
 type GraphQLSource struct {
 	client             GraphQLClient
 	logger             zerolog.Logger
@@ -154,15 +201,57 @@ type GraphQLSource struct {
 	cacheRetention     time.Duration
 	maxReuseAge        time.Duration
 	staleActivityAfter time.Duration
+	discoveryInterval  time.Duration
+	hotInterval        time.Duration
+	idleInterval       time.Duration
 	pruneOnce          sync.Once
 
 	// nowFn overrides the clock (tests); guarded by immutability after
 	// construction.
 	nowFn func() time.Time
-	// rlMu guards the primary rate limit backoff state below.
-	rlMu      sync.Mutex
-	rlResetAt time.Time // last resetAt observed on a successful response
-	rlUntil   time.Time // backoff deadline armed on a primary limit rejection
+	// rlMu guards the rate limit state below.
+	rlMu        sync.Mutex
+	rlResetAt   time.Time // last resetAt observed on a successful response
+	rlRemaining int       // last remaining points observed
+	rlLimit     int       // last hourly points limit observed
+	rlUntil     time.Time // backoff deadline armed on a primary limit rejection
+
+	// fetchMu serializes Fetch and guards the scheduling state below.
+	fetchMu       sync.Mutex
+	tracked       map[model.PRKey]*trackedPR
+	order         []model.PRKey // discovery order of tracked PRs
+	lastDiscovery time.Time
+	nextDiscovery time.Time
+	quietStreak   int
+
+	// nextFetch is the UnixNano time NextFetch reports; 0 before any Fetch.
+	nextFetch atomic.Int64
+}
+
+// trackedPR is the source's memory of one open pull request between fetches.
+type trackedPR struct {
+	id         string // GraphQL node ID, for hydrating without a search
+	pr         model.PullRequest
+	authored   bool
+	hydratedAt time.Time // when pr's fresh fields were fetched; zero forces a refresh
+	touchedAt  time.Time // last cache write or retention touch
+	stableOID  string    // head OID the stable fields (files, sizes) belong to
+}
+
+// target returns the hydration request for a tracked PR on a tick without
+// discovery: the response carries fresh identity fields, so only the node ID
+// and the head the cached stable fields belong to matter here.
+func (t *trackedPR) target() hydrateTarget {
+	ident := rawIdentity{ID: t.id, Number: t.pr.Number, HeadRefOID: t.pr.HeadRefOID}
+	ident.Repository.NameWithOwner = t.pr.RepoNameWithOwner
+	return hydrateTarget{
+		ident:         ident,
+		authored:      t.authored,
+		assigned:      t.pr.Assigned,
+		directRequest: t.pr.DirectRequest,
+		stable:        stableFromCached(t.pr),
+		stableHit:     t.stableOID == t.pr.HeadRefOID,
+	}
 }
 
 // NewGraphQLSource constructs a GraphQLSource.
@@ -176,7 +265,11 @@ func NewGraphQLSource(client GraphQLClient, opts ...GraphQLSourceOption) *GraphQ
 		cacheRetention:     defaultCacheRetention,
 		maxReuseAge:        defaultMaxReuseAge,
 		staleActivityAfter: defaultStaleActivityAfter,
+		discoveryInterval:  DefaultDiscoveryInterval,
+		hotInterval:        DefaultHotInterval,
+		idleInterval:       DefaultIdleInterval,
 		nowFn:              time.Now,
+		tracked:            make(map[model.PRKey]*trackedPR),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -194,6 +287,12 @@ var (
 	//go:embed queries/search_discovery.graphql
 	rawDiscoveryQuery string
 
+	//go:embed queries/search_page.graphql
+	rawSearchPageQuery string
+
+	//go:embed queries/fragments/discovery_page.graphql
+	discoveryPageFragment string
+
 	//go:embed queries/fragments/discovery_fields.graphql
 	discoveryFragment string
 
@@ -208,7 +307,8 @@ var (
 
 	freshFragment = rawFreshFragment + "\n" + statusCheckRollupFragment
 
-	discoveryQuery = rawDiscoveryQuery + "\n" + discoveryFragment
+	discoveryQuery  = rawDiscoveryQuery + "\n" + discoveryPageFragment + "\n" + discoveryFragment
+	searchPageQuery = rawSearchPageQuery + "\n" + discoveryPageFragment + "\n" + discoveryFragment
 
 	//go:embed queries/hydrate_fresh.graphql
 	rawHydrateFreshQuery string
@@ -216,19 +316,50 @@ var (
 	//go:embed queries/hydrate_full.graphql
 	rawHydrateFullQuery string
 
-	hydrateFreshQuery = rawHydrateFreshQuery + "\n" + freshFragment
-	hydrateFullQuery  = rawHydrateFullQuery + "\n" + stableFragment + "\n" + freshFragment
+	hydrateFreshQuery = rawHydrateFreshQuery + "\n" + discoveryFragment + "\n" + freshFragment
+	hydrateFullQuery  = rawHydrateFullQuery + "\n" + discoveryFragment + "\n" + stableFragment + "\n" + freshFragment
 )
 
-// searchTask is one GitHub search whose results feed the queue. Primary tasks
-// (authored, review-requested) fail the whole fetch on error; the rest
-// (assignee, user-only review-requested) degrade to a warning and are skipped.
+// searchTask is one GitHub search whose results feed the queue. Alias names
+// its field in the combined discovery query. Primary tasks (authored,
+// review-requested) fail the whole fetch on error; the rest (assignee,
+// user-only review-requested) degrade to a warning and are skipped.
 type searchTask struct {
+	Alias         string
 	Query         string
 	IsAuthored    bool
 	Primary       bool
 	Assigned      bool
 	DirectRequest bool
+}
+
+// discoveryTasks are the searches behind every discovery, in merge order:
+// authored discoveries win.
+var discoveryTasks = []searchTask{
+	{
+		Alias:      "authored",
+		Query:      "is:open is:pr author:@me archived:false",
+		IsAuthored: true,
+		Primary:    true,
+	},
+	{
+		Alias:   "requested",
+		Query:   "is:open is:pr review-requested:@me archived:false",
+		Primary: true,
+	},
+	{
+		Alias:    "assigned",
+		Query:    "is:open is:pr assignee:@me archived:false",
+		Assigned: true,
+	},
+	{
+		// review-requested:@me also matches team requests; this narrower
+		// search flags the PRs requested from the viewer personally. It is a
+		// subset of "requested", so it contributes flags, never new PRs.
+		Alias:         "direct",
+		Query:         "is:open is:pr user-review-requested:@me archived:false",
+		DirectRequest: true,
+	},
 }
 
 // discoveredPR is a light identity from discovery plus the task flags that
@@ -252,15 +383,31 @@ func (s *GraphQLSource) now() time.Time {
 	return time.Now()
 }
 
-// observeRateLimit records the reset time reported by a successful response,
-// for use as the backoff deadline if a later request hits the primary limit.
+// observeRateLimit records the budget reported by a successful response: the
+// reset time backs off a later primary limit rejection, and the remaining
+// share drives the low-budget slowdown.
 func (s *GraphQLSource) observeRateLimit(rl rawRateLimit) {
 	if rl.ResetAt.IsZero() {
 		return
 	}
 	s.rlMu.Lock()
 	s.rlResetAt = rl.ResetAt
+	s.rlRemaining = rl.Remaining
+	s.rlLimit = rl.Limit
 	s.rlMu.Unlock()
+}
+
+// budgetFactor is the multiplier on every cadence: lowBudgetFactor while the
+// remaining share of the current hourly window is below lowBudgetFraction,
+// otherwise 1.
+func (s *GraphQLSource) budgetFactor(now time.Time) int {
+	s.rlMu.Lock()
+	defer s.rlMu.Unlock()
+	if s.rlLimit > 0 && now.Before(s.rlResetAt) &&
+		float64(s.rlRemaining) < lowBudgetFraction*float64(s.rlLimit) {
+		return lowBudgetFactor
+	}
+	return 1
 }
 
 // notePrimaryRateLimit arms the backoff after a primary rate limit rejection:
@@ -288,12 +435,96 @@ func (s *GraphQLSource) rateLimitedUntil() (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// Fetch retrieves the authored and inbox pull request queue from GitHub.
-// A caller-imposed context deadline governs the fetch; the configured
-// timeout (see WithFetchTimeout) is the default for callers, like the TUI
-// refresh tick, that do not set one — so a cold-start caller can pass a
-// longer budget without being capped at the tick default.
+// NextFetch reports when the next Fetch has work to do: the earlier of the
+// next discovery and the soonest per-PR refresh, never sooner than the
+// shorter of the hot and discovery intervals after the last fetch, and never
+// before an armed primary rate limit backoff expires. Before the first Fetch
+// it reports now.
+func (s *GraphQLSource) NextFetch() time.Time {
+	if until, limited := s.rateLimitedUntil(); limited {
+		return until
+	}
+	if n := s.nextFetch.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return s.now()
+}
+
+// scheduleNext records the NextFetch deadline after a successful tick.
+// Callers hold fetchMu.
+func (s *GraphQLSource) scheduleNext(now time.Time, boosted map[model.PRKey]bool, factor int) {
+	next := s.nextDiscovery
+	for _, key := range s.order {
+		t := s.tracked[key]
+		if t == nil {
+			continue
+		}
+		if due, ok := s.dueAt(t, now, boosted[key], factor); ok && due.Before(next) {
+			next = due
+		}
+	}
+	floor := now.Add(min(s.hotInterval, s.discoveryInterval) * time.Duration(factor))
+	if next.Before(floor) {
+		next = floor
+	}
+	s.nextFetch.Store(next.UnixNano())
+}
+
+// scheduleRetry records the NextFetch deadline after a failed tick: one base
+// discovery interval out, so a persistent failure polls no faster than the
+// steady state. A due discovery stays due.
+func (s *GraphQLSource) scheduleRetry(now time.Time, factor int) {
+	s.nextFetch.Store(now.Add(s.discoveryInterval * time.Duration(factor)).UnixNano())
+}
+
+// scheduleDiscovery sets the next discovery deadline after one ran: the base
+// interval while anything is changing, backing off toward the idle interval
+// after quietDiscoveries unchanged ones in a row. Callers hold fetchMu.
+func (s *GraphQLSource) scheduleDiscovery(now time.Time, changed bool, factor int) {
+	if changed {
+		s.quietStreak = 0
+	} else {
+		s.quietStreak++
+	}
+	wait := discoveryBackoff(s.discoveryInterval, s.idleInterval, s.quietStreak) * time.Duration(factor)
+	s.lastDiscovery = now
+	s.nextDiscovery = now.Add(wait)
+	s.logger.Debug().
+		Int("quiet_streak", s.quietStreak).
+		Dur("next_discovery_in", wait).
+		Msg("scheduled discovery")
+}
+
+// isDue reports whether tracked PR t needs hydration this tick. A forced
+// tick refreshes every hot PR regardless of when it was last hydrated.
+func (s *GraphQLSource) isDue(t *trackedPR, now time.Time, boosted, force bool, factor int) bool {
+	if force && classify(t.pr, now, s.staleActivityAfter, boosted) == tierHot {
+		return true
+	}
+	due, ok := s.dueAt(t, now, boosted, factor)
+	return ok && !now.Before(due)
+}
+
+// anyHot reports whether any tracked PR is in the hot tier. Callers hold
+// fetchMu.
+func (s *GraphQLSource) anyHot(now time.Time) bool {
+	for _, key := range s.order {
+		if t := s.tracked[key]; t != nil && classify(t.pr, now, s.staleActivityAfter, false) == tierHot {
+			return true
+		}
+	}
+	return false
+}
+
+// Fetch runs one tick and returns the full queue of tracked open PRs. A
+// caller-imposed context deadline governs the fetch; the configured timeout
+// (see WithFetchTimeout) is the default for callers that do not set one — so
+// a cold-start caller can pass a longer budget without being capped at the
+// tick default. See WithForceRefresh and WithBoosted for per-call hints.
 func (s *GraphQLSource) Fetch(ctx context.Context) (model.Queue, error) {
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
+
 	if until, limited := s.rateLimitedUntil(); limited {
 		return model.Queue{}, fmt.Errorf(
 			"%w: waiting until %s",
@@ -307,50 +538,20 @@ func (s *GraphQLSource) Fetch(ctx context.Context) (model.Queue, error) {
 		defer cancel()
 	}
 
-	var (
-		ident      cache.Identity
-		discovered []discoveredPR
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		var err error
-		ident, err = s.resolveIdentity(gctx)
-		return err
-	})
-	g.Go(func() error {
-		var err error
-		discovered, err = s.discover(gctx)
-		return err
-	})
-	if err := g.Wait(); err != nil {
-		return model.Queue{}, err
-	}
-	if progress := ProgressFromContext(ctx); progress != nil {
-		progress(0, len(discovered))
+	now := s.now()
+	force := ForceRefreshFromContext(ctx)
+	boosted := BoostedFromContext(ctx)
+	factor := s.budgetFactor(now)
+	if factor > 1 {
+		s.logger.Warn().Int("factor", factor).Msg("GraphQL budget low; stretching refresh cadence")
 	}
 
-	prs, err := s.hydrate(ctx, discovered)
+	queue, err := s.tick(ctx, now, force, boosted, factor)
 	if err != nil {
+		s.scheduleRetry(now, factor)
 		return model.Queue{}, err
 	}
-
-	var authoredPRs, inboxPRs []model.PullRequest
-	for _, pr := range prs {
-		if pr.authored {
-			authoredPRs = append(authoredPRs, pr.PullRequest)
-		} else {
-			inboxPRs = append(inboxPRs, pr.PullRequest)
-		}
-	}
-
-	queue := model.MergeQueue(authoredPRs, inboxPRs)
-	queue.Viewer = ident.Login
-	queue.Teams = ident.Teams
-
-	s.logger.Info().
-		Int("authored_total", len(queue.Authored)).
-		Int("inbox_total", len(queue.Inbox)).
-		Msg("completed queue build")
+	s.scheduleNext(now, boosted, factor)
 
 	if s.cache != nil {
 		s.pruneOnce.Do(func() {
@@ -362,8 +563,302 @@ func (s *GraphQLSource) Fetch(ctx context.Context) (model.Queue, error) {
 			}
 		})
 	}
-
 	return queue, nil
+}
+
+// tick performs one Fetch's network work and updates the tracked set.
+// Callers hold fetchMu.
+func (s *GraphQLSource) tick(
+	ctx context.Context,
+	now time.Time,
+	force bool,
+	boosted map[model.PRKey]bool,
+	factor int,
+) (model.Queue, error) {
+	discovering := force || s.lastDiscovery.IsZero() || !now.Before(s.nextDiscovery)
+
+	var (
+		ident      cache.Identity
+		discovered []discoveredPR
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		ident, err = s.resolveIdentity(gctx)
+		return err
+	})
+	if discovering {
+		g.Go(func() error {
+			var err error
+			discovered, err = s.discover(gctx)
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return model.Queue{}, err
+	}
+
+	var (
+		targets []hydrateTarget
+		changed bool
+	)
+	if discovering {
+		targets, changed = s.reconcile(ctx, discovered, now, boosted, force, factor)
+	} else {
+		for _, key := range s.order {
+			if t := s.tracked[key]; t != nil && s.isDue(t, now, boosted[key], false, factor) {
+				targets = append(targets, t.target())
+			}
+		}
+	}
+
+	s.logger.Info().
+		Bool("discovery", discovering).
+		Int("tracked_total", len(s.order)).
+		Int("to_hydrate_total", len(targets)).
+		Msg("planned hydration")
+
+	if progress := ProgressFromContext(ctx); progress != nil {
+		progress(len(s.order)-len(targets), len(s.order))
+	}
+	results, lastErr, err := s.hydrate(ctx, targets, len(s.order))
+	secondary := errors.Is(err, ErrSecondaryRateLimit)
+	if err != nil && !secondary {
+		return model.Queue{}, err
+	}
+	if secondary && len(results) == 0 && !s.anyHydrated() {
+		return model.Queue{}, err
+	}
+	if secondary {
+		s.logger.Warn().
+			Err(err).
+			Int("hydrated_total", len(results)).
+			Int("tracked_total", len(s.order)).
+			Msg("secondary rate limit hit during hydration; returning degraded queue")
+	}
+	if s.apply(targets, results, now, secondary) {
+		changed = true
+	}
+
+	wanted := len(s.order)
+	queue := s.assemble()
+	queue.Viewer = ident.Login
+	queue.Teams = ident.Teams
+	if wanted > 0 && len(queue.Authored)+len(queue.Inbox) == 0 {
+		if lastErr != nil {
+			return model.Queue{}, fmt.Errorf("all pull requests failed hydration: %w", lastErr)
+		}
+		return model.Queue{}, errors.New("all pull requests failed hydration")
+	}
+	if discovering {
+		s.scheduleDiscovery(now, changed || force || s.anyHot(now), factor)
+	}
+
+	s.logger.Info().
+		Int("authored_total", len(queue.Authored)).
+		Int("inbox_total", len(queue.Inbox)).
+		Msg("completed queue build")
+	return queue, nil
+}
+
+// reconcile folds one discovery into the tracked set: it adopts new PRs
+// (seeding them from the on-disk cache when possible), refreshes discovery
+// fields and flags on unchanged ones, forgets PRs that left every search,
+// and returns the PRs needing hydration plus whether anything changed.
+// Callers hold fetchMu.
+func (s *GraphQLSource) reconcile(
+	ctx context.Context,
+	discovered []discoveredPR,
+	now time.Time,
+	boosted map[model.PRKey]bool,
+	force bool,
+	factor int,
+) ([]hydrateTarget, bool) {
+	changed := false
+	seen := make(map[model.PRKey]bool, len(discovered))
+	order := make([]model.PRKey, 0, len(discovered))
+	var targets []hydrateTarget
+
+	for _, d := range discovered {
+		key := d.key()
+		seen[key] = true
+		order = append(order, key)
+
+		t := s.tracked[key]
+		if t == nil {
+			changed = true
+			t = s.loadCached(ctx, d)
+		}
+		if t == nil {
+			targets = append(targets, hydrateTarget{discoveredPR: d})
+			continue
+		}
+		t.id = d.ident.ID
+		t.authored = d.authored
+		t.pr.Assigned = d.assigned
+		t.pr.DirectRequest = d.directRequest
+
+		moved := fingerprintChanged(d.ident, t.pr)
+		if moved {
+			changed = true
+		}
+		if !moved && !s.isDue(t, now, boosted[key], force, factor) {
+			s.applyDiscovery(&t.pr, d, now)
+			s.touch(ctx, key, t, now)
+			continue
+		}
+		target := hydrateTarget{discoveredPR: d}
+		if t.stableOID == d.ident.HeadRefOID {
+			target.stable = stableFromCached(t.pr)
+			target.stableHit = true
+		}
+		targets = append(targets, target)
+	}
+
+	for key := range s.tracked {
+		if !seen[key] {
+			delete(s.tracked, key)
+			changed = true
+		}
+	}
+	s.order = order
+	return targets, changed
+}
+
+// loadCached seeds tracking for a newly discovered PR from the on-disk cache,
+// or returns nil on a miss. Callers hold fetchMu.
+func (s *GraphQLSource) loadCached(ctx context.Context, d discoveredPR) *trackedPR {
+	if s.cache == nil {
+		return nil
+	}
+	cached, savedAt, ok := s.cache.PR(ctx, d.ident.Repository.NameWithOwner, d.ident.Number)
+	if !ok {
+		return nil
+	}
+	t := &trackedPR{
+		id:         d.ident.ID,
+		pr:         cached,
+		authored:   d.authored,
+		hydratedAt: savedAt,
+		stableOID:  cached.HeadRefOID,
+	}
+	s.tracked[d.key()] = t
+	return t
+}
+
+// applyDiscovery refreshes a reused PR's discovery-sourced fields.
+func (s *GraphQLSource) applyDiscovery(pr *model.PullRequest, d discoveredPR, now time.Time) {
+	pr.Title = d.ident.Title
+	pr.IsDraft = d.ident.IsDraft
+	pr.IsInMergeQueue = d.ident.IsInMergeQueue
+	pr.UpdatedAt = d.ident.UpdatedAt
+	pr.Author = d.ident.Author.Login
+	pr.URL = d.ident.URL
+	pr.BaseRefName = d.ident.BaseRefName
+	pr.DefaultBranch = d.ident.Repository.DefaultBranchRef.Name
+	pr.Assigned = d.assigned
+	pr.DirectRequest = d.directRequest
+	pr.Stack = convertStack(d.ident.Stack, d.ident.StackEntry)
+	pr.MergeStatus = model.ComputeMergeStatus(pr.Mergeable, pr.MergeStateStatus, d.ident.IsDraft)
+	pr.MergeStatus.IsInMergeQueue = d.ident.IsInMergeQueue
+	pr.Stale = !d.ident.UpdatedAt.IsZero() && now.Sub(d.ident.UpdatedAt) >= s.staleActivityAfter
+}
+
+// touch bumps a reused PR's cache file mtime so retention pruning does not
+// evict an open PR, at most once per touchEvery; the cached SavedAt is left
+// intact to keep tracking actual hydration time.
+func (s *GraphQLSource) touch(ctx context.Context, key model.PRKey, t *trackedPR, now time.Time) {
+	if s.cache == nil || now.Sub(t.touchedAt) < touchEvery {
+		return
+	}
+	if err := s.cache.TouchPR(ctx, key.Repo, key.Number); err != nil {
+		s.logger.Warn().Err(err).Msg("touching reused PR cache failed; continuing")
+		return
+	}
+	t.touchedAt = now
+}
+
+// anyHydrated reports whether any tracked PR has fully hydrated data to
+// fall back on. Callers hold fetchMu.
+func (s *GraphQLSource) anyHydrated() bool {
+	for _, key := range s.order {
+		if t := s.tracked[key]; t != nil && !t.pr.Partial {
+			return true
+		}
+	}
+	return false
+}
+
+// apply records hydration results in the tracked set and reports whether a
+// PR left the queue (closed or merged since it was last seen). A target that failed keeps its last good data; a new
+// one is dropped, or — when a secondary rate limit cut hydration short —
+// kept as a Partial PR built from discovery data. Callers hold fetchMu.
+func (s *GraphQLSource) apply(
+	targets []hydrateTarget,
+	results map[model.PRKey]hydrateResult,
+	now time.Time,
+	secondary bool,
+) bool {
+	removed := false
+	for _, target := range targets {
+		key := target.key()
+		r, ok := results[key]
+		switch {
+		case ok && r.gone:
+			delete(s.tracked, key)
+			s.order = slices.DeleteFunc(s.order, func(k model.PRKey) bool { return k == key })
+			removed = true
+		case ok:
+			t := s.tracked[key]
+			if t == nil {
+				t = &trackedPR{}
+				s.tracked[key] = t
+			}
+			t.id = r.id
+			t.pr = r.PullRequest
+			t.authored = r.authored
+			t.stableOID = r.stableOID
+			t.hydratedAt = now
+			if r.stableOID != r.HeadRefOID {
+				// Pushed since the stable fields were fetched: refresh them
+				// on the next tick.
+				t.hydratedAt = time.Time{}
+			}
+			if r.saved {
+				t.touchedAt = now
+			}
+		case s.tracked[key] != nil:
+		case secondary:
+			pr := convertPR(target.ident, stableFields{}, rawFresh{}, target.assigned, convertOpts{
+				staleActivityAfter: s.staleActivityAfter,
+			})
+			pr.Partial = true
+			pr.DirectRequest = target.directRequest
+			s.tracked[key] = &trackedPR{id: target.ident.ID, pr: pr, authored: target.authored}
+		}
+	}
+	return removed
+}
+
+// assemble builds the queue from tracked PRs in discovery order, dropping
+// order entries for PRs no longer tracked. Callers hold fetchMu.
+func (s *GraphQLSource) assemble() model.Queue {
+	var authored, inbox []model.PullRequest
+	order := s.order[:0]
+	for _, key := range s.order {
+		t := s.tracked[key]
+		if t == nil {
+			continue
+		}
+		order = append(order, key)
+		if t.authored {
+			authored = append(authored, t.pr)
+		} else {
+			inbox = append(inbox, t.pr)
+		}
+	}
+	s.order = order
+	return model.MergeQueue(authored, inbox)
 }
 
 // resolveIdentity returns the viewer login and org-qualified teams, consulting
@@ -442,84 +937,201 @@ type viewerTeamsData struct {
 	} `json:"viewer"`
 }
 
-// discover runs the search tasks concurrently (bounded), returning the
-// deduplicated set of pull requests ordered by first discovery.
+// searchConn is one search connection page.
+type searchConn struct {
+	IssueCount int           `json:"issueCount"`
+	PageInfo   pageInfo      `json:"pageInfo"`
+	Nodes      []rawIdentity `json:"nodes"`
+}
+
+// discover runs every discovery search in one combined request, following up
+// per search only for pages past the first, and returns the deduplicated set
+// of pull requests ordered by first discovery. If the combined request fails
+// outright, each search is retried on its own so a non-primary failure only
+// costs its own results.
 func (s *GraphQLSource) discover(ctx context.Context) ([]discoveredPR, error) {
-	tasks := []searchTask{
-		{
-			Query:      "is:open is:pr author:@me archived:false",
-			IsAuthored: true,
-			Primary:    true,
-		},
-		{
-			Query:   "is:open is:pr review-requested:@me archived:false",
-			Primary: true,
-		},
-		{
-			Query:    "is:open is:pr assignee:@me archived:false",
-			Assigned: true,
-		},
-		{
-			// review-requested:@me also matches team requests; this narrower
-			// search flags the PRs requested from the viewer personally.
-			Query:         "is:open is:pr user-review-requested:@me archived:false",
-			DirectRequest: true,
-		},
+	vars := map[string]any{"first": discoveryPageSize}
+	for _, task := range discoveryTasks {
+		vars[task.Alias] = task.Query
 	}
 
-	s.logger.Info().Int("tasks_total", len(tasks)).Msg("assembled search tasks")
-
-	limit := s.discoveryLimit
-	if limit <= 0 {
-		limit = discoveryLimit
-	}
-
-	results := make([][]discoveredPR, len(tasks))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(limit)
-
-	for i, task := range tasks {
-		g.Go(func() error {
-			s.logger.Info().Str("query", task.Query).Msg("executing discovery search")
-			prs, err := s.discoverTask(gctx, task)
-			if err != nil {
-				if !task.Primary {
-					s.logger.Warn().Err(err).Str("query", task.Query).Msg("discovery task failed; skipping")
-					return nil
-				}
-				return fmt.Errorf("search %q: %w", task.Query, err)
+	var resp map[string]json.RawMessage
+	failed := map[string]error{}
+	err := s.client.DoWithContext(ctx, discoveryQuery, vars, &resp)
+	var gqlErr *api.GraphQLError
+	switch {
+	case err == nil:
+	case errors.As(err, &gqlErr):
+		// Partial success: data for the aliases that resolved is decoded.
+		for _, item := range gqlErr.Errors {
+			if len(item.Path) == 0 {
+				return s.discoverEach(ctx, err)
 			}
-			results[i] = prs
-			s.logger.Info().Str("query", task.Query).Int("prs_found", len(prs)).Msg("completed discovery search")
+			if alias, ok := item.Path[0].(string); ok {
+				failed[alias] = fmt.Errorf("%s", item.Message)
+			}
+		}
+	case isPrimaryRateLimitErr(err):
+		s.notePrimaryRateLimit()
+		return nil, fmt.Errorf("%w: %w", ErrPrimaryRateLimit, err)
+	case isSecondaryRateLimitErr(err):
+		// More requests while limited risk a ban: no per-search fallback.
+		return nil, fmt.Errorf("%w: %w", ErrSecondaryRateLimit, err)
+	case ctx.Err() != nil:
+		return nil, err
+	default:
+		return s.discoverEach(ctx, err)
+	}
+
+	var rl rawRateLimit
+	if raw, ok := resp["rateLimit"]; ok {
+		_ = json.Unmarshal(raw, &rl)
+		s.observeRateLimit(rl)
+	}
+
+	results := make([][]discoveredPR, len(discoveryTasks))
+	cursors := make([]*string, len(discoveryTasks))
+	for i, task := range discoveryTasks {
+		conn, taskErr := decodeSearch(resp[task.Alias], failed[task.Alias], task)
+		if taskErr != nil {
+			if err := s.skipTask(task, taskErr); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		s.logger.Info().
+			Str("query", task.Query).
+			Int("prs_returned", len(conn.Nodes)).
+			Int("matching_total", conn.IssueCount).
+			Int("cost", rl.Cost).
+			Int("remaining", rl.Remaining).
+			Msg("retrieved discovery page")
+		results[i] = toDiscovered(conn.Nodes, task)
+		if conn.PageInfo.HasNextPage {
+			cursors[i] = conn.PageInfo.EndCursor
+		}
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.discoveryLimit)
+	for i, task := range discoveryTasks {
+		cursor := cursors[i]
+		if cursor == nil {
+			continue
+		}
+		g.Go(func() error {
+			rest, err := s.discoverTask(gctx, task, cursor)
+			if err != nil {
+				return s.skipTask(task, err)
+			}
+			results[i] = append(results[i], rest...)
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	return mergeDiscovered(results), nil
+}
 
-	// Merge in task order so authored discoveries win and ordering is deterministic.
+// discoverEach is the per-search fallback for a failed combined discovery.
+func (s *GraphQLSource) discoverEach(ctx context.Context, cause error) ([]discoveredPR, error) {
+	s.logger.Warn().Err(cause).Msg("combined discovery failed; retrying each search")
+	results := make([][]discoveredPR, len(discoveryTasks))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.discoveryLimit)
+	for i, task := range discoveryTasks {
+		g.Go(func() error {
+			prs, err := s.discoverTask(gctx, task, nil)
+			if err != nil {
+				return s.skipTask(task, err)
+			}
+			results[i] = prs
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return mergeDiscovered(results), nil
+}
+
+// skipTask returns err for a primary search, which fails the fetch, and
+// logs and swallows it otherwise.
+func (s *GraphQLSource) skipTask(task searchTask, err error) error {
+	if task.Primary {
+		return fmt.Errorf("search %q: %w", task.Query, err)
+	}
+	s.logger.Warn().Err(err).Str("query", task.Query).Msg("discovery task failed; skipping")
+	return nil
+}
+
+// decodeSearch decodes one alias of the combined discovery response.
+func decodeSearch(raw json.RawMessage, aliasErr error, task searchTask) (searchConn, error) {
+	if aliasErr != nil {
+		return searchConn{}, aliasErr
+	}
+	var conn searchConn
+	if len(raw) == 0 || string(raw) == "null" {
+		return conn, errors.New("search missing from response")
+	}
+	if err := json.Unmarshal(raw, &conn); err != nil {
+		return conn, fmt.Errorf("decode search: %w", err)
+	}
+	if conn.IssueCount >= 1000 {
+		return conn, fmt.Errorf("%w: %s", ErrSearchOverflow, task.Query)
+	}
+	return conn, nil
+}
+
+func toDiscovered(nodes []rawIdentity, task searchTask) []discoveredPR {
+	prs := make([]discoveredPR, 0, len(nodes))
+	for _, node := range nodes {
+		prs = append(prs, discoveredPR{
+			ident:         node,
+			authored:      task.IsAuthored,
+			assigned:      task.Assigned,
+			directRequest: task.DirectRequest,
+		})
+	}
+	return prs
+}
+
+// mergeDiscovered dedupes per-task results in task order, so authored
+// discoveries win and ordering is deterministic. Direct-request results only
+// flag PRs found by the other searches: the combined query fetches just their
+// IDs.
+func mergeDiscovered(results [][]discoveredPR) []discoveredPR {
 	seen := make(map[model.PRKey]int)
+	direct := make(map[string]bool)
 	var merged []discoveredPR
-	for _, taskPRs := range results {
+	for i, taskPRs := range results {
+		if discoveryTasks[i].DirectRequest {
+			for _, d := range taskPRs {
+				direct[d.ident.ID] = true
+			}
+			continue
+		}
 		for _, d := range taskPRs {
 			if idx, ok := seen[d.key()]; ok {
 				merged[idx].authored = merged[idx].authored || d.authored
 				merged[idx].assigned = merged[idx].assigned || d.assigned
-				merged[idx].directRequest = merged[idx].directRequest || d.directRequest
 				continue
 			}
 			seen[d.key()] = len(merged)
 			merged = append(merged, d)
 		}
 	}
-	return merged, nil
+	for i := range merged {
+		merged[i].directRequest = direct[merged[i].ident.ID]
+	}
+	return merged
 }
 
-// discoverTask paginates a single light discovery search.
-func (s *GraphQLSource) discoverTask(ctx context.Context, task searchTask) ([]discoveredPR, error) {
+// discoverTask paginates a single discovery search starting after cursor
+// (nil: from the first page).
+func (s *GraphQLSource) discoverTask(ctx context.Context, task searchTask, cursor *string) ([]discoveredPR, error) {
 	var prs []discoveredPR
-	var cursor *string
 	page := 1
 
 	for {
@@ -533,15 +1145,9 @@ func (s *GraphQLSource) discoverTask(ctx context.Context, task searchTask) ([]di
 
 		var resp struct {
 			RateLimit rawRateLimit `json:"rateLimit"`
-			Search    struct {
-				IssueCount int      `json:"issueCount"`
-				PageInfo   pageInfo `json:"pageInfo"`
-				Nodes      []struct {
-					rawIdentity
-				} `json:"nodes"`
-			} `json:"search"`
+			Search    searchConn   `json:"search"`
 		}
-		if err := s.client.DoWithContext(ctx, discoveryQuery, vars, &resp); err != nil {
+		if err := s.client.DoWithContext(ctx, searchPageQuery, vars, &resp); err != nil {
 			if isPrimaryRateLimitErr(err) {
 				s.notePrimaryRateLimit()
 				return nil, fmt.Errorf("%w: %w", ErrPrimaryRateLimit, err)
@@ -564,14 +1170,7 @@ func (s *GraphQLSource) discoverTask(ctx context.Context, task searchTask) ([]di
 			Msg("retrieved discovery page")
 		page++
 
-		for _, node := range resp.Search.Nodes {
-			prs = append(prs, discoveredPR{
-				ident:         node.rawIdentity,
-				authored:      task.IsAuthored,
-				assigned:      task.Assigned,
-				directRequest: task.DirectRequest,
-			})
-		}
+		prs = append(prs, toDiscovered(resp.Search.Nodes, task)...)
 
 		if !resp.Search.PageInfo.HasNextPage || resp.Search.PageInfo.EndCursor == nil {
 			break
@@ -595,163 +1194,51 @@ type rawRateLimit struct {
 }
 
 type hydrateResponse struct {
-	RateLimit rawRateLimit   `json:"rateLimit"`
-	Nodes     []*rawHydrated `json:"nodes"`
+	RateLimit rawRateLimit `json:"rateLimit"`
+	Nodes     []*rawPR     `json:"nodes"`
 }
 
-func (s *GraphQLSource) maxReuseAgeFor(repo string, num int) time.Duration {
-	base := s.maxReuseAge
-	if base <= 0 {
-		base = defaultMaxReuseAge
-	}
-	h := fnv.New32a()
-	_, _ = fmt.Fprintf(h, "%s#%d", repo, num)
-	val := h.Sum32()
-	jitterFraction := 0.75 + 0.50*(float64(val)/float64(math.MaxUint32))
-	return time.Duration(float64(base) * jitterFraction)
-}
-
-func (s *GraphQLSource) canReuse(
-	cached model.PullRequest,
-	savedAt time.Time,
-	discovered discoveredPR,
-	now time.Time,
-) bool {
-	// A PR with no activity beyond the stale cutoff cannot have changed since
-	// it was cached, so the max reuse age does not apply to it.
-	stale := !discovered.ident.UpdatedAt.IsZero() &&
-		now.Sub(discovered.ident.UpdatedAt) >= s.staleActivityAfter
-
-	return cached.UpdatedAt.Equal(discovered.ident.UpdatedAt) &&
-		cached.HeadRefOID == discovered.ident.HeadRefOID &&
-		cached.IsInMergeQueue == discovered.ident.IsInMergeQueue &&
-		cached.Mergeable != "" && cached.Mergeable != "UNKNOWN" &&
-		cached.MergeStateStatus != "" && cached.MergeStateStatus != "UNKNOWN" &&
-		cached.Checks.IsSettled() &&
-		(stale || now.Sub(savedAt) < s.maxReuseAgeFor(cached.RepoNameWithOwner, cached.Number))
-}
-
-// hydrateTarget pairs a discovered PR with cached stable fields when available.
+// hydrateTarget pairs a PR to hydrate with cached stable fields when they
+// belong to its current head.
 type hydrateTarget struct {
 	discoveredPR
 	stable    stableFields
 	stableHit bool
 }
 
-func (s *GraphQLSource) planHydration(
-	ctx context.Context,
-	discovered []discoveredPR,
-) (map[model.PRKey]flaggedPR, []hydrateTarget) {
-	now := time.Now()
-	reused := make(map[model.PRKey]flaggedPR)
-	var toHydrate []hydrateTarget
-
-	for _, d := range discovered {
-		if s.cache != nil {
-			cached, savedAt, ok := s.cache.PR(
-				ctx,
-				d.ident.Repository.NameWithOwner,
-				d.ident.Number,
-			)
-			if ok && s.canReuse(cached, savedAt, d, now) {
-				cached.Title = d.ident.Title
-				cached.IsDraft = d.ident.IsDraft
-				cached.IsInMergeQueue = d.ident.IsInMergeQueue
-				cached.UpdatedAt = d.ident.UpdatedAt
-				cached.Author = d.ident.Author.Login
-				cached.URL = d.ident.URL
-				cached.BaseRefName = d.ident.BaseRefName
-				cached.DefaultBranch = d.ident.Repository.DefaultBranchRef.Name
-				cached.Assigned = d.assigned
-				cached.DirectRequest = d.directRequest
-				cached.Stack = convertStack(d.ident.Stack, d.ident.StackEntry)
-				cached.MergeStatus = model.ComputeMergeStatus(
-					cached.Mergeable,
-					cached.MergeStateStatus,
-					d.ident.IsDraft,
-				)
-				cached.MergeStatus.IsInMergeQueue = d.ident.IsInMergeQueue
-				staleThreshold := s.staleActivityAfter
-				if staleThreshold <= 0 {
-					staleThreshold = defaultStaleActivityAfter
-				}
-				cached.Stale = !d.ident.UpdatedAt.IsZero() && time.Since(d.ident.UpdatedAt) >= staleThreshold
-
-				reused[d.key()] = flaggedPR{
-					PullRequest: cached,
-					authored:    d.authored,
-				}
-
-				// Touch file mtime so retention prune does not evict an open PR,
-				// while leaving SavedAt intact to track actual hydration time.
-				if err := s.cache.TouchPR(
-					ctx,
-					d.ident.Repository.NameWithOwner,
-					d.ident.Number,
-				); err != nil {
-					s.logger.Warn().Err(err).Msg("touching reused PR cache failed; continuing")
-				}
-				continue
-			}
-
-			target := hydrateTarget{discoveredPR: d}
-			if ok && cached.HeadRefOID == d.ident.HeadRefOID {
-				target.stable = stableFromCached(cached)
-				target.stableHit = true
-			}
-			toHydrate = append(toHydrate, target)
-			continue
-		}
-		toHydrate = append(toHydrate, hydrateTarget{discoveredPR: d})
-	}
-	return reused, toHydrate
+// hydrateResult is one PR's hydration outcome.
+type hydrateResult struct {
+	flaggedPR
+	key       model.PRKey
+	id        string
+	stableOID string // head OID the stable fields belong to
+	saved     bool   // persisted to the on-disk cache
+	gone      bool   // no longer open (or no longer visible): drop it
 }
 
-// hydrate fetches full PR data for the discovered set in parallel aliased batches,
+// hydrate fetches full PR data for targets in parallel aliased batches,
 // bisecting failing batches down to singletons to isolate cost-driven 502s.
-func (s *GraphQLSource) hydrate(ctx context.Context, discovered []discoveredPR) ([]flaggedPR, error) {
-	if len(discovered) == 0 {
-		return nil, nil
+// total is the queue size, for progress reporting. A secondary rate limit
+// returns the results gathered so far alongside ErrSecondaryRateLimit;
+// lastErr is the last persistent per-PR failure.
+func (s *GraphQLSource) hydrate(
+	ctx context.Context,
+	targets []hydrateTarget,
+	total int,
+) (results map[model.PRKey]hydrateResult, lastErr, err error) {
+	results = make(map[model.PRKey]hydrateResult, len(targets))
+	if len(targets) == 0 {
+		return results, nil, nil
 	}
 
-	reused, toHydrate := s.planHydration(ctx, discovered)
-
-	s.logger.Info().
-		Int("discovered_total", len(discovered)).
-		Int("reused_total", len(reused)).
-		Int("to_hydrate_total", len(toHydrate)).
-		Msg("planned hydration")
-
-	if len(toHydrate) == 0 {
-		if progress := ProgressFromContext(ctx); progress != nil {
-			progress(len(discovered), len(discovered))
-		}
-		return s.assembleHydrated(discovered, reused, nil, false), nil
-	}
-
-	batchSize := s.hydrateBatchSize
-	if batchSize <= 0 {
-		batchSize = hydrateBatchSize
-	}
-	limit := s.hydrateLimit
-	if limit <= 0 {
-		limit = defaultHydrateConcurrency
-	}
-
-	batches := prepareHydrateBatches(toHydrate, batchSize)
-	results := make([][]flaggedPR, len(batches))
+	batches := prepareHydrateBatches(targets, s.hydrateBatchSize)
+	batchResults := make([][]hydrateResult, len(batches))
 
 	var completedCount atomic.Int32
-	// #nosec G115 -- reused count is bounded by discovery size
-	completedCount.Store(int32(len(reused)))
-	if len(reused) > 0 {
-		if progress := ProgressFromContext(ctx); progress != nil {
-			progress(len(reused), len(discovered))
-		}
-	}
+	// #nosec G115 -- counts are bounded by discovery size
+	completedCount.Store(int32(total - len(targets)))
 
 	var lastErrMu sync.Mutex
-	var lastErr error
 	recordErr := func(err error) {
 		lastErrMu.Lock()
 		lastErr = err
@@ -759,7 +1246,7 @@ func (s *GraphQLSource) hydrate(ctx context.Context, discovered []discoveredPR) 
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(limit)
+	g.SetLimit(s.hydrateLimit)
 
 	for bIdx, b := range batches {
 		g.Go(func() error {
@@ -767,11 +1254,11 @@ func (s *GraphQLSource) hydrate(ctx context.Context, discovered []discoveredPR) 
 			if err != nil {
 				return err
 			}
-			results[bIdx] = prs
+			batchResults[bIdx] = prs
 			// #nosec G115 -- batch size is small and bounded
 			done := completedCount.Add(int32(len(b.targets)))
 			if progress := ProgressFromContext(gctx); progress != nil {
-				progress(int(done), len(discovered))
+				progress(int(done), total)
 			}
 			return nil
 		})
@@ -779,43 +1266,17 @@ func (s *GraphQLSource) hydrate(ctx context.Context, discovered []discoveredPR) 
 
 	waitErr := g.Wait()
 	if waitErr != nil && ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, lastErr, ctx.Err()
 	}
-
-	hydratedMap := make(map[model.PRKey]flaggedPR)
-	for _, batchResult := range results {
-		for _, pr := range batchResult {
-			hydratedMap[pr.Key()] = pr
+	for _, batch := range batchResults {
+		for _, r := range batch {
+			results[r.key] = r
 		}
 	}
-
-	isSecondary := waitErr != nil && errors.Is(waitErr, ErrSecondaryRateLimit)
-	if waitErr != nil && !isSecondary {
-		return nil, waitErr
+	if waitErr != nil && !errors.Is(waitErr, ErrSecondaryRateLimit) {
+		return nil, lastErr, waitErr
 	}
-
-	if isSecondary && len(reused) == 0 && len(hydratedMap) == 0 {
-		return nil, waitErr
-	}
-
-	if isSecondary {
-		s.logger.Warn().
-			Err(waitErr).
-			Int("hydrated_total", len(hydratedMap)).
-			Int("reused_total", len(reused)).
-			Int("discovered_total", len(discovered)).
-			Msg("secondary rate limit hit during hydration; returning degraded queue with discovery fallback")
-	}
-
-	finalPRs := s.assembleHydrated(discovered, reused, hydratedMap, isSecondary)
-	if len(discovered) > 0 && len(finalPRs) == 0 {
-		if lastErr != nil {
-			return nil, fmt.Errorf("all pull requests failed hydration: %w", lastErr)
-		}
-		return nil, errors.New("all pull requests failed hydration")
-	}
-
-	return finalPRs, nil
+	return results, lastErr, waitErr
 }
 
 type hydrateBatch struct {
@@ -845,39 +1306,12 @@ func prepareHydrateBatches(toHydrate []hydrateTarget, batchSize int) []hydrateBa
 	return batches
 }
 
-func (s *GraphQLSource) assembleHydrated(
-	discovered []discoveredPR,
-	reused map[model.PRKey]flaggedPR,
-	hydratedMap map[model.PRKey]flaggedPR,
-	isSecondary bool,
-) []flaggedPR {
-	finalPRs := make([]flaggedPR, 0, len(discovered))
-	for _, d := range discovered {
-		if pr, ok := reused[d.key()]; ok {
-			finalPRs = append(finalPRs, pr)
-		} else if pr, ok := hydratedMap[d.key()]; ok {
-			finalPRs = append(finalPRs, pr)
-		} else if isSecondary {
-			pr := convertPR(d.ident, stableFields{}, rawFresh{}, d.assigned, convertOpts{
-				staleActivityAfter: s.staleActivityAfter,
-			})
-			pr.Partial = true
-			pr.DirectRequest = d.directRequest
-			finalPRs = append(finalPRs, flaggedPR{
-				PullRequest: pr,
-				authored:    d.authored,
-			})
-		}
-	}
-	return finalPRs
-}
-
 func (s *GraphQLSource) hydrateBatchBisect(
 	ctx context.Context,
 	batch []hydrateTarget,
 	full bool,
 	recordErr func(error),
-) ([]flaggedPR, error) {
+) ([]hydrateResult, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}
@@ -941,7 +1375,7 @@ func (s *GraphQLSource) hydrateBatchBisect(
 			Err(err).
 			Str("repo", batch[0].ident.Repository.NameWithOwner).
 			Int("number", batch[0].ident.Number).
-			Msg("PR hydration failed persistently; dropping from queue")
+			Msg("PR hydration failed persistently; keeping last known state")
 		return nil, nil
 	}
 	return prs, nil
@@ -951,7 +1385,7 @@ func (s *GraphQLSource) executeHydrateQuery(
 	ctx context.Context,
 	batch []hydrateTarget,
 	full bool,
-) ([]flaggedPR, error) {
+) ([]hydrateResult, error) {
 	ids := make([]string, len(batch))
 	for i, d := range batch {
 		ids[i] = d.ident.ID
@@ -981,51 +1415,52 @@ func (s *GraphQLSource) executeHydrateQuery(
 		Int("cost", resp.RateLimit.Cost).
 		Int("remaining", resp.RateLimit.Remaining).
 		Int("batch_count", len(batch)).
+		Bool("full", full).
 		Int64("elapsed_ms", elapsedMs).
 		Msg("hydrated pr batch")
 
-	prs := make([]flaggedPR, 0, len(batch))
+	out := make([]hydrateResult, 0, len(batch))
 	for i, d := range batch {
 		if i >= len(resp.Nodes) {
 			break
 		}
 		node := resp.Nodes[i]
-		if node == nil {
-			s.logger.Warn().
+		if node == nil || (node.State != "" && node.State != "OPEN") {
+			s.logger.Info().
 				Str("repo", d.ident.Repository.NameWithOwner).
 				Int("number", d.ident.Number).
-				Msg("PR vanished between discovery and hydration; skipping")
+				Msg("PR closed or vanished since discovery; dropping")
+			out = append(out, hydrateResult{key: d.key(), gone: true})
 			continue
 		}
 
-		stable := d.stable
+		stable, stableOID := d.stable, d.ident.HeadRefOID
 		if full {
-			stable = stableFromWire(node.rawStable)
+			stable, stableOID = stableFromWire(node.rawStable), node.HeadRefOID
 		}
-
-		converted := convertPR(d.ident, stable, node.rawFresh, d.assigned, convertOpts{
+		converted := convertPR(node.rawIdentity, stable, node.rawFresh, d.assigned, convertOpts{
 			staleActivityAfter: s.staleActivityAfter,
 		})
 		converted.DirectRequest = d.directRequest
-		pr := flaggedPR{
-			PullRequest: converted,
-			authored:    d.authored,
+		r := hydrateResult{
+			PullRequest: converted, authored: d.authored,
+			key:       d.key(),
+			id:        node.ID,
+			stableOID: stableOID,
 		}
-		if s.cache != nil {
-			if err := s.cache.SavePR(
-				ctx,
-				d.ident.Repository.NameWithOwner,
-				d.ident.Number,
-				pr.PullRequest,
-			); err != nil {
+		// Only a consistent snapshot (stable fields for the current head) is
+		// worth persisting.
+		if s.cache != nil && stableOID == node.HeadRefOID {
+			if err := s.cache.SavePR(ctx, d.ident.Repository.NameWithOwner, d.ident.Number, converted); err != nil {
 				s.logger.Warn().Err(err).Msg("saving PR cache failed; continuing")
+			} else {
+				r.saved = true
 			}
 		}
-
-		prs = append(prs, pr)
+		out = append(out, r)
 	}
 
-	return prs, nil
+	return out, nil
 }
 
 // flaggedPR is a hydrated pull request with its discovery flags.

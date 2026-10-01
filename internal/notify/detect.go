@@ -10,49 +10,40 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/kalverra/pronto/internal/model"
 )
 
-const (
-	defaultCheckerTimeout     = 5 * time.Second
-	defaultCheckerParallelism = 4
-)
+// defaultCheckerTimeout bounds one batched vanished-PR state lookup.
+const defaultCheckerTimeout = 10 * time.Second
 
 // Detector identifies notification-worthy transitions between pull request states.
 type Detector struct {
-	checker            PRStatusChecker
-	checkerTimeout     time.Duration
-	checkerParallelism int
-	filterBots         bool
-	viewer             string
-	assets             Assets
-	clock              func() time.Time
-	lastDetect         time.Time
-	seenKeys           map[string]bool
-	pendingChecks      map[model.PRKey]Observed
-	mu                 sync.Mutex
+	checker        PRStatusChecker
+	checkerTimeout time.Duration
+	filterBots     bool
+	viewer         string
+	assets         Assets
+	clock          func() time.Time
+	lastDetect     time.Time
+	seenKeys       map[string]bool
+	pendingChecks  map[model.PRKey]Observed
+	mu             sync.Mutex
 }
 
 // NewDetector creates a new Detector with options.
 func NewDetector(checker PRStatusChecker, opts ...DetectorOption) *Detector {
 	d := &Detector{
-		checker:            checker,
-		checkerTimeout:     defaultCheckerTimeout,
-		checkerParallelism: defaultCheckerParallelism,
-		seenKeys:           make(map[string]bool),
-		pendingChecks:      make(map[model.PRKey]Observed),
-		clock:              time.Now,
+		checker:        checker,
+		checkerTimeout: defaultCheckerTimeout,
+		seenKeys:       make(map[string]bool),
+		pendingChecks:  make(map[model.PRKey]Observed),
+		clock:          time.Now,
 	}
 	for _, opt := range opts {
 		opt(d)
 	}
 	if d.checkerTimeout <= 0 {
 		d.checkerTimeout = defaultCheckerTimeout
-	}
-	if d.checkerParallelism <= 0 {
-		d.checkerParallelism = defaultCheckerParallelism
 	}
 	return d
 }
@@ -428,12 +419,7 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 		return nil
 	}
 
-	type checkTarget struct {
-		key model.PRKey
-		obs Observed
-	}
-
-	var targets []checkTarget
+	targets := make(map[model.PRKey]Observed, len(vanished))
 	d.mu.Lock()
 	for key, vObs := range vanished {
 		if d.seenKeys[mergeKey(vObs.PR.RepoNameWithOwner, vObs.PR.Number)] ||
@@ -441,7 +427,7 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 			delete(d.pendingChecks, key)
 			continue
 		}
-		targets = append(targets, checkTarget{key: key, obs: vObs})
+		targets[key] = vObs
 	}
 	d.mu.Unlock()
 
@@ -449,82 +435,79 @@ func (d *Detector) detectVanishedPRs(ctx context.Context, vanished map[model.PRK
 		return nil
 	}
 
-	var (
-		resMu   sync.Mutex
-		results []Notification
-	)
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(d.checkerParallelism)
-
-	for _, target := range targets {
-		g.Go(func() error {
-			checkCtx, cancel := context.WithTimeout(gctx, d.checkerTimeout)
-			defer cancel()
-
-			pr := target.obs.PR
-			state, err := d.checker(checkCtx, pr.RepoNameWithOwner, pr.Number)
-			if err != nil {
-				d.mu.Lock()
-				d.pendingChecks[target.key] = target.obs
-				d.mu.Unlock()
-				return nil
-			}
-
-			d.mu.Lock()
-			delete(d.pendingChecks, target.key)
-			d.mu.Unlock()
-
-			var n Notification
-			switch state {
-			case PRStateMerged:
-				if !pr.IsDefaultBranch() {
-					return nil
-				}
-				if !d.tryMarkSeen(mergeKey(pr.RepoNameWithOwner, pr.Number)) {
-					return nil
-				}
-				targetBranch := pr.BaseRefName
-				if targetBranch == "" {
-					targetBranch = pr.DefaultBranch
-				}
-				msg := fmt.Sprintf("Merged: %q (%s)", pr.Title, pr.Key())
-				if targetBranch != "" {
-					msg = fmt.Sprintf("Merged to %s: %q (%s)", targetBranch, pr.Title, pr.Key())
-				}
-				n = d.note(pr, TriggerPRMerged, pr.URL, pr.Author,
-					fmt.Sprintf("🟣 PR Merged (#%d)", pr.Number),
-					msg,
-					target.obs.Scopes)
-				n.CommitOID = ""
-			case PRStateClosed:
-				if !d.tryMarkSeen(closedKey(pr.RepoNameWithOwner, pr.Number)) {
-					return nil
-				}
-				n = d.note(pr, TriggerPRClosed, pr.URL, pr.Author,
-					fmt.Sprintf("⚪ PR Closed (#%d)", pr.Number),
-					fmt.Sprintf("Closed: %q (%s)", pr.Title, pr.Key()),
-					target.obs.Scopes)
-				n.CommitOID = ""
-			default:
-				// Still open: it left the queue; pr_removed covers that.
-				return nil
-			}
-
-			resMu.Lock()
-			results = append(results, n)
-			resMu.Unlock()
-			return nil
-		})
+	keys := make([]model.PRKey, 0, len(targets))
+	for key := range targets {
+		keys = append(keys, key)
 	}
-
-	_ = g.Wait()
-	slices.SortFunc(results, func(a, b Notification) int {
+	slices.SortFunc(keys, func(a, b model.PRKey) int {
 		if c := strings.Compare(a.Repo, b.Repo); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.PRNumber, b.PRNumber)
+		return cmp.Compare(a.Number, b.Number)
 	})
+
+	checkCtx, cancel := context.WithTimeout(ctx, d.checkerTimeout)
+	states, err := d.checker(checkCtx, keys)
+	cancel()
+
+	d.mu.Lock()
+	for key, obs := range targets {
+		if err != nil {
+			// Retry the whole lookup next poll. A PR missing from a
+			// successful lookup (deleted, access lost) is dropped instead:
+			// retrying cannot help.
+			d.pendingChecks[key] = obs
+		} else {
+			delete(d.pendingChecks, key)
+		}
+	}
+	d.mu.Unlock()
+	if err != nil {
+		return nil
+	}
+
+	var results []Notification
+	for _, key := range keys {
+		pr := targets[key].PR
+		scopes := targets[key].Scopes
+		var n Notification
+		switch states[key] {
+		case PRStateMerged:
+			if !pr.IsDefaultBranch() {
+				continue
+			}
+			if !d.tryMarkSeen(mergeKey(pr.RepoNameWithOwner, pr.Number)) {
+				continue
+			}
+			targetBranch := pr.BaseRefName
+			if targetBranch == "" {
+				targetBranch = pr.DefaultBranch
+			}
+			msg := fmt.Sprintf("Merged: %q (%s)", pr.Title, pr.Key())
+			if targetBranch != "" {
+				msg = fmt.Sprintf("Merged to %s: %q (%s)", targetBranch, pr.Title, pr.Key())
+			}
+			n = d.note(pr, TriggerPRMerged, pr.URL, pr.Author,
+				fmt.Sprintf("🟣 PR Merged (#%d)", pr.Number),
+				msg,
+				scopes)
+			n.CommitOID = ""
+		case PRStateClosed:
+			if !d.tryMarkSeen(closedKey(pr.RepoNameWithOwner, pr.Number)) {
+				continue
+			}
+			n = d.note(pr, TriggerPRClosed, pr.URL, pr.Author,
+				fmt.Sprintf("⚪ PR Closed (#%d)", pr.Number),
+				fmt.Sprintf("Closed: %q (%s)", pr.Title, pr.Key()),
+				scopes)
+			n.CommitOID = ""
+		default:
+			// Still open (it left the queue; pr_removed covers that) or
+			// unknown to GitHub.
+			continue
+		}
+		results = append(results, n)
+	}
 	return results
 }
 

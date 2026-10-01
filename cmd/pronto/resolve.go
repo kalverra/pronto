@@ -19,6 +19,7 @@ import (
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/logging"
+	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/notify"
 	"github.com/kalverra/pronto/internal/profiling"
 	"github.com/kalverra/pronto/internal/server"
@@ -46,7 +47,13 @@ func defaultStore() cache.Store {
 	return store
 }
 
-func defaultSource(debug bool, loggers ...zerolog.Logger) (source.Source, cache.Store, error) {
+// defaultSource builds the GitHub GraphQL source; extra options (pacing)
+// apply after the defaults.
+func defaultSource(
+	debug bool,
+	extra []source.GraphQLSourceOption,
+	loggers ...zerolog.Logger,
+) (source.Source, cache.Store, error) {
 	client, err := api.NewGraphQLClient(api.ClientOptions{Timeout: 30 * time.Second})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create default graphql client: %w", err)
@@ -65,8 +72,51 @@ func defaultSource(debug bool, loggers ...zerolog.Logger) (source.Source, cache.
 	} else {
 		opts = append(opts, source.WithCache(store))
 	}
+	opts = append(opts, extra...)
 	retrying := source.NewRetryingGraphQLClient(client)
 	return source.NewGraphQLSource(retrying, opts...), store, nil
+}
+
+// pacingOptions configures how a polling source paces itself: poll is the
+// base discovery interval (already parsed and floored by the caller); the hot
+// and idle intervals come from config (validated by config.Validate), floored
+// at daemon.MinInterval and poll respectively.
+func pacingOptions(server config.ServerConfig, poll time.Duration) []source.GraphQLSourceOption {
+	parse := func(v string, def time.Duration) time.Duration {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		return def
+	}
+	hot := max(parse(server.HotInterval, source.DefaultHotInterval), daemon.MinInterval)
+	idle := max(parse(server.IdleInterval, source.DefaultIdleInterval), poll)
+	return []source.GraphQLSourceOption{
+		source.WithDiscoveryInterval(poll),
+		source.WithHotInterval(hot),
+		source.WithIdleInterval(idle),
+	}
+}
+
+// stateChecker adapts a source's batched PR state lookup for the change
+// detector; sources without one (fixtures, tests) get no checker.
+func stateChecker(src source.Source) notify.PRStatusChecker {
+	lookup, ok := src.(interface {
+		PRStates(ctx context.Context, keys []model.PRKey) (map[model.PRKey]string, error)
+	})
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, keys []model.PRKey) (map[model.PRKey]notify.PRState, error) {
+		states, err := lookup.PRStates(ctx, keys)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[model.PRKey]notify.PRState, len(states))
+		for k, st := range states {
+			out[k] = notify.PRState(st)
+		}
+		return out, nil
+	}
 }
 
 func isAddressInUse(err error) bool {
@@ -141,21 +191,6 @@ func resolveTUISource(
 	}
 
 	// 2. No daemon is running: start an embedded daemon in-process for ctx.
-	var underlyingSrc source.Source
-	if injected != nil {
-		underlyingSrc = injected
-	} else {
-		var srcErr error
-		var defaultStoreRef cache.Store
-		underlyingSrc, defaultStoreRef, srcErr = defaultSource(debug)
-		if srcErr != nil {
-			return nil, nil, nil, srcErr
-		}
-		if injectedStore == nil {
-			store = defaultStoreRef
-		}
-	}
-
 	pollInterval := daemon.DefaultInterval
 	if cfg.Server.PollInterval != "" {
 		if parsed, err := time.ParseDuration(cfg.Server.PollInterval); err == nil {
@@ -168,6 +203,21 @@ func resolveTUISource(
 			Dur("clamped_to", clamped).
 			Msg("poll interval below minimum; clamping (GitHub API rate limits)")
 		pollInterval = clamped
+	}
+
+	var underlyingSrc source.Source
+	if injected != nil {
+		underlyingSrc = injected
+	} else {
+		var srcErr error
+		var defaultStoreRef cache.Store
+		underlyingSrc, defaultStoreRef, srcErr = defaultSource(debug, pacingOptions(cfg.Server, pollInterval))
+		if srcErr != nil {
+			return nil, nil, nil, srcErr
+		}
+		if injectedStore == nil {
+			store = defaultStoreRef
+		}
 	}
 
 	leakDumpDir := ""
@@ -189,7 +239,7 @@ func resolveTUISource(
 	daemonOpts := daemon.Options{
 		Source:             underlyingSrc,
 		Store:              store,
-		Checker:            notify.DefaultPRStatusChecker,
+		Checker:            stateChecker(underlyingSrc),
 		Interval:           pollInterval,
 		LeakCheckInterval:  leakInterval,
 		LeakChecker:        leakChecker,
@@ -248,7 +298,7 @@ func resolveQueueSource(
 	if cmd != nil {
 		debug, _ = cmd.Flags().GetBool("debug")
 	}
-	src, _, err := defaultSource(debug)
+	src, _, err := defaultSource(debug, nil)
 	return src, err
 }
 

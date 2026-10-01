@@ -26,7 +26,7 @@ func TestResolveServeSource(t *testing.T) {
 	injected := &scriptedSource{results: []fetchResult{
 		{queue: model.Queue{Viewer: "kalverra"}},
 	}}
-	s, _, err := resolveServeSource(injected, false, zerolog.Nop())
+	s, _, err := resolveServeSource(injected, false, zerolog.Nop(), nil)
 	require.NoError(t, err)
 	assert.Same(t, injected, s)
 }
@@ -36,7 +36,7 @@ func TestResolveServeSource_NeverProxiesDaemon(t *testing.T) {
 
 	// serve must fetch directly from GitHub; a second serve fails the bind
 	// rather than silently becoming a proxy of the first.
-	s, _, err := resolveServeSource(nil, false, zerolog.Nop())
+	s, _, err := resolveServeSource(nil, false, zerolog.Nop(), nil)
 	if err != nil {
 		t.Skipf("cannot construct GraphQL client (no gh auth?): %v", err)
 	}

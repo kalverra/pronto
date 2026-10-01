@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kalverra/pronto/internal/events"
+	"github.com/kalverra/pronto/internal/model"
 )
 
 // Trigger identifies the event that caused a notification.
@@ -97,8 +98,10 @@ const (
 	PRStateMerged PRState = "MERGED"
 )
 
-// PRStatusChecker reports the lifecycle state of a pull request.
-type PRStatusChecker func(ctx context.Context, repo string, number int) (PRState, error)
+// PRStatusChecker reports the lifecycle state of each pull request in keys
+// in one batched lookup. PRs GitHub no longer returns are absent from the
+// result; an error means none could be checked.
+type PRStatusChecker func(ctx context.Context, keys []model.PRKey) (map[model.PRKey]PRState, error)
 
 // Assets holds per-trigger image and sound overrides, resolved once from user
 // config and applied to every notification before delivery.
@@ -157,17 +160,10 @@ func WithViewer(viewer string) DetectorOption {
 	}
 }
 
-// WithCheckerTimeout configures the per-check timeout for vanished PR status checks.
+// WithCheckerTimeout configures the timeout for one batched vanished PR status lookup.
 func WithCheckerTimeout(timeout time.Duration) DetectorOption {
 	return func(d *Detector) {
 		d.checkerTimeout = timeout
-	}
-}
-
-// WithCheckerParallelism configures the maximum concurrent vanished PR status checks.
-func WithCheckerParallelism(n int) DetectorOption {
-	return func(d *Detector) {
-		d.checkerParallelism = n
 	}
 }
 

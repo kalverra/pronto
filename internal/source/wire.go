@@ -38,6 +38,35 @@ type rawIdentity struct {
 	Repository     rawRepo        `json:"repository"`
 	Stack          *rawStack      `json:"stack"`
 	StackEntry     *rawStackEntry `json:"stackEntry"`
+	State          string         `json:"state"`
+
+	// Change fingerprint (aliased fp* in DiscoveryFields): cheap signals
+	// that move without bumping updatedAt.
+	FPMergeable        string        `json:"fpMergeable"`
+	FPMergeStateStatus string        `json:"fpMergeStateStatus"`
+	FPReviewDecision   string        `json:"fpReviewDecision"`
+	FPLastCommit       rawRollupHead `json:"fpLastCommit"`
+}
+
+// rawRollupHead is the fingerprint's view of the head commit: only the
+// overall status check rollup state.
+type rawRollupHead struct {
+	Nodes []struct {
+		Commit struct {
+			StatusCheckRollup *struct {
+				State string `json:"state"`
+			} `json:"statusCheckRollup"`
+		} `json:"commit"`
+	} `json:"nodes"`
+}
+
+// rollupState returns the head commit's status check rollup state from the
+// fingerprint, or "" when the commit has no checks.
+func (id rawIdentity) rollupState() string {
+	if len(id.FPLastCommit.Nodes) == 0 || id.FPLastCommit.Nodes[0].Commit.StatusCheckRollup == nil {
+		return ""
+	}
+	return id.FPLastCommit.Nodes[0].Commit.StatusCheckRollup.State
 }
 
 type rawStable struct {
@@ -71,14 +100,9 @@ type rawStackEntry struct {
 	Position int    `json:"position"`
 }
 
-// rawHydrated is the response node for a hydrated pull request: stable fields
-// are zero-valued when the hydration query skipped them (cache hit).
-type rawHydrated struct {
-	rawStable
-	rawFresh
-}
-
-// rawPR is the full wire shape, used by the fixture loader.
+// rawPR is the full wire shape: a hydration response node (stable fields are
+// zero-valued when the query skipped them on a cache hit) and the fixture
+// loader's record.
 type rawPR struct {
 	rawIdentity
 	rawStable

@@ -54,7 +54,9 @@ environment variables override file values.
 | `priority.authors` | `PRONTO_PRIORITY_AUTHORS` | []string | `[]` | `—` | PR authors whose incoming pull requests go in the Priority tab. |
 | `priority.repos` | `PRONTO_PRIORITY_REPOS` | []string | `[]` | `—` | Repositories whose incoming pull requests go in the Priority tab. |
 | `priority.rules` | `—` | []rule | — | `—` | Priority rules with the same shape as focus.rules (repo, keywords, files, directories, paths, regex, authors). |
-| `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Daemon poll interval as a Go duration string, e.g. "30s"; default 60s; minimum 10s. |
+| `server.poll_interval` | `PRONTO_POLL_INTERVAL` | duration | — | `—` | Base interval between discovery searches (new, updated, and departed PRs) as a Go duration string, e.g. "30s"; default 60s; minimum 10s. Discovery backs off toward `server.idle_interval` while nothing changes. |
+| `server.hot_interval` | `PRONTO_HOT_INTERVAL` | duration | — | `—` | Fast-lane refresh interval for PRs whose state is actively moving (CI running, in a merge queue, merge state computing), as a Go duration string; default 20s; minimum 10s. Hot ticks re-hydrate only those PRs and skip discovery. |
+| `server.idle_interval` | `PRONTO_IDLE_INTERVAL` | duration | — | `—` | Longest wait between discovery searches once several in a row found no change, as a Go duration string; default 3m; never below `server.poll_interval`. |
 | `server.pprof_addr` | `PRONTO_PPROF_ADDR` | string | `""` | `—` | Loopback address for the net/http/pprof endpoint in `pronto serve`, e.g. "localhost:6060"; empty disables it. |
 | `server.leak_check_interval` | `PRONTO_LEAK_CHECK_INTERVAL` | duration | `"1h"` | `—` | Interval between goroutine leak profile checks in `pronto serve` as a Go duration string; "0" disables. |
 
@@ -232,6 +234,8 @@ exclude_bots = true
 
 [server]
 # poll_interval = "30s"
+# hot_interval = "20s"
+# idle_interval = "3m"
 pprof_addr = ""
 leak_check_interval = "1h"
 ```

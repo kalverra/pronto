@@ -1,0 +1,11 @@
+query SearchPage($query: String!, $cursor: String, $first: Int!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    resetAt
+  }
+  search(query: $query, type: ISSUE, first: $first, after: $cursor) {
+    ...DiscoveryPage
+  }
+}

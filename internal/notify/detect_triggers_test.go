@@ -59,7 +59,7 @@ func TestDetector_MergeQueueLeft_NotFiredWhenVanishes(t *testing.T) {
 	t.Parallel()
 
 	checker := func(context.Context, string, int) (notify.PRState, error) { return notify.PRStateOpen, nil }
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(perPR(checker))
 	queued := makeBasePR(1, "Queued")
 	queued.IsInMergeQueue = true
 
@@ -81,7 +81,7 @@ func TestDetector_Vanished_ByState(t *testing.T) {
 		t.Run(string(tc.state), func(t *testing.T) {
 			t.Parallel()
 			checker := func(context.Context, string, int) (notify.PRState, error) { return tc.state, nil }
-			d := notify.NewDetector(checker)
+			d := notify.NewDetector(perPR(checker))
 			mine := scope(notify.TabMine, model.SectionInReview)
 
 			notes := detect(t, d, obsIn(makeBasePR(1, "Gone"), mine), nil)
@@ -297,7 +297,7 @@ func TestDetector_Vanished_DefaultBranchFiltering(t *testing.T) {
 	checker := func(context.Context, string, int) (notify.PRState, error) {
 		return notify.PRStateMerged, nil
 	}
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(perPR(checker))
 	mine := scope(notify.TabMine, model.SectionReadyToMerge)
 
 	// Merged into non-default feature branch: must be skipped.

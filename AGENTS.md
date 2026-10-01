@@ -14,7 +14,7 @@ Create an maintain a simple CLI + TUI tool for a clean interface of PR statuses.
 | Package              | Role                                                                                                                                                     |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cmd/pronto`         | Cobra+fang CLI; bare invocation launches TUI                                                                                                             |
-| `internal/source`    | GitHub GraphQL fetching; `Source` interface is the test seam (`NewFixtureSource`)                                                                        |
+| `internal/source`    | GitHub GraphQL fetching + self-pacing (`Pacer`: activity tiers, hot lane, idle backoff); `Source` interface is the test seam (`NewFixtureSource`)        |
 | `internal/model`     | Domain types (Queue, PullRequest, Checks, MergeStatus); JSON-tagged                                                                                      |
 | `internal/score`     | Ranking + explainable breakdowns                                                                                                                         |
 | `internal/tui`       | Bubbletea app                                                                                                                                            |
