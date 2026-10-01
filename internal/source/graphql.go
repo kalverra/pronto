@@ -27,11 +27,12 @@ var ErrSearchOverflow = errors.New("search results overflowed 1000 item limit")
 const identityTTL = 24 * time.Hour
 
 const (
-	discoveryPageSize   = 100
-	defaultFetchTimeout = 45 * time.Second
+	discoveryPageSize = 100
+	// DefaultFetchTimeout is the baseline budget for steady-state queue fetches.
+	DefaultFetchTimeout = 45 * time.Second
 	// ColdFetchTimeout is the recommended deadline for fetches that may need
 	// to hydrate a large queue from an empty cache: TUI startup and one-shot
-	// commands. Steady-state fetches fit comfortably in defaultFetchTimeout;
+	// commands. Steady-state fetches fit comfortably in DefaultFetchTimeout;
 	// cold ones at scale need minutes of server time.
 	ColdFetchTimeout = 4 * time.Minute
 	// hydrateBatchSize is capped at 10: each alias expands deep fragments
@@ -258,7 +259,7 @@ func (t *trackedPR) target() hydrateTarget {
 func NewGraphQLSource(client GraphQLClient, opts ...GraphQLSourceOption) *GraphQLSource {
 	s := &GraphQLSource{
 		client:             client,
-		fetchTimeout:       defaultFetchTimeout,
+		fetchTimeout:       DefaultFetchTimeout,
 		discoveryLimit:     discoveryLimit,
 		hydrateLimit:       defaultHydrateConcurrency,
 		hydrateBatchSize:   hydrateBatchSize,

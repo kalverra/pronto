@@ -197,7 +197,7 @@ func fingerprintChanged(id rawIdentity, pr model.PullRequest) bool {
 		id.FPReviewDecision != "" && id.FPReviewDecision != pr.ReviewDecision:
 		return true
 	}
-	return id.rollupState() != pr.Checks.State
+	return id.rollupState() != "" && id.rollupState() != pr.Checks.State
 }
 
 // discoveryBackoff returns the wait before the next discovery after quiet

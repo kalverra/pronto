@@ -240,14 +240,14 @@ per-PR disk cache on first sight) and schedules its own work; `Fetch` is one
 `NextFetch()` instead of using a fixed ticker.
 
 - **Discovery ticks** (every `server.poll_interval`, default 60s) run the
-  combined search. Each search result carries a cheap **change fingerprint**
-  besides `updatedAt`/`headRefOid`/merge-queue/draft state: `mergeable`,
-  `mergeStateStatus`, `reviewDecision`, and the head commit's status-check
-  rollup state (aliased `fp*` in `DiscoveryFields`). These move without
-  bumping `updatedAt` — CI finishing, a base-branch push causing a conflict —
-  so discovery alone notices them. A PR is re-hydrated when it is new, its
-  fingerprint moved (`UNKNOWN`/empty values never count), or its tier says
-  it is due. PRs absent from every search are dropped.
+  combined search. Each search result carries a lightweight **change fingerprint**
+  besides `updatedAt`/`headRefOid`/merge-queue/draft/closed state: the head commit's
+  status-check rollup state (aliased `fpLastCommit` in `DiscoveryFields`). This moves
+  without bumping `updatedAt` — CI finishing — so discovery catches it. Heavy computed
+  fields like `mergeStateStatus` and `reviewDecision` are intentionally omitted from
+  discovery searches to prevent GitHub GraphQL 502/timeouts on large queues; they are
+  resolved during node hydration instead. A PR is re-hydrated when it is new, its
+  fingerprint moved, or its tier says it is due. PRs absent from every search are dropped.
 - **Hot ticks** (every `server.hot_interval`, default 20s, between
   discoveries) skip the searches and re-hydrate only due PRs by node ID. The
   hydration queries spread `DiscoveryFields` too, so a hot tick refreshes

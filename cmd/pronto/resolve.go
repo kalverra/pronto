@@ -54,7 +54,7 @@ func defaultSource(
 	extra []source.GraphQLSourceOption,
 	loggers ...zerolog.Logger,
 ) (source.Source, cache.Store, error) {
-	client, err := api.NewGraphQLClient(api.ClientOptions{Timeout: 30 * time.Second})
+	client, err := api.NewGraphQLClient(api.ClientOptions{})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create default graphql client: %w", err)
 	}
