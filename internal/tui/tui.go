@@ -1235,9 +1235,9 @@ func (m Model) handleNavKey(key string) (Model, bool) {
 		case "j", "down":
 			if m.notificationCursor >= len(m.notifications)-1 {
 				m.notificationFocused = false
-				vis := m.visibleItemIndices(m.activeTab)
-				if len(vis) > 0 {
-					m = m.setCursor(vis[0])
+				proj := m.projection(m.activeTab)
+				if vis := proj.visibleItemIndices(); len(vis) > 0 {
+					m = m.setCursorIn(proj, vis[0])
 				}
 				return m, true
 			}
@@ -1263,7 +1263,7 @@ func (m Model) handleNavKey(key string) (Model, bool) {
 		return m.moveCursor(1), true
 	case "k", "up":
 		if len(m.notifications) > 0 && !m.hideNotifs {
-			vis := m.visibleItemIndices(m.activeTab)
+			vis := m.projection(m.activeTab).visibleItemIndices()
 			cursor := m.Cursor()
 			if len(vis) == 0 || cursor == vis[0] {
 				m.notificationFocused = true
@@ -1279,15 +1279,15 @@ func (m Model) handleNavKey(key string) (Model, bool) {
 		visRows := m.VisibleRows()
 		return m.moveCursor(-max(1, visRows)), true
 	case "g", "home":
-		vis := m.visibleItemIndices(m.activeTab)
-		if len(vis) > 0 {
-			return m.setCursor(vis[0]), true
+		proj := m.projection(m.activeTab)
+		if vis := proj.visibleItemIndices(); len(vis) > 0 {
+			return m.setCursorIn(proj, vis[0]), true
 		}
 		return m.setCursor(0), true
 	case "G", "end":
-		vis := m.visibleItemIndices(m.activeTab)
-		if len(vis) > 0 {
-			return m.setCursor(vis[len(vis)-1]), true
+		proj := m.projection(m.activeTab)
+		if vis := proj.visibleItemIndices(); len(vis) > 0 {
+			return m.setCursorIn(proj, vis[len(vis)-1]), true
 		}
 		return m, true
 	}
@@ -1464,17 +1464,7 @@ func (m Model) activeList() []score.Scored {
 }
 
 func (m Model) isCurrentRowCollapsedStack() (*StackGroup, bool) {
-	rows := m.buildDisplayRows(m.activeTab)
-	cursor := m.Cursor()
-	for _, r := range rows {
-		if r.kind == rowItem && r.itemIndex == cursor {
-			if r.isCollapsedStack && r.stackGroup != nil {
-				return r.stackGroup, true
-			}
-			return nil, false
-		}
-	}
-	return nil, false
+	return m.projection(m.activeTab).collapsedStack(m.Cursor())
 }
 
 func (m Model) stackPRKeys(stackKey string) []model.PRKey {
@@ -1565,7 +1555,7 @@ func (m Model) toggleAllStacks() Model {
 		m.stacksCollapsed = false
 	} else {
 		m.stacksCollapsed = true
-		vis := m.visibleItemIndices(m.activeTab)
+		vis := m.projection(m.activeTab).visibleItemIndices()
 		cursor := m.Cursor()
 		found := slices.Contains(vis, cursor)
 		if !found && len(vis) > 0 {
@@ -1584,63 +1574,50 @@ func (m Model) toggleAllStacks() Model {
 	return m.clampTabView(m.activeTab)
 }
 
-func (m Model) visibleItemIndices(tab Tab) []int {
-	rows := m.buildDisplayRows(tab)
-	var indices []int
-	for _, r := range rows {
-		if r.kind == rowItem {
-			indices = append(indices, r.itemIndex)
-		}
-	}
-	return indices
-}
-
 func (m Model) moveCursor(delta int) Model {
-	list := m.activeList()
-	if len(list) == 0 {
+	if len(m.activeList()) == 0 {
 		return m
 	}
-	vis := m.visibleItemIndices(m.activeTab)
+	proj := m.projection(m.activeTab)
+	vis := proj.visibleItemIndices()
 	if len(vis) == 0 {
 		return m
 	}
-	cursor := m.Cursor()
-	currPos := 0
-	found := false
-	for i, idx := range vis {
-		if idx == cursor {
-			currPos = i
-			found = true
-			break
-		}
-	}
-	if !found {
-		currPos = 0
-	}
+	currPos := max(slices.Index(vis, m.Cursor()), 0)
 	newPos := clampIndex(currPos+delta, len(vis)-1)
-	return m.setCursor(vis[newPos])
+	return m.setCursorIn(proj, vis[newPos])
 }
 
 func (m Model) setCursor(pos int) Model {
+	return m.setCursorIn(m.projection(m.activeTab), pos)
+}
+
+// setCursorIn is setCursor reusing proj, the active tab's current projection.
+func (m Model) setCursorIn(proj tableProjection, pos int) Model {
 	list := m.activeList()
 	if len(list) == 0 {
 		return m
 	}
 	m.cursors[m.activeTab] = clampIndex(pos, len(list)-1)
-	return m.clampTabView(m.activeTab)
+	return m.clampTabViewIn(m.activeTab, proj)
 }
 
 // clampTabView clamps the tab's cursor to list bounds and re-anchors scroll
 // so the cursor's display row stays within the visible window.
 func (m Model) clampTabView(tab Tab) Model {
-	list := m.items(tab)
-	if len(list) == 0 {
+	if len(m.items(tab)) == 0 {
 		m.cursors[tab], m.scrolls[tab] = 0, 0
 		return m
 	}
-	m.cursors[tab] = clampIndex(m.cursors[tab], len(list)-1)
-	dispCursor, totalRows := m.displayCursorAndRows(tab)
-	m.scrolls[tab] = clampScroll(m.scrolls[tab], dispCursor, totalRows, m.VisibleRows())
+	return m.clampTabViewIn(tab, m.projection(tab))
+}
+
+// clampTabViewIn is clampTabView reusing proj, the tab's current projection.
+// Callers ensure the tab's list is non-empty.
+func (m Model) clampTabViewIn(tab Tab, proj tableProjection) Model {
+	m.cursors[tab] = clampIndex(m.cursors[tab], len(m.items(tab))-1)
+	anchor := proj.scrollAnchor(m.cursors[tab])
+	m.scrolls[tab] = clampScroll(m.scrolls[tab], anchor, proj.rowCount(), m.VisibleRows())
 	return m
 }
 
@@ -1649,30 +1626,6 @@ func (m Model) clampAllTabViews() Model {
 		m = m.clampTabView(tab)
 	}
 	return m
-}
-
-func (m Model) displayCursorAndRows(tab Tab) (int, int) {
-	rows := m.buildDisplayRows(tab)
-	if len(rows) == 0 {
-		return 0, 0
-	}
-	cursor := m.cursors[tab]
-	displayCursor := cursor
-	for i, r := range rows {
-		if r.kind == rowItem && r.itemIndex == cursor {
-			displayCursor = i
-			break
-		}
-	}
-	vis := m.visibleItemIndices(tab)
-	if len(vis) > 0 && cursor == vis[0] {
-		// At the list top, anchor to the display top so the first section
-		// divider stays visible. Safe because ranking sorts by the same
-		// categories the display groups by: item 0 is always in the first
-		// section, at row 0 or 1.
-		displayCursor = 0
-	}
-	return displayCursor, len(rows)
 }
 
 func clampScroll(scroll, cursor, listLen, visRows int) int {

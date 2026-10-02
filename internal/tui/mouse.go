@@ -101,12 +101,13 @@ func (m Model) displayRowAt(y int) (displayRow, bool) {
 		strings.Count(m.renderTabBar(contentWidth), "\n") +
 		strings.Count(m.renderNotificationsArea(), "\n") +
 		tableHeaderLines
-	rows := m.buildDisplayRows(m.activeTab)
-	scroll := min(max(m.ScrollOffset(), 0), len(rows))
-	end := min(len(rows), scroll+m.VisibleRows())
+	proj := m.projection(m.activeTab)
+	rowCount := proj.rowCount()
+	scroll := min(max(m.ScrollOffset(), 0), rowCount)
+	end := min(rowCount, scroll+m.VisibleRows())
 	idx := scroll + (y - top)
 	if y < top || idx >= end {
 		return displayRow{}, false
 	}
-	return rows[idx], true
+	return proj.rowAt(idx)
 }
