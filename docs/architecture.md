@@ -91,6 +91,13 @@ Key interactions and focus behaviors:
   by `UpdatedAt` descending), and Priority Score (pure global priority score
   ranking without category dividers). Stacks remain contiguous and the currently
   selected PR stays anchored across sort toggles.
+- **Table projection** (`internal/tui/projection.go`): `buildProjection` turns a
+  tab's items, sort, focus pins, and stack fold state into a `tableProjection` —
+  display rows (dividers, stack banners, collapsed stacks, items) plus a
+  row index. Rendering, cursor movement, scroll anchoring, and mouse hit
+  testing all read the same projection, so they can't disagree about which row
+  an item is on. A cursor on a hidden member of a collapsed stack maps to that
+  stack's row.
 
 ### Architecture
 
@@ -105,7 +112,7 @@ flowchart TB
 
     subgraph daemonpkg["pronto serve (internal/daemon)"]
         loop["Poll loop (interval, warm start from cache)"]
-        detector["config.Classify → notify.Detector (trigger events) → Policy.Select"]
+        detector["notify.Detector.Detect (classify → triggers → Policy.Select)"]
         diff["Queue set-diff (pr_added / pr_removed)"]
         bus["events.Bus (fan-out, seq, ordering)"]
         state["Daemon state (queue snapshot)"]
@@ -173,10 +180,9 @@ sequenceDiagram
     else fetch ok
         S-->>L: model.Queue
         Note over L: first fetch seeds the detector<br/>(baseline, no events)
-        L->>D: DetectChanges(prev, curr) over Classify'd PRs
-        D-->>L: every transition (ci_passed, ci_failed, conflict,<br/>review_received, pr_merged, pr_opened, pr_closed,<br/>merge_queue_entered, merge_queue_left,<br/>new_commits, entered)
-        Note over L: Policy.Select marks deliveries<br/>(event.notify set only for those)
-        L->>L: set-diff prev vs curr (pr_added, pr_removed)
+        L->>D: Detect(prev, curr)
+        Note over D: classify scopes, find every transition<br/>(ci_passed, ci_failed, conflict, review_received,<br/>pr_merged, pr_opened, pr_closed, merge_queue_entered,<br/>merge_queue_left, new_commits, entered),<br/>Policy.Select marks deliveries,<br/>set-diff prev vs curr (pr_added, pr_removed)
+        D-->>L: Delta (events with notify set on deliveries, boosted keys)
         L->>B: Emit events (seq assigned, UTC ts)
         B-->>C: pushed NDJSON lines (emit order per connection)
         L->>B: Emit queue_refreshed{ok:true, counts}
@@ -207,11 +213,13 @@ edit the source packages, never the generated files.
 
 ### Caching
 
-`internal/cache` is a file-backed `Store` under `PRONTO_CACHE_DIR` (default
-`os.UserCacheDir()/pronto`). Every write is a temp file + `rename`, so readers
-never see a partial file, and every read is miss-tolerant: corrupt, absent, or
-schema-mismatched data returns `ok=false`, never an error. Four artifact
-kinds, four lifetimes:
+`internal/cache` is a file-backed `Store` (`DiskStore`) under
+`PRONTO_CACHE_DIR` (default `os.UserCacheDir()/pronto`). Every write is a temp
+file + `rename`, so readers never see a partial file, and every read is
+miss-tolerant: corrupt, absent, key-mismatched, or schema-mismatched data
+returns zero values and `ok=false`, never an error. `internal/cache/cachetest`
+is an in-memory fake with the same semantics; a shared contract test runs
+against both. Four artifact kinds, four lifetimes:
 
 | Artifact                                      | File                            | Lifetime                                                                     |
 | --------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
@@ -235,7 +243,9 @@ limit is account-global and retrying while limited risks a ban.
 ### Pacing
 
 `GraphQLSource` keeps every open PR it has seen in memory (seeded from the
-per-PR disk cache on first sight) and schedules its own work; `Fetch` is one
+per-PR disk cache on first sight) and delegates pacing and tick planning to an
+internal `scheduler` (`internal/source/scheduler.go`; callers serialize under
+`fetchMu`, only the `NextFetch` deadline is read concurrently); `Fetch` is one
 **tick**, and the source implements `source.Pacer` so the daemon sleeps until
 `NextFetch()` instead of using a fixed ticker.
 
@@ -252,7 +262,7 @@ per-PR disk cache on first sight) and schedules its own work; `Fetch` is one
   discoveries) skip the searches and re-hydrate only due PRs by node ID. The
   hydration queries spread `DiscoveryFields` too, so a hot tick refreshes
   identity fields and drops a PR it finds closed or merged.
-- **Tiers** (`source.classify`, `schedule.go`) set how long a hydration stays
+- **Tiers** (`scheduler.tierFor`, `schedule.go`) set how long a hydration stays
   fresh, jittered 0.75–1.25x per PR (FNV hash of `repo#number`) so PRs
   hydrated together don't all come due on one tick:
 
@@ -265,7 +275,7 @@ per-PR disk cache on first sight) and schedules its own work; `Fetch` is one
   | Stale  | older                                                                                                   | never — fingerprint changes only |
 
   Focused and Priority-tab PRs are **boosted** one tier (never into Hot):
-  the daemon passes their keys from its last `config.Classify` via
+  the daemon passes their keys from its last classification via
   `source.WithBoosted`. A PR with no checks at all is only hot for the
   10 minutes after a push, so CI-less repos don't re-hydrate every tick.
 - **Idle backoff.** After 3 discoveries in a row with no added, removed, or
@@ -313,17 +323,19 @@ package never has to duplicate backend-selection logic.
 **Which events notify** is a per-tab / per-section policy, resolved from
 `notifications.<tab>.triggers` and `notifications.<tab>.<section>` config
 (`NotificationConfig.Policy()`, a `notify.Policy` mapping `notify.Scope` →
-trigger set). `config.Classify` places every PR in its scopes (a tab-level
+trigger set). `notify.Classify` places every PR in its scopes (a tab-level
 scope and a section-level scope per tab: mine / priority / inbox, plus focus).
-`Detector.DetectChanges` takes `[]notify.Observed` (PR + scopes) and returns
-*every* transition unfiltered, each carrying the scopes to evaluate; the
-`entered` trigger fires when a PR gains a scope. `Policy.Select` then keeps the
-wanted notifications and collapses per-PR `pr_opened`/`entered` duplicates to
-the most specific one. The daemon emits every trigger event on the bus (so
-`pronto watch`/`wait` see everything) and sets `Event.Notify` — the rendered
-banner — only on policy-selected events; the TUI in daemon mode delivers
-exactly those, verbatim. Standalone TUI runs the same Classify → Detect →
-Select path locally. Section names are `model.Section`, shared with the TUI
+`Detector.Detect(ctx, prev, curr, opts...)` is the one detection path: it
+classifies both queues, finds *every* transition (the `entered` trigger fires
+when a PR gains a scope), runs `Policy.Select` to keep the wanted notifications
+and collapse per-PR `pr_opened`/`entered` duplicates to the most specific one,
+and returns a `Delta` (`Events`, `Notifications`, `Boosted`). With no policy,
+nothing notifies. `Detector.Seed` primes the detector from a warm-start queue
+without notifying and returns the boosted set. The daemon emits every trigger
+event on the bus (so `pronto watch`/`wait` see everything) and sets
+`Event.Notify` — the rendered banner — only on policy-selected events; the TUI
+in daemon mode delivers exactly those, verbatim. Standalone TUI runs the same
+`Seed`/`Detect` path locally. Section names are `model.Section`, shared with the TUI
 dividers via `model.EffectiveSections` (stack-aware).
 
 Two delivery backends, selected by `notifications.mode` (default `native`):
