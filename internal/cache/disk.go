@@ -31,6 +31,9 @@ func (d *DiskStore) Dir() string {
 	return d.dir
 }
 
+// stampedFile is the on-disk envelope. Key identifies the document so a
+// filename collision (e.g. "a/b" and "a_b" sanitize to the same name) reads as
+// a miss instead of returning the wrong document.
 type stampedFile struct {
 	Schema  int             `json:"schema"`
 	Key     string          `json:"key"`
@@ -40,7 +43,9 @@ type stampedFile struct {
 
 var errCacheMiss = errors.New("cache miss")
 
-func (d *DiskStore) read(ctx context.Context, path string, dest any) (stampedFile, error) {
+// read decodes the envelope at path without touching Data. Absent, corrupt,
+// or schema-mismatched files return an error.
+func (d *DiskStore) read(ctx context.Context, path string) (stampedFile, error) {
 	if err := ctx.Err(); err != nil {
 		return stampedFile{}, err
 	}
@@ -56,10 +61,35 @@ func (d *DiskStore) read(ctx context.Context, path string, dest any) (stampedFil
 	if stamped.Schema != SchemaVersion {
 		return stampedFile{}, errCacheMiss
 	}
-	if err := json.Unmarshal(stamped.Data, dest); err != nil {
-		return stampedFile{}, err
-	}
 	return stamped, nil
+}
+
+// load reads the document at path stamped with key. Any miss (absent, corrupt,
+// key mismatch, ctx done) returns the zero T and ok=false.
+func load[T any](ctx context.Context, d *DiskStore, path, key string) (T, time.Time, bool) {
+	stamped, err := d.read(ctx, path)
+	if err != nil {
+		var zero T
+		return zero, time.Time{}, false
+	}
+	return decode[T](ctx, stamped, key)
+}
+
+// decode unmarshals stamped.Data once its key matches; mismatches and decode
+// failures return the zero T so callers never see a wrong or partial value.
+func decode[T any](ctx context.Context, stamped stampedFile, key string) (T, time.Time, bool) {
+	var zero T
+	if stamped.Key != key {
+		return zero, time.Time{}, false
+	}
+	var v T
+	if err := json.Unmarshal(stamped.Data, &v); err != nil {
+		return zero, time.Time{}, false
+	}
+	if ctx.Err() != nil {
+		return zero, time.Time{}, false
+	}
+	return v, stamped.SavedAt, true
 }
 
 func (d *DiskStore) write(ctx context.Context, path, key string, data any) error {
@@ -104,59 +134,63 @@ func (d *DiskStore) write(ctx context.Context, path, key string, data any) error
 	return nil
 }
 
-// Identity returns the cached viewer identity, or ok=false when absent, stale
-// files are corrupt, schema/key mismatches, or ctx is done.
-func (d *DiskStore) Identity(ctx context.Context) (Identity, time.Time, bool) {
-	var id Identity
-	stamped, err := d.read(ctx, filepath.Join(d.dir, "identity.json"), &id)
-	if err != nil {
-		return Identity{}, time.Time{}, false
-	}
-	if stamped.Key == "" || stamped.Key != id.Login {
-		return Identity{}, time.Time{}, false
-	}
-	if ctx.Err() != nil {
-		return Identity{}, time.Time{}, false
-	}
-	return id, stamped.SavedAt, true
+// rootPath is the path of a singleton document (identity, queue, focus).
+func (d *DiskStore) rootPath(name string) string {
+	return filepath.Join(d.dir, name+".json")
 }
 
-// SaveIdentity persists the viewer identity.
+func (d *DiskStore) prsDir() string {
+	return filepath.Join(d.dir, "prs")
+}
+
+func (d *DiskStore) prPath(repo string, num int) string {
+	safe := strings.NewReplacer("/", "_", "\\", "_").Replace(repo)
+	return filepath.Join(d.prsDir(), fmt.Sprintf("%s_%d.json", safe, num))
+}
+
+func prDocKey(repo string, num int) string {
+	return model.PRKey{Repo: repo, Number: num}.String()
+}
+
+// Identity returns the cached viewer identity, or ok=false when absent,
+// corrupt, schema/key mismatched, saved without a login, or ctx is done.
+func (d *DiskStore) Identity(ctx context.Context) (Identity, time.Time, bool) {
+	// Identity is keyed by its own login, which is unknown until decoded.
+	stamped, err := d.read(ctx, d.rootPath("identity"))
+	if err != nil || stamped.Key == "" {
+		return Identity{}, time.Time{}, false
+	}
+	id, savedAt, ok := decode[Identity](ctx, stamped, stamped.Key)
+	if !ok || id.Login != stamped.Key {
+		return Identity{}, time.Time{}, false
+	}
+	return id, savedAt, true
+}
+
+// SaveIdentity persists the viewer identity. An identity without a login is
+// written but always reads back as a miss.
 func (d *DiskStore) SaveIdentity(ctx context.Context, id Identity) error {
-	return d.write(ctx, filepath.Join(d.dir, "identity.json"), id.Login, id)
+	return d.write(ctx, d.rootPath("identity"), id.Login, id)
 }
 
 // PR returns cached pull request for (repo, num), or ok=false when absent.
 func (d *DiskStore) PR(ctx context.Context, repo string, num int) (model.PullRequest, time.Time, bool) {
-	var pr model.PullRequest
-	stamped, err := d.read(ctx, d.prPath(repo, num), &pr)
-	if err != nil {
-		return model.PullRequest{}, time.Time{}, false
-	}
-	expectedKey := model.PRKey{Repo: repo, Number: num}.String()
-	if stamped.Key != expectedKey {
-		return model.PullRequest{}, time.Time{}, false
-	}
-	return pr, stamped.SavedAt, true
+	return load[model.PullRequest](ctx, d, d.prPath(repo, num), prDocKey(repo, num))
 }
 
 // SavePR persists full pull request for (repo, num).
 func (d *DiskStore) SavePR(ctx context.Context, repo string, num int, pr model.PullRequest) error {
-	expectedKey := model.PRKey{Repo: repo, Number: num}.String()
-	return d.write(ctx, d.prPath(repo, num), expectedKey, pr)
+	return d.write(ctx, d.prPath(repo, num), prDocKey(repo, num), pr)
 }
 
-// TouchPR updates the access and modification times of the PR cache file.
+// TouchPR marks the PR cache file as recently used without advancing its
+// savedAt, so PrunePRs keeps it. Touching an absent entry is a no-op.
 func (d *DiskStore) TouchPR(ctx context.Context, repo string, num int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	path := d.prPath(repo, num)
 	now := time.Now()
-	if err := os.Chtimes(path, now, now); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+	if err := os.Chtimes(d.prPath(repo, num), now, now); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -164,10 +198,11 @@ func (d *DiskStore) TouchPR(ctx context.Context, repo string, num int) error {
 
 const tempFilePruneAge = 1 * time.Hour
 
-// PrunePRs removes stale PR cache files and temp files.
+// PrunePRs removes PR cache files not saved or touched within olderThan, plus
+// abandoned temp files.
 func (d *DiskStore) PrunePRs(ctx context.Context, olderThan time.Duration) (int, error) {
-	prsDir := filepath.Join(d.dir, "prs")
-	entries, err := os.ReadDir(prsDir)
+	dir := d.prsDir()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
@@ -184,7 +219,7 @@ func (d *DiskStore) PrunePRs(ctx context.Context, olderThan time.Duration) (int,
 			continue
 		}
 		name := entry.Name()
-		fullPath := filepath.Join(prsDir, name)
+		fullPath := filepath.Join(dir, name)
 
 		info, err := entry.Info()
 		if err != nil {
@@ -211,50 +246,22 @@ func (d *DiskStore) PrunePRs(ctx context.Context, olderThan time.Duration) (int,
 	return removed, nil
 }
 
-func (d *DiskStore) prPath(repo string, num int) string {
-	safe := strings.NewReplacer("/", "_", "\\", "_").Replace(repo)
-	name := fmt.Sprintf("%s_%d.json", safe, num)
-	return filepath.Join(d.dir, "prs", name)
-}
-
 // Queue returns the cached queue snapshot, or ok=false when absent.
 func (d *DiskStore) Queue(ctx context.Context) (model.Queue, time.Time, bool) {
-	var q model.Queue
-	stamped, err := d.read(ctx, filepath.Join(d.dir, "queue.json"), &q)
-	if err != nil {
-		return model.Queue{}, time.Time{}, false
-	}
-	if stamped.Key != "queue" {
-		return model.Queue{}, time.Time{}, false
-	}
-	if ctx.Err() != nil {
-		return model.Queue{}, time.Time{}, false
-	}
-	return q, stamped.SavedAt, true
+	return load[model.Queue](ctx, d, d.rootPath("queue"), "queue")
 }
 
 // SaveQueue persists a queue snapshot.
 func (d *DiskStore) SaveQueue(ctx context.Context, q model.Queue) error {
-	return d.write(ctx, filepath.Join(d.dir, "queue.json"), "queue", q)
+	return d.write(ctx, d.rootPath("queue"), "queue", q)
 }
 
 // Focus returns the cached focused PR keys, or ok=false when absent.
 func (d *DiskStore) Focus(ctx context.Context) ([]model.PRKey, time.Time, bool) {
-	var keys []model.PRKey
-	stamped, err := d.read(ctx, filepath.Join(d.dir, "focus.json"), &keys)
-	if err != nil {
-		return nil, time.Time{}, false
-	}
-	if stamped.Key != "focus" {
-		return nil, time.Time{}, false
-	}
-	if ctx.Err() != nil {
-		return nil, time.Time{}, false
-	}
-	return keys, stamped.SavedAt, true
+	return load[[]model.PRKey](ctx, d, d.rootPath("focus"), "focus")
 }
 
 // SaveFocus persists focused PR keys.
 func (d *DiskStore) SaveFocus(ctx context.Context, keys []model.PRKey) error {
-	return d.write(ctx, filepath.Join(d.dir, "focus.json"), "focus", keys)
+	return d.write(ctx, d.rootPath("focus"), "focus", keys)
 }

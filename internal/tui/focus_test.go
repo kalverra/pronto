@@ -3,7 +3,6 @@ package tui_test
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,63 +11,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalverra/pronto/internal/cache"
+	"github.com/kalverra/pronto/internal/cache/cachetest"
 	"github.com/kalverra/pronto/internal/config"
 	"github.com/kalverra/pronto/internal/model"
 	"github.com/kalverra/pronto/internal/tui"
 )
-
-type focusTestStore struct {
-	mu      sync.Mutex
-	queue   model.Queue
-	keys    []model.PRKey
-	savedAt time.Time
-	ok      bool
-}
-
-func (s *focusTestStore) Identity(context.Context) (cache.Identity, time.Time, bool) {
-	return cache.Identity{}, time.Time{}, false
-}
-func (s *focusTestStore) SaveIdentity(context.Context, cache.Identity) error { return nil }
-func (s *focusTestStore) PR(context.Context, string, int) (model.PullRequest, time.Time, bool) {
-	return model.PullRequest{}, time.Time{}, false
-}
-
-func (s *focusTestStore) SavePR(context.Context, string, int, model.PullRequest) error { return nil }
-
-func (s *focusTestStore) TouchPR(context.Context, string, int) error { return nil }
-
-func (s *focusTestStore) PrunePRs(context.Context, time.Duration) (int, error) { return 0, nil }
-
-func (s *focusTestStore) Queue(context.Context) (model.Queue, time.Time, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.queue, s.savedAt, s.ok
-}
-
-func (s *focusTestStore) SaveQueue(_ context.Context, q model.Queue) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.queue = q
-	s.savedAt = time.Now()
-	s.ok = true
-	return nil
-}
-
-func (s *focusTestStore) Focus(context.Context) ([]model.PRKey, time.Time, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.keys, s.savedAt, s.ok
-}
-
-func (s *focusTestStore) SaveFocus(_ context.Context, keys []model.PRKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.keys = keys
-	s.savedAt = time.Now()
-	s.ok = true
-	return nil
-}
 
 func TestModel_ToggleFocusKey(t *testing.T) {
 	t.Parallel()
@@ -485,7 +432,7 @@ func TestModel_FocusPersistence(t *testing.T) {
 	t.Run("toggle focus triggers async save when store present", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		store := &focusTestStore{}
+		store := cachetest.New()
 		q := makeTestQueue()
 		m := tui.New(
 			q,
@@ -528,12 +475,9 @@ func TestModel_FocusPersistence(t *testing.T) {
 		ctx := context.Background()
 		q := makeTestQueue()
 		targetKey := q.Inbox[0].Key()
-		store := &focusTestStore{
-			queue:   q,
-			keys:    []model.PRKey{targetKey},
-			savedAt: time.Now(),
-			ok:      true,
-		}
+		store := cachetest.New()
+		require.NoError(t, store.SaveQueue(ctx, q))
+		require.NoError(t, store.SaveFocus(ctx, []model.PRKey{targetKey}))
 
 		m := tui.StartupModel(ctx, nil, store, tui.WithViewer("kalverra"))
 		assert.True(t, m.IsFocused(targetKey))

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/kalverra/pronto/internal/cache"
+	"github.com/kalverra/pronto/internal/cache/cachetest"
 	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
@@ -62,55 +62,16 @@ func (s *scriptedSource) fetchDeadline() (time.Time, bool) {
 	return s.deadline, s.deadlineOK
 }
 
-type memStore struct {
-	mu      sync.Mutex
-	queue   model.Queue
-	savedAt time.Time
-	ok      bool
-	saved   int
+// seededStore returns a cache fake holding q, saved age ago.
+func seededStore(t *testing.T, q model.Queue, age time.Duration) *cachetest.Store {
+	t.Helper()
+	store := cachetest.New()
+	at := time.Now().Add(-age)
+	store.SetClock(func() time.Time { return at })
+	require.NoError(t, store.SaveQueue(context.Background(), q))
+	store.SetClock(time.Now)
+	return store
 }
-
-func (m *memStore) Identity(context.Context) (cache.Identity, time.Time, bool) {
-	return cache.Identity{}, time.Time{}, false
-}
-
-func (m *memStore) SaveIdentity(context.Context, cache.Identity) error { return nil }
-
-func (m *memStore) PR(context.Context, string, int) (model.PullRequest, time.Time, bool) {
-	return model.PullRequest{}, time.Time{}, false
-}
-
-func (m *memStore) SavePR(context.Context, string, int, model.PullRequest) error {
-	return nil
-}
-
-func (m *memStore) TouchPR(context.Context, string, int) error {
-	return nil
-}
-
-func (m *memStore) PrunePRs(context.Context, time.Duration) (int, error) {
-	return 0, nil
-}
-
-func (m *memStore) Queue(context.Context) (model.Queue, time.Time, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.queue, m.savedAt, m.ok
-}
-
-func (m *memStore) SaveQueue(_ context.Context, q model.Queue) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.queue, m.savedAt, m.ok = q, time.Now(), true
-	m.saved++
-	return nil
-}
-
-func (m *memStore) Focus(context.Context) ([]model.PRKey, time.Time, bool) {
-	return nil, time.Time{}, false
-}
-
-func (m *memStore) SaveFocus(context.Context, []model.PRKey) error { return nil }
 
 // --- startup ----------------------------------------------------------------
 
@@ -118,7 +79,7 @@ func TestStartupModel_FreshSnapshotSkipsFetch(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now(), ok: true}
+	store := seededStore(t, makeTestQueue(), 0)
 
 	m := tui.StartupModel(context.Background(), src, store)
 
@@ -134,7 +95,7 @@ func TestStartupModel_StaleSnapshotFlagsRefresh(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 10*time.Minute)
 
 	m := tui.StartupModel(context.Background(), src, store)
 
@@ -147,7 +108,7 @@ func TestStartupModel_NoSnapshotLoads(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{}
+	store := cachetest.New()
 
 	m := tui.StartupModel(context.Background(), src, store)
 
@@ -222,7 +183,7 @@ func TestModel_InitialFetchCarriesColdDeadline(t *testing.T) {
 
 	// Stale snapshot startup fetches too.
 	stale := &scriptedSource{queues: newQueue()}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 10*time.Minute)
 	m = tui.StartupModel(context.Background(), stale, store)
 	require.True(t, m.StaleSnapshot())
 
@@ -240,7 +201,7 @@ func TestModel_QueueRefreshedFetchKeepsShortDeadline(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now(), ok: true}
+	store := seededStore(t, makeTestQueue(), 0)
 	m := tui.StartupModel(context.Background(), src, store)
 	require.False(t, m.IsLoading())
 	require.False(t, m.StaleSnapshot())
@@ -268,7 +229,7 @@ func TestModel_QueueLoadedUpdatesItemsAndClampsCursor(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	m := tui.StartupModel(context.Background(), src, &memStore{})
+	m := tui.StartupModel(context.Background(), src, cachetest.New())
 
 	moved, _ := sendRune(m, 'j') // cursor to second of two inbox items
 	m = moved.(tui.Model)
@@ -286,7 +247,7 @@ func TestModel_QueueLoadedUpdatesItemsAndClampsCursor(t *testing.T) {
 }
 
 type failOnSaveStore struct {
-	memStore
+	*cachetest.Store
 	t *testing.T
 }
 
@@ -300,10 +261,7 @@ func TestTUI_ClientModeDoesNotWriteSnapshot(t *testing.T) {
 
 	q := makeTestQueue()
 	src := &scriptedSource{queues: []model.Queue{q}}
-	store := &failOnSaveStore{
-		queue: q, savedAt: time.Now(), ok: true,
-		t: t,
-	}
+	store := &failOnSaveStore{Store: seededStore(t, q, 0), t: t}
 	m := tui.StartupModel(context.Background(), src, store)
 
 	// Refresh load: wasInitial is false, so no tickCmd is returned
@@ -342,7 +300,7 @@ func TestModel_FetchErrorKeepsStaleData(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now(), ok: true}
+	store := seededStore(t, makeTestQueue(), 0)
 	m := tui.StartupModel(context.Background(), src, store)
 	require.NotEmpty(t, m.InboxItems())
 
@@ -375,7 +333,7 @@ func TestModel_ManualRefreshKey(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now(), ok: true}
+	store := seededStore(t, makeTestQueue(), 0)
 	m := tui.StartupModel(context.Background(), src, store)
 	require.False(t, m.IsLoading(), "refresh key test needs a non-loading model")
 
@@ -414,7 +372,7 @@ func TestView_RefreshFailedBannerShowsDataAge(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-3 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 3*time.Minute)
 	m := tui.StartupModel(context.Background(), src, store)
 
 	updated, _ := m.Update(tui.QueueLoadedMsg{Err: errors.New("gateway timeout")})
@@ -487,7 +445,7 @@ func TestModel_QueueLoadedAfterInitialFetchArmsNoTick(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{}
+	store := cachetest.New()
 	m := tui.StartupModel(context.Background(), src, store)
 	require.True(t, m.IsLoading())
 
@@ -515,7 +473,7 @@ func TestModel_RefreshKeyIgnoredDuringStaleSnapshotFetch(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 10*time.Minute)
 	m := tui.StartupModel(context.Background(), src, store)
 	require.True(t, m.StaleSnapshot())
 
@@ -590,7 +548,7 @@ func TestModel_QueueRefreshedSkipsFetchDuringStaleSnapshotFetch(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 10*time.Minute)
 	m := tui.StartupModel(context.Background(), src, store)
 	require.True(t, m.StaleSnapshot())
 
@@ -667,7 +625,7 @@ func TestModel_QueueRefreshedEventTriggersSnapshotReload(t *testing.T) {
 	})
 
 	src := &scriptedSource{queues: []model.Queue{q2}}
-	store := &memStore{queue: q1, savedAt: time.Now(), ok: true}
+	store := seededStore(t, q1, 0)
 	eventsCh := make(chan events.Event, 1)
 
 	m := tui.StartupModel(context.Background(), src, store, tui.WithEvents(eventsCh))
@@ -772,7 +730,7 @@ func TestModel_ManualRefreshKey_DaemonModeSendsQueueRefresh(t *testing.T) {
 		queue:    q,
 		eventsCh: make(chan events.Event, 1),
 	}
-	store := &memStore{queue: q, savedAt: time.Now(), ok: true}
+	store := seededStore(t, q, 0)
 	m := tui.StartupModel(context.Background(), daemonSrc, store)
 	require.False(t, m.IsRefreshing())
 
@@ -801,7 +759,7 @@ func TestStartupModel_SubscribesToDaemonSource(t *testing.T) {
 		queue:    q,
 		eventsCh: eventsCh,
 	}
-	store := &memStore{queue: q, savedAt: time.Now(), ok: true}
+	store := seededStore(t, q, 0)
 
 	m := tui.StartupModel(context.Background(), daemonSrc, store)
 	cmd := m.Init()
@@ -852,7 +810,7 @@ func TestStartupModel_EmbeddedDaemonStreamsFetchProgress(t *testing.T) {
 		t.Fatal("daemon never became ready")
 	}
 
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 10*time.Minute)
 	m := tui.StartupModel(ctx, daemon.NewSource(d), store)
 	require.True(t, m.StaleSnapshot(), "stale snapshot must flag an immediate refresh")
 
@@ -962,7 +920,7 @@ func TestView_StaleSnapshotBannerShowsProgressBar(t *testing.T) {
 	t.Parallel()
 
 	src := &scriptedSource{queues: []model.Queue{makeTestQueue()}}
-	store := &memStore{queue: makeTestQueue(), savedAt: time.Now().Add(-10 * time.Minute), ok: true}
+	store := seededStore(t, makeTestQueue(), 10*time.Minute)
 	m := tui.StartupModel(context.Background(), src, store)
 	require.True(t, m.StaleSnapshot(), "10-minute-old snapshot must flag stale")
 

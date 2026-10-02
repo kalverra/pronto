@@ -257,8 +257,10 @@ func TestDiskStore_ColludingRepoNamesDoNotCollide(t *testing.T) {
 	require.NoError(t, store.SavePR(ctx, "a/b_c", 1, pr))
 
 	// Reading colluding repo name must miss
-	_, _, ok := store.PR(ctx, "a_b/c", 1)
+	got, savedAt, ok := store.PR(ctx, "a_b/c", 1)
 	assert.False(t, ok, "colluding repo name must miss due to canonical key validation")
+	assert.Zero(t, got, "a key-mismatch miss must not return the colliding document")
+	assert.Zero(t, savedAt)
 }
 
 func TestDiskStore_TouchPRMissingEntryIsNoop(t *testing.T) {
