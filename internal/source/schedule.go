@@ -140,46 +140,12 @@ func lastActivity(pr model.PullRequest) time.Time {
 	return latest
 }
 
-// reuseFor is how long a PR hydrated in tier t stays fresh enough to skip
-// re-hydration. Stale PRs are reused until their fingerprint moves (ok is
-// false: no deadline). Non-hot tiers are jittered per PR so PRs hydrated
-// together don't all come due on the same tick.
-func (s *GraphQLSource) reuseFor(pr model.PullRequest, t tier) (time.Duration, bool) {
-	var base time.Duration
-	switch t {
-	case tierHot:
-		return s.hotInterval, true
-	case tierActive:
-		base = activeReuse
-	case tierRecent:
-		base = recentReuse
-	case tierQuiet:
-		base = s.maxReuseAge
-		if base <= 0 {
-			base = defaultMaxReuseAge
-		}
-	default:
-		return 0, false
-	}
-	return jitter(base, pr.RepoNameWithOwner, pr.Number), true
-}
-
 // jitter scales d by a stable per-PR factor in [0.75, 1.25].
 func jitter(d time.Duration, repo string, num int) time.Duration {
 	h := fnv.New32a()
 	_, _ = fmt.Fprintf(h, "%s#%d", repo, num)
 	frac := 0.75 + 0.50*(float64(h.Sum32())/float64(math.MaxUint32))
 	return time.Duration(float64(d) * frac)
-}
-
-// dueAt reports when tracked PR t next needs hydration, scaled by the budget
-// factor. ok is false when the PR is only refreshed by a fingerprint change.
-func (s *GraphQLSource) dueAt(t *trackedPR, now time.Time, boosted bool, factor int) (time.Time, bool) {
-	reuse, ok := s.reuseFor(t.pr, classify(t.pr, now, s.staleActivityAfter, boosted))
-	if !ok {
-		return time.Time{}, false
-	}
-	return t.hydratedAt.Add(reuse * time.Duration(factor)), true
 }
 
 // fingerprintChanged reports whether discovery shows the PR moved since pr

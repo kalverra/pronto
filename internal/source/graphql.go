@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -122,7 +123,7 @@ func WithCacheRetention(d time.Duration) GraphQLSourceOption {
 func WithMaxReuseAge(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
-			s.maxReuseAge = d
+			s.sched.cfg.maxReuseAge = d
 		}
 	}
 }
@@ -134,7 +135,7 @@ func WithMaxReuseAge(d time.Duration) GraphQLSourceOption {
 func WithStaleActivityAfter(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
-			s.staleActivityAfter = d
+			s.sched.cfg.staleActivityAfter = d
 		}
 	}
 }
@@ -144,7 +145,7 @@ func WithStaleActivityAfter(d time.Duration) GraphQLSourceOption {
 func WithDiscoveryInterval(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
-			s.discoveryInterval = d
+			s.sched.cfg.discoveryInterval = d
 		}
 	}
 }
@@ -154,7 +155,7 @@ func WithDiscoveryInterval(d time.Duration) GraphQLSourceOption {
 func WithHotInterval(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
-			s.hotInterval = d
+			s.sched.cfg.hotInterval = d
 		}
 	}
 }
@@ -164,7 +165,7 @@ func WithHotInterval(d time.Duration) GraphQLSourceOption {
 func WithIdleInterval(d time.Duration) GraphQLSourceOption {
 	return func(s *GraphQLSource) {
 		if d > 0 {
-			s.idleInterval = d
+			s.sched.cfg.idleInterval = d
 		}
 	}
 }
@@ -192,20 +193,15 @@ func WithClock(now func() time.Time) GraphQLSourceOption {
 // Discovery backs off toward the idle interval while nothing changes, and
 // every cadence stretches when the hourly GraphQL budget runs low.
 type GraphQLSource struct {
-	client             GraphQLClient
-	logger             zerolog.Logger
-	cache              cache.Store
-	fetchTimeout       time.Duration
-	discoveryLimit     int
-	hydrateLimit       int
-	hydrateBatchSize   int
-	cacheRetention     time.Duration
-	maxReuseAge        time.Duration
-	staleActivityAfter time.Duration
-	discoveryInterval  time.Duration
-	hotInterval        time.Duration
-	idleInterval       time.Duration
-	pruneOnce          sync.Once
+	client           GraphQLClient
+	logger           zerolog.Logger
+	cache            cache.Store
+	fetchTimeout     time.Duration
+	discoveryLimit   int
+	hydrateLimit     int
+	hydrateBatchSize int
+	cacheRetention   time.Duration
+	pruneOnce        sync.Once
 
 	// nowFn overrides the clock (tests); guarded by immutability after
 	// construction.
@@ -218,15 +214,10 @@ type GraphQLSource struct {
 	rlUntil     time.Time // backoff deadline armed on a primary limit rejection
 
 	// fetchMu serializes Fetch and guards the scheduling state below.
-	fetchMu       sync.Mutex
-	tracked       map[model.PRKey]*trackedPR
-	order         []model.PRKey // discovery order of tracked PRs
-	lastDiscovery time.Time
-	nextDiscovery time.Time
-	quietStreak   int
-
-	// nextFetch is the UnixNano time NextFetch reports; 0 before any Fetch.
-	nextFetch atomic.Int64
+	fetchMu sync.Mutex
+	tracked map[model.PRKey]*trackedPR
+	order   []model.PRKey // discovery order of tracked PRs
+	sched   scheduler
 }
 
 // trackedPR is the source's memory of one open pull request between fetches.
@@ -258,19 +249,15 @@ func (t *trackedPR) target() hydrateTarget {
 // NewGraphQLSource constructs a GraphQLSource.
 func NewGraphQLSource(client GraphQLClient, opts ...GraphQLSourceOption) *GraphQLSource {
 	s := &GraphQLSource{
-		client:             client,
-		fetchTimeout:       DefaultFetchTimeout,
-		discoveryLimit:     discoveryLimit,
-		hydrateLimit:       defaultHydrateConcurrency,
-		hydrateBatchSize:   hydrateBatchSize,
-		cacheRetention:     defaultCacheRetention,
-		maxReuseAge:        defaultMaxReuseAge,
-		staleActivityAfter: defaultStaleActivityAfter,
-		discoveryInterval:  DefaultDiscoveryInterval,
-		hotInterval:        DefaultHotInterval,
-		idleInterval:       DefaultIdleInterval,
-		nowFn:              time.Now,
-		tracked:            make(map[model.PRKey]*trackedPR),
+		client:           client,
+		fetchTimeout:     DefaultFetchTimeout,
+		discoveryLimit:   discoveryLimit,
+		hydrateLimit:     defaultHydrateConcurrency,
+		hydrateBatchSize: hydrateBatchSize,
+		cacheRetention:   defaultCacheRetention,
+		nowFn:            time.Now,
+		tracked:          make(map[model.PRKey]*trackedPR),
+		sched:            scheduler{cfg: defaultSchedulerConfig()},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -442,79 +429,30 @@ func (s *GraphQLSource) rateLimitedUntil() (time.Time, bool) {
 // before an armed primary rate limit backoff expires. Before the first Fetch
 // it reports now.
 func (s *GraphQLSource) NextFetch() time.Time {
-	if until, limited := s.rateLimitedUntil(); limited {
-		return until
-	}
-	if n := s.nextFetch.Load(); n != 0 {
-		return time.Unix(0, n)
-	}
-	return s.now()
+	until, limited := s.rateLimitedUntil()
+	return s.sched.nextFetchAt(s.now(), until, limited)
 }
 
-// scheduleNext records the NextFetch deadline after a successful tick.
-// Callers hold fetchMu.
-func (s *GraphQLSource) scheduleNext(now time.Time, boosted map[model.PRKey]bool, factor int) {
-	next := s.nextDiscovery
-	for _, key := range s.order {
-		t := s.tracked[key]
-		if t == nil {
-			continue
-		}
-		if due, ok := s.dueAt(t, now, boosted[key], factor); ok && due.Before(next) {
-			next = due
-		}
-	}
-	floor := now.Add(min(s.hotInterval, s.discoveryInterval) * time.Duration(factor))
-	if next.Before(floor) {
-		next = floor
-	}
-	s.nextFetch.Store(next.UnixNano())
-}
-
-// scheduleRetry records the NextFetch deadline after a failed tick: one base
-// discovery interval out, so a persistent failure polls no faster than the
-// steady state. A due discovery stays due.
-func (s *GraphQLSource) scheduleRetry(now time.Time, factor int) {
-	s.nextFetch.Store(now.Add(s.discoveryInterval * time.Duration(factor)).UnixNano())
-}
-
-// scheduleDiscovery sets the next discovery deadline after one ran: the base
-// interval while anything is changing, backing off toward the idle interval
-// after quietDiscoveries unchanged ones in a row. Callers hold fetchMu.
+// scheduleDiscovery records a completed discovery with the scheduler and
+// logs the resulting backoff. Callers hold fetchMu.
 func (s *GraphQLSource) scheduleDiscovery(now time.Time, changed bool, factor int) {
-	if changed {
-		s.quietStreak = 0
-	} else {
-		s.quietStreak++
-	}
-	wait := discoveryBackoff(s.discoveryInterval, s.idleInterval, s.quietStreak) * time.Duration(factor)
-	s.lastDiscovery = now
-	s.nextDiscovery = now.Add(wait)
+	quietStreak, wait := s.sched.recordDiscovery(now, changed, factor)
 	s.logger.Debug().
-		Int("quiet_streak", s.quietStreak).
+		Int("quiet_streak", quietStreak).
 		Dur("next_discovery_in", wait).
 		Msg("scheduled discovery")
 }
 
-// isDue reports whether tracked PR t needs hydration this tick. A forced
-// tick refreshes every hot PR regardless of when it was last hydrated.
-func (s *GraphQLSource) isDue(t *trackedPR, now time.Time, boosted, force bool, factor int) bool {
-	if force && classify(t.pr, now, s.staleActivityAfter, boosted) == tierHot {
-		return true
-	}
-	due, ok := s.dueAt(t, now, boosted, factor)
-	return ok && !now.Before(due)
-}
-
-// anyHot reports whether any tracked PR is in the hot tier. Callers hold
-// fetchMu.
-func (s *GraphQLSource) anyHot(now time.Time) bool {
-	for _, key := range s.order {
-		if t := s.tracked[key]; t != nil && classify(t.pr, now, s.staleActivityAfter, false) == tierHot {
-			return true
+// trackedPRs yields tracked PRs in discovery order, keyed by their tracked
+// key. Callers hold fetchMu.
+func (s *GraphQLSource) trackedPRs() iter.Seq2[model.PRKey, *trackedPR] {
+	return func(yield func(model.PRKey, *trackedPR) bool) {
+		for _, key := range s.order {
+			if t := s.tracked[key]; t != nil && !yield(key, t) {
+				return
+			}
 		}
 	}
-	return false
 }
 
 // Fetch runs one tick and returns the full queue of tracked open PRs. A
@@ -549,10 +487,10 @@ func (s *GraphQLSource) Fetch(ctx context.Context) (model.Queue, error) {
 
 	queue, err := s.tick(ctx, now, force, boosted, factor)
 	if err != nil {
-		s.scheduleRetry(now, factor)
+		s.sched.scheduleRetry(now, factor)
 		return model.Queue{}, err
 	}
-	s.scheduleNext(now, boosted, factor)
+	s.sched.scheduleNext(now, s.trackedPRs(), boosted, factor)
 
 	if s.cache != nil {
 		s.pruneOnce.Do(func() {
@@ -576,7 +514,7 @@ func (s *GraphQLSource) tick(
 	boosted map[model.PRKey]bool,
 	factor int,
 ) (model.Queue, error) {
-	discovering := force || s.lastDiscovery.IsZero() || !now.Before(s.nextDiscovery)
+	discovering := s.sched.discoveryDue(now, force)
 
 	var (
 		ident      cache.Identity
@@ -607,7 +545,7 @@ func (s *GraphQLSource) tick(
 		targets, changed = s.reconcile(ctx, discovered, now, boosted, force, factor)
 	} else {
 		for _, key := range s.order {
-			if t := s.tracked[key]; t != nil && s.isDue(t, now, boosted[key], false, factor) {
+			if t := s.tracked[key]; t != nil && s.sched.isDue(t, now, boosted[key], false, factor) {
 				targets = append(targets, t.target())
 			}
 		}
@@ -652,7 +590,7 @@ func (s *GraphQLSource) tick(
 		return model.Queue{}, errors.New("all pull requests failed hydration")
 	}
 	if discovering {
-		s.scheduleDiscovery(now, changed || force || s.anyHot(now), factor)
+		s.scheduleDiscovery(now, changed || force || s.sched.anyHot(s.trackedPRs(), now), factor)
 	}
 
 	s.logger.Info().
@@ -703,7 +641,7 @@ func (s *GraphQLSource) reconcile(
 		if moved {
 			changed = true
 		}
-		if !moved && !s.isDue(t, now, boosted[key], force, factor) {
+		if !moved && !s.sched.isDue(t, now, boosted[key], force, factor) {
 			s.applyDiscovery(&t.pr, d, now)
 			s.touch(ctx, key, t, now)
 			continue
@@ -762,7 +700,7 @@ func (s *GraphQLSource) applyDiscovery(pr *model.PullRequest, d discoveredPR, no
 	pr.Stack = convertStack(d.ident.Stack, d.ident.StackEntry)
 	pr.MergeStatus = model.ComputeMergeStatus(pr.Mergeable, pr.MergeStateStatus, d.ident.IsDraft)
 	pr.MergeStatus.IsInMergeQueue = d.ident.IsInMergeQueue
-	pr.Stale = !d.ident.UpdatedAt.IsZero() && now.Sub(d.ident.UpdatedAt) >= s.staleActivityAfter
+	pr.Stale = !d.ident.UpdatedAt.IsZero() && now.Sub(d.ident.UpdatedAt) >= s.sched.cfg.staleActivityAfter
 }
 
 // touch bumps a reused PR's cache file mtime so retention pruning does not
@@ -831,7 +769,7 @@ func (s *GraphQLSource) apply(
 		case s.tracked[key] != nil:
 		case secondary:
 			pr := convertPR(target.ident, stableFields{}, rawFresh{}, target.assigned, convertOpts{
-				staleActivityAfter: s.staleActivityAfter,
+				staleActivityAfter: s.sched.cfg.staleActivityAfter,
 			})
 			pr.Partial = true
 			pr.DirectRequest = target.directRequest
@@ -1440,7 +1378,7 @@ func (s *GraphQLSource) executeHydrateQuery(
 			stable, stableOID = stableFromWire(node.rawStable), node.HeadRefOID
 		}
 		converted := convertPR(node.rawIdentity, stable, node.rawFresh, d.assigned, convertOpts{
-			staleActivityAfter: s.staleActivityAfter,
+			staleActivityAfter: s.sched.cfg.staleActivityAfter,
 		})
 		converted.DirectRequest = d.directRequest
 		r := hydrateResult{
