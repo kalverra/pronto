@@ -77,7 +77,7 @@ func TestDetector_ReviewStateDefaultIcons(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			t.Parallel()
 
-			d := notify.NewDetector(nil)
+			d := notify.NewDetector()
 			prevPR := makeBasePR(1, "Feature A")
 			currPR := prevPR
 			currPR.LatestReviews = []model.Review{
@@ -89,12 +89,11 @@ func TestDetector_ReviewStateDefaultIcons(t *testing.T) {
 				},
 			}
 
-			notes, err := d.DetectChanges(
+			notes := d.DetectChanges(
 				context.Background(),
 				obs(prevPR),
 				obs(currPR),
 			)
-			require.NoError(t, err)
 			require.Len(t, notes, 1)
 			assert.Equal(t, wantBase, filepath.Base(notes[0].ImagePath))
 		})
@@ -104,7 +103,7 @@ func TestDetector_ReviewStateDefaultIcons(t *testing.T) {
 func TestDetector_DefaultIcon_Fallback(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
 
@@ -119,8 +118,7 @@ func TestDetector_DefaultIcon_Fallback(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(
 		t,
@@ -133,7 +131,7 @@ func TestDetector_UserImageOverridesDefaultIcon(t *testing.T) {
 	t.Parallel()
 
 	images := map[notify.Trigger]string{notify.TriggerCIFailed: "/custom/fail.png"}
-	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Images: images}))
+	d := notify.NewDetector(notify.WithAssets(notify.Assets{Images: images}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -149,8 +147,7 @@ func TestDetector_UserImageOverridesDefaultIcon(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(t, "/custom/fail.png", notes[0].ImagePath)
 }
@@ -159,7 +156,7 @@ func TestDetector_UserImagePartial_KeepsDefaultsForOthers(t *testing.T) {
 	t.Parallel()
 
 	images := map[notify.Trigger]string{notify.TriggerCIPassed: "/custom/pass.png"}
-	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Images: images}))
+	d := notify.NewDetector(notify.WithAssets(notify.Assets{Images: images}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -175,8 +172,7 @@ func TestDetector_UserImagePartial_KeepsDefaultsForOthers(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(
 		t,

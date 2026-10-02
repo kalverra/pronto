@@ -229,7 +229,9 @@ func WithNotifier(n notify.Notifier) Option {
 	}
 }
 
-// WithDetector sets a custom detector for mine PR transitions.
+// WithDetector sets a custom change detector for standalone (non-daemon)
+// sources. It replaces the default one entirely, so configure its policy,
+// priority, and focus rules (notify.WithPolicy, WithPriority, WithFocus).
 func WithDetector(d *notify.Detector) Option {
 	return func(m *Model) {
 		m.detector = d
@@ -615,16 +617,20 @@ func New(q model.Queue, opts ...Option) Model {
 		}
 		if !m.detectionDisabled {
 			if m.detector == nil {
-				dOpts := detectorOptions(m.notifCfg)
+				dOpts := append(detectorOptions(m.notifCfg),
+					notify.WithPolicy(m.notifPolicy),
+					notify.WithPriority(m.priorityCfg),
+					notify.WithFocus(m.focusCfg),
+				)
 				if m.viewer != "" {
 					dOpts = append(dOpts, notify.WithViewer(m.viewer))
 				}
 				// Standalone (non-daemon) sources only: production always runs
 				// a daemon, which owns vanished-PR state lookups. Inject one with
 				// WithDetector to check merged/closed state here.
-				m.detector = notify.NewDetector(nil, dOpts...)
+				m.detector = notify.NewDetector(dOpts...)
 			}
-			m.detector.Seed(m.observe(q))
+			m.detector.Seed(q, m.detectOptions()...)
 		}
 	}
 	if m.viewPR == nil {
@@ -1311,12 +1317,12 @@ func (m Model) handleQueueLoaded(msg QueueLoadedMsg) (Model, tea.Cmd) {
 	var notifCmd tea.Cmd
 	if wasInitial {
 		if m.detector != nil {
-			m.detector.Seed(m.observe(msg.Queue))
+			m.detector.Seed(msg.Queue, m.detectOptions()...)
 		}
 	} else if m.detector != nil && !m.isDaemon() {
 		notifCmd = notifyCmd(
-			m.ctx, m.detector, m.notifPolicy, m.notifier, m.logger,
-			m.observe(m.queue), m.observe(msg.Queue),
+			m.ctx, m.detector, m.notifier, m.logger,
+			m.queue, msg.Queue, m.detectOptions(),
 		)
 	}
 
@@ -1324,18 +1330,32 @@ func (m Model) handleQueueLoaded(msg QueueLoadedMsg) (Model, tea.Cmd) {
 	return m, notifCmd
 }
 
-// observe places every PR in q into its notification scopes. Manual focus
-// decisions win; focus rules apply to the rest.
+// detectOptions classifies against the model's clock and manual focus
+// decisions; the detector's focus rules apply to undecided PRs.
+func (m Model) detectOptions() []notify.DetectOption {
+	return []notify.DetectOption{notify.WithNow(m.now), notify.WithFocusOverride(m.focusOverride())}
+}
+
+// observe places every PR in q into its notification scopes, as the
+// detector would. Manual focus decisions win; focus rules apply to the rest.
 func (m Model) observe(q model.Queue) []notify.Observed {
-	return config.Classify(q, m.priorityCfg, m.focusCfg, func(k model.PRKey) (bool, bool) {
+	return notify.Classify(q, m.priorityCfg, m.focusCfg, m.focusOverride(), m.now)
+}
+
+// focusOverride reports the user's manual focus decisions. Focus toggles
+// replace the maps rather than mutate them, so the closure is safe to run
+// from a detection command after the model moves on.
+func (m Model) focusOverride() notify.FocusOverride {
+	focused, unfocused := m.focusedKeys, m.manualUnfocused
+	return func(k model.PRKey) (bool, bool) {
 		switch {
-		case m.focusedKeys[k]:
+		case focused[k]:
 			return true, true
-		case m.manualUnfocused[k]:
+		case unfocused[k]:
 			return false, true
 		}
 		return false, false
-	}, m.now)
+	}
 }
 
 func (m Model) isDaemon() bool {

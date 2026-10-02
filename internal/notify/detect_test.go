@@ -36,21 +36,20 @@ func obs(prs ...model.PullRequest) []notify.Observed {
 func TestDetector_Seed_NoNotificationsOnInitialLoad(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	pr := makeBasePR(1, "Feature A")
 	pr.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-	d.Seed(obs(pr))
+	d.SeedObserved(obs(pr))
 
-	notes, err := d.DetectChanges(context.Background(), obs(pr), obs(pr))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(pr), obs(pr))
 	assert.Empty(t, notes, "seeded baseline must produce zero notifications")
 }
 
 func TestDetector_CIPassed_FromRunning(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{
 		Total:             2,
@@ -65,8 +64,7 @@ func TestDetector_CIPassed_FromRunning(t *testing.T) {
 	currPR := prevPR
 	currPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 
 	n := notes[0]
@@ -81,7 +79,7 @@ func TestDetector_CIPassed_FromRunning(t *testing.T) {
 func TestDetector_CIPassed_FromFailed_Rerun(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{
 		Total:             2,
@@ -96,8 +94,7 @@ func TestDetector_CIPassed_FromFailed_Rerun(t *testing.T) {
 	currPR := prevPR
 	currPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(t, notify.TriggerCIPassed, notes[0].Trigger)
 }
@@ -105,7 +102,7 @@ func TestDetector_CIPassed_FromFailed_Rerun(t *testing.T) {
 func TestDetector_CIFailed_FromRunning(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
 
@@ -120,8 +117,7 @@ func TestDetector_CIFailed_FromRunning(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 
 	n := notes[0]
@@ -134,7 +130,7 @@ func TestDetector_CIFailed_FromRunning(t *testing.T) {
 func TestDetector_CIFailed_FromPassed(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
@@ -149,8 +145,7 @@ func TestDetector_CIFailed_FromPassed(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(t, notify.TriggerCIFailed, notes[0].Trigger)
 }
@@ -158,7 +153,7 @@ func TestDetector_CIFailed_FromPassed(t *testing.T) {
 func TestDetector_CIFailed_OptionalCheckFailed_NoNotification(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{
 		Total:             2,
@@ -179,8 +174,7 @@ func TestDetector_CIFailed_OptionalCheckFailed_NoNotification(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	for _, n := range notes {
 		assert.NotEqual(t, notify.TriggerCIFailed, n.Trigger)
 	}
@@ -189,7 +183,7 @@ func TestDetector_CIFailed_OptionalCheckFailed_NoNotification(t *testing.T) {
 func TestDetector_CIFailed_NoRequiredChecks_AnyFailureNotifies(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{
 		Total:             2,
@@ -205,8 +199,7 @@ func TestDetector_CIFailed_NoRequiredChecks_AnyFailureNotifies(t *testing.T) {
 		HasRequiredChecks: false,
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(t, notify.TriggerCIFailed, notes[0].Trigger)
 }
@@ -214,15 +207,14 @@ func TestDetector_CIFailed_NoRequiredChecks_AnyFailureNotifies(t *testing.T) {
 func TestDetector_CIUnchanged_NoNotification(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 
 	t.Run("passing remains passing", func(t *testing.T) {
 		t.Parallel()
 		pr := makeBasePR(1, "Feature A")
 		pr.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-		notes, err := d.DetectChanges(context.Background(), obs(pr), obs(pr))
-		require.NoError(t, err)
+		notes := d.DetectChanges(context.Background(), obs(pr), obs(pr))
 		assert.Empty(t, notes)
 	})
 
@@ -231,8 +223,7 @@ func TestDetector_CIUnchanged_NoNotification(t *testing.T) {
 		pr := makeBasePR(1, "Feature A")
 		pr.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
 
-		notes, err := d.DetectChanges(context.Background(), obs(pr), obs(pr))
-		require.NoError(t, err)
+		notes := d.DetectChanges(context.Background(), obs(pr), obs(pr))
 		assert.Empty(t, notes)
 	})
 
@@ -249,8 +240,7 @@ func TestDetector_CIUnchanged_NoNotification(t *testing.T) {
 			HasRequiredChecks: true,
 		}
 
-		notes, err := d.DetectChanges(context.Background(), obs(pr), obs(pr))
-		require.NoError(t, err)
+		notes := d.DetectChanges(context.Background(), obs(pr), obs(pr))
 		assert.Empty(t, notes)
 	})
 }
@@ -258,7 +248,7 @@ func TestDetector_CIUnchanged_NoNotification(t *testing.T) {
 func TestDetector_ReviewReceived_Approved(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	currPR := prevPR
 
@@ -272,8 +262,7 @@ func TestDetector_ReviewReceived_Approved(t *testing.T) {
 		},
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 
 	n := notes[0]
@@ -289,7 +278,7 @@ func TestDetector_ReviewReceived_Approved(t *testing.T) {
 func TestDetector_ReviewReceived_ChangesRequested(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	currPR := prevPR
 
@@ -303,8 +292,7 @@ func TestDetector_ReviewReceived_ChangesRequested(t *testing.T) {
 		},
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 
 	n := notes[0]
@@ -318,7 +306,7 @@ func TestDetector_ReviewReceived_ChangesRequested(t *testing.T) {
 func TestDetector_ReviewReceived_Commented(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	currPR := prevPR
 
@@ -332,8 +320,7 @@ func TestDetector_ReviewReceived_Commented(t *testing.T) {
 		},
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 
 	n := notes[0]
@@ -347,7 +334,7 @@ func TestDetector_ReviewReceived_Commented(t *testing.T) {
 func TestDetector_Review_AuthorSelfReviewIgnored(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A") // author is "kalverra"
 	currPR := prevPR
 
@@ -360,15 +347,14 @@ func TestDetector_Review_AuthorSelfReviewIgnored(t *testing.T) {
 		},
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	assert.Empty(t, notes, "author's own review/comment should not notify")
 }
 
 func TestDetector_Review_BotFiltered(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil, notify.WithBotFilter(true))
+	d := notify.NewDetector(notify.WithBotFilter(true))
 	prevPR := makeBasePR(1, "Feature A")
 	currPR := prevPR
 
@@ -387,8 +373,7 @@ func TestDetector_Review_BotFiltered(t *testing.T) {
 		},
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	assert.Empty(t, notes, "bot reviews should be filtered out")
 }
 
@@ -403,13 +388,12 @@ func TestDetector_PRMerged(t *testing.T) {
 		return notify.PRStateMerged, nil
 	}
 
-	d := notify.NewDetector(perPR(checker))
+	d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 	prevPR := makeBasePR(42, "Refactor core engine")
 	// PR 42 is absent from currPRs (merged and closed)
 	currPRs := obs()
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), currPRs)
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), currPRs)
 	assert.True(t, checkerCalled, "checker should be called for vanished authored PR")
 	require.Len(t, notes, 1)
 
@@ -429,12 +413,11 @@ func TestDetector_PRClosedWithoutMerge_NotifiesClosed(t *testing.T) {
 		return notify.PRStateClosed, nil
 	}
 
-	d := notify.NewDetector(perPR(checker))
+	d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 	prevPR := makeBasePR(42, "Abandoned experiment")
 	currPRs := obs()
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), currPRs)
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), currPRs)
 	assert.True(t, checkerCalled)
 	require.Len(t, notes, 1)
 	assert.Equal(t, notify.TriggerPRClosed, notes[0].Trigger)
@@ -444,7 +427,7 @@ func TestDetector_PRClosedWithoutMerge_NotifiesClosed(t *testing.T) {
 func TestDetector_Deduplication(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
 
@@ -452,20 +435,18 @@ func TestDetector_Deduplication(t *testing.T) {
 	currPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
 	// First detection fires notification
-	notes1, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes1 := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes1, 1)
 
 	// Second detection with identical state should NOT re-notify
-	notes2, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes2 := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	assert.Empty(t, notes2, "duplicate event must be suppressed")
 }
 
 func TestDetector_SubsequentCommit_CIFailure_Notifies(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prCommit1 := makeBasePR(1, "Feature A")
 	prCommit1.HeadRefOID = "commit1"
 	prCommit1.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
@@ -474,8 +455,7 @@ func TestDetector_SubsequentCommit_CIFailure_Notifies(t *testing.T) {
 	prev := makeBasePR(1, "Feature A")
 	prev.HeadRefOID = "commit1"
 	prev.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
-	notes1, err := d.DetectChanges(context.Background(), obs(prev), obs(prCommit1))
-	require.NoError(t, err)
+	notes1 := d.DetectChanges(context.Background(), obs(prev), obs(prCommit1))
 	require.Len(t, notes1, 1)
 	assert.Equal(t, notify.TriggerCIPassed, notes1[0].Trigger)
 
@@ -501,12 +481,11 @@ func TestDetector_SubsequentCommit_CIFailure_Notifies(t *testing.T) {
 		HasRequiredChecks: true,
 	}
 
-	notes2, err := d.DetectChanges(
+	notes2 := d.DetectChanges(
 		context.Background(),
 		obs(prCommit2Running),
 		obs(prCommit2Failed),
 	)
-	require.NoError(t, err)
 	require.Len(t, notes2, 1, "failing CI on a subsequent commit must notify")
 	assert.Equal(t, notify.TriggerCIFailed, notes2[0].Trigger)
 	assert.Equal(t, "commit2", notes2[0].CommitOID)
@@ -515,7 +494,7 @@ func TestDetector_SubsequentCommit_CIFailure_Notifies(t *testing.T) {
 func TestDetector_SubsequentReview_SameAuthor_Notifies(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	t1 := time.Now().Add(-10 * time.Minute)
 	t2 := time.Now().Add(-1 * time.Minute)
 
@@ -525,12 +504,11 @@ func TestDetector_SubsequentReview_SameAuthor_Notifies(t *testing.T) {
 		{Author: "alice", State: "COMMENTED", SubmittedAt: t1},
 	}
 
-	notes1, err := d.DetectChanges(
+	notes1 := d.DetectChanges(
 		context.Background(),
 		obs(prInitial),
 		obs(prReview1),
 	)
-	require.NoError(t, err)
 	require.Len(t, notes1, 1)
 	assert.Equal(t, notify.TriggerReviewReceived, notes1[0].Trigger)
 
@@ -540,12 +518,11 @@ func TestDetector_SubsequentReview_SameAuthor_Notifies(t *testing.T) {
 		{Author: "alice", State: "COMMENTED", SubmittedAt: t2},
 	}
 
-	notes2, err := d.DetectChanges(
+	notes2 := d.DetectChanges(
 		context.Background(),
 		obs(prReview1),
 		obs(prReview2),
 	)
-	require.NoError(t, err)
 	require.Len(t, notes2, 1, "new review submission from same author must notify")
 	assert.Equal(t, notify.TriggerReviewReceived, notes2[0].Trigger)
 	assert.Equal(t, t2, notes2[0].SubmittedAt)
@@ -554,13 +531,12 @@ func TestDetector_SubsequentReview_SameAuthor_Notifies(t *testing.T) {
 func TestDetector_NewPR_AlreadyPassed_Notifies(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	newPR := makeBasePR(99, "Newly Created Feature")
 	newPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
 	// PR was not in prev (newly added), and not in seed
-	notes, err := d.DetectChanges(context.Background(), nil, obs(newPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), nil, obs(newPR))
 	require.Len(t, notes, 1, "unseeded newly arrived PR with passing checks must notify")
 	assert.Equal(t, notify.TriggerCIPassed, notes[0].Trigger)
 	assert.Equal(t, 99, notes[0].PRNumber)
@@ -578,18 +554,16 @@ func TestDetector_DisappearedPR_RetryOnCheckerError(t *testing.T) {
 		return notify.PRStateMerged, nil // merged on retry
 	}
 
-	d := notify.NewDetector(perPR(checker))
+	d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 	prevPR := makeBasePR(42, "Refactor core engine")
 
 	// First tick: checker errors, no notification yet
-	notes1, err := d.DetectChanges(context.Background(), obs(prevPR), nil)
-	require.NoError(t, err)
+	notes1 := d.DetectChanges(context.Background(), obs(prevPR), nil)
 	assert.Empty(t, notes1)
 	assert.Equal(t, 1, checkerCalls)
 
 	// Second tick: prev no longer has PR 42, but detector should retry pending vanished check
-	notes2, err := d.DetectChanges(context.Background(), nil, nil)
-	require.NoError(t, err)
+	notes2 := d.DetectChanges(context.Background(), nil, nil)
 	require.Len(t, notes2, 1, "retry on recovered network must deliver merge notification")
 	assert.Equal(t, notify.TriggerPRMerged, notes2[0].Trigger)
 	assert.Equal(t, 42, notes2[0].PRNumber)
@@ -601,7 +575,7 @@ func TestDetector_AssetsImages(t *testing.T) {
 	images := map[notify.Trigger]string{
 		notify.TriggerCIPassed: "/icons/pass.png",
 	}
-	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Images: images}))
+	d := notify.NewDetector(notify.WithAssets(notify.Assets{Images: images}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -609,8 +583,7 @@ func TestDetector_AssetsImages(t *testing.T) {
 	currPR := prevPR
 	currPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(t, "/icons/pass.png", notes[0].ImagePath)
 }
@@ -621,7 +594,7 @@ func TestDetector_AssetsSounds(t *testing.T) {
 	sounds := map[notify.Trigger]string{
 		notify.TriggerCIPassed: "Glass",
 	}
-	d := notify.NewDetector(nil, notify.WithAssets(notify.Assets{Sounds: sounds}))
+	d := notify.NewDetector(notify.WithAssets(notify.Assets{Sounds: sounds}))
 
 	prevPR := makeBasePR(1, "Feature A")
 	prevPR.Checks = model.ChecksSummary{Total: 2, Running: 2, ReqTotal: 2, ReqRunning: 2, HasRequiredChecks: true}
@@ -629,8 +602,7 @@ func TestDetector_AssetsSounds(t *testing.T) {
 	currPR := prevPR
 	currPR.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
 	require.Len(t, notes, 1)
 	assert.Equal(t, "Glass", notes[0].Sound)
 }
@@ -638,31 +610,31 @@ func TestDetector_AssetsSounds(t *testing.T) {
 func TestDetector_Titles_OmitPRontoPrefix(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(perPR(func(_ context.Context, _ string, _ int) (notify.PRState, error) {
-		return notify.PRStateMerged, nil
-	}))
+	d := notify.NewDetector(
+		notify.WithStatusChecker(perPR(func(_ context.Context, _ string, _ int) (notify.PRState, error) {
+			return notify.PRStateMerged, nil
+		})),
+	)
 
 	// CI Passed
 	prev := makeBasePR(1, "Feature A")
 	prev.Checks = model.ChecksSummary{Total: 1, Running: 1, ReqTotal: 1, ReqRunning: 1, HasRequiredChecks: true}
 	curr := prev
 	curr.Checks = model.ChecksSummary{Total: 1, Done: 1, ReqTotal: 1, ReqDone: 1, HasRequiredChecks: true}
-	notes, err := d.DetectChanges(context.Background(), obs(prev), obs(curr))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prev), obs(curr))
 	require.Len(t, notes, 1)
 	assert.Equal(t, "✅ CI Passed (#1)", notes[0].Title)
 	assert.NotContains(t, notes[0].Title, "PRonto")
 
 	// CI Failed
-	d2 := notify.NewDetector(nil)
+	d2 := notify.NewDetector()
 	currFailed := prev
 	currFailed.Checks = model.ChecksSummary{Total: 1, Failed: 1, ReqTotal: 1, ReqFailed: 1, HasRequiredChecks: true}
-	notesFailed, err := d2.DetectChanges(
+	notesFailed := d2.DetectChanges(
 		context.Background(),
 		obs(prev),
 		obs(currFailed),
 	)
-	require.NoError(t, err)
 	require.Len(t, notesFailed, 1)
 	assert.Equal(t, "❌ CI Failed (#1)", notesFailed[0].Title)
 	assert.NotContains(t, notesFailed[0].Title, "PRonto")
@@ -671,7 +643,7 @@ func TestDetector_Titles_OmitPRontoPrefix(t *testing.T) {
 func TestDetector_Conflict_Notifies(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prev := makeBasePR(1, "Feature A")
 	prev.MergeStatus = model.ComputeMergeStatus("CLEAN", "CLEAN", false)
 
@@ -680,44 +652,40 @@ func TestDetector_Conflict_Notifies(t *testing.T) {
 	curr.MergeStateStatus = "DIRTY"
 	curr.MergeStatus = model.ComputeMergeStatus("CONFLICTING", "DIRTY", false)
 
-	notes, err := d.DetectChanges(context.Background(), obs(prev), obs(curr))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prev), obs(curr))
 	require.Len(t, notes, 1, "conflict transition must generate notification")
 	assert.Equal(t, notify.TriggerConflict, notes[0].Trigger)
 	assert.Equal(t, "⚠️ Merge Conflict (#1)", notes[0].Title)
 	assert.NotContains(t, notes[0].Title, "PRonto")
 
 	// Seed suppresses existing conflict
-	dSeeded := notify.NewDetector(nil)
-	dSeeded.Seed(obs(curr))
-	notesSeeded, err := dSeeded.DetectChanges(
+	dSeeded := notify.NewDetector()
+	dSeeded.SeedObserved(obs(curr))
+	notesSeeded := dSeeded.DetectChanges(
 		context.Background(),
 		obs(curr),
 		obs(curr),
 	)
-	require.NoError(t, err)
 	assert.Empty(t, notesSeeded, "seed must suppress initial conflict")
 }
 
 func TestDetector_SeenKeys_PrunedForVanishedPRs(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	pr1 := makeBasePR(1, "Feature A")
 	pr1.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 	pr2 := makeBasePR(2, "Feature B")
 	pr2.Checks = model.ChecksSummary{Total: 2, Done: 2, ReqTotal: 2, ReqDone: 2, HasRequiredChecks: true}
 
-	d.Seed(obs(pr1, pr2))
+	d.SeedObserved(obs(pr1, pr2))
 	require.Equal(t, 2, d.SeenKeysCount(), "initial seed should record 2 keys")
 
 	// PR2 vanishes from curr.
-	_, err := d.DetectChanges(context.Background(), obs(pr1, pr2), obs(pr1))
-	require.NoError(t, err)
+	d.DetectChanges(context.Background(), obs(pr1, pr2), obs(pr1))
 
 	// Subsequent pass where PR2 is in neither prev nor curr.
-	_, err = d.DetectChanges(context.Background(), obs(pr1), obs(pr1))
-	require.NoError(t, err)
+	d.DetectChanges(context.Background(), obs(pr1), obs(pr1))
 
 	assert.Equal(t, 1, d.SeenKeysCount(), "keys for vanished PR2 must be dropped from seenKeys")
 }
@@ -735,16 +703,15 @@ func TestDetector_VanishedPR_CheckerTimeout(t *testing.T) {
 		}
 
 		d := notify.NewDetector(
-			perPR(checker),
+			notify.WithStatusChecker(perPR(checker)),
 			notify.WithCheckerTimeout(50*time.Millisecond),
 		)
 
 		pr1 := makeBasePR(1, "Vanished PR")
 		start := time.Now()
-		notes, err := d.DetectChanges(context.Background(), obs(pr1), nil)
+		notes := d.DetectChanges(context.Background(), obs(pr1), nil)
 		elapsed := time.Since(start)
 
-		require.NoError(t, err)
 		assert.Empty(t, notes, "timed-out checker should not produce notification")
 		assert.Less(t, elapsed, 300*time.Millisecond, "vanished PR check must not stall beyond checker timeout")
 	})
@@ -778,15 +745,14 @@ func TestDetector_VanishedPRs_OneBatchedLookup(t *testing.T) {
 		}
 		return out, nil
 	}
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(notify.WithStatusChecker(checker))
 
 	var prev []model.PullRequest
 	for i := 1; i <= 6; i++ {
 		prev = append(prev, makeBasePR(i, "PR"))
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prev...), nil)
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prev...), nil)
 	assert.Len(t, notes, 6)
 	require.Len(t, calls, 1, "vanished PRs must share one lookup")
 	assert.Len(t, calls[0], 6)
@@ -802,15 +768,13 @@ func TestDetector_VanishedPR_MissingFromLookupNotRetried(t *testing.T) {
 		calls++
 		return map[model.PRKey]notify.PRState{}, nil
 	}
-	d := notify.NewDetector(checker)
+	d := notify.NewDetector(notify.WithStatusChecker(checker))
 
 	pr := makeBasePR(1, "Gone")
-	notes, err := d.DetectChanges(context.Background(), obs(pr), nil)
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(pr), nil)
 	assert.Empty(t, notes)
 
-	notes, err = d.DetectChanges(context.Background(), nil, nil)
-	require.NoError(t, err)
+	notes = d.DetectChanges(context.Background(), nil, nil)
 	assert.Empty(t, notes)
 	assert.Equal(t, 1, calls, "an unknown PR must not be looked up again")
 }
@@ -821,7 +785,7 @@ func TestDetector_NotificationsHaveSubmittedAt(t *testing.T) {
 	checker := func(_ context.Context, _ string, _ int) (notify.PRState, error) {
 		return notify.PRStateMerged, nil
 	}
-	d := notify.NewDetector(perPR(checker))
+	d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 
 	tBefore := time.Now().Add(-time.Second)
 
@@ -845,12 +809,11 @@ func TestDetector_NotificationsHaveSubmittedAt(t *testing.T) {
 	// 4. Vanished (merged)
 	prevMerged := makeBasePR(4, "Merged")
 
-	notes, err := d.DetectChanges(
+	notes := d.DetectChanges(
 		context.Background(),
 		obs(prevPassing, prevFailing, prevConflict, prevMerged),
 		obs(currPassing, currFailing, currConflict),
 	)
-	require.NoError(t, err)
 	require.Len(t, notes, 4)
 
 	for _, n := range notes {
@@ -927,17 +890,16 @@ func TestDetector_NotificationLinks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			d := notify.NewDetector(nil)
+			d := notify.NewDetector()
 			prev := makeBasePR(1, "Feature A")
 			curr := prev
 			tt.mutate(&prev, &curr)
 
-			notes, err := d.DetectChanges(
+			notes := d.DetectChanges(
 				context.Background(),
 				obs(prev),
 				obs(curr),
 			)
-			require.NoError(t, err)
 			require.Len(t, notes, 1)
 			assert.Equal(t, tt.trigger, notes[0].Trigger)
 			assert.Equal(t, tt.want, notes[0].URL)
@@ -948,15 +910,14 @@ func TestDetector_NotificationLinks(t *testing.T) {
 func TestDetector_NotificationLinks_NoPRURL(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prev := makeBasePR(1, "Feature A")
 	prev.URL = ""
 	prev.Checks = model.ChecksSummary{Total: 1, Running: 1}
 	curr := prev
 	curr.Checks = model.ChecksSummary{Total: 1, Done: 1}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prev), obs(curr))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prev), obs(curr))
 	require.Len(t, notes, 1)
 	assert.Empty(t, notes[0].URL, "no PR URL must not produce a bare /checks link")
 }
@@ -964,15 +925,14 @@ func TestDetector_NotificationLinks_NoPRURL(t *testing.T) {
 func TestDetector_DetectChanges_InboxPR(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	prev := makeBasePR(10, "Inbox PR by Colleague")
 	prev.Author = "colleague"
 	prev.Checks = model.ChecksSummary{Total: 1, Running: 1}
 	curr := prev
 	curr.Checks = model.ChecksSummary{Total: 1, Done: 1}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prev), obs(curr))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prev), obs(curr))
 	require.Len(t, notes, 1)
 	assert.Equal(t, notify.TriggerCIPassed, notes[0].Trigger)
 	assert.Equal(t, 10, notes[0].PRNumber)
@@ -981,7 +941,7 @@ func TestDetector_DetectChanges_InboxPR(t *testing.T) {
 func TestDetector_WithViewer_IgnoresSelfReview(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil, notify.WithViewer("octocat"))
+	d := notify.NewDetector(notify.WithViewer("octocat"))
 	prev := makeBasePR(20, "Community PR")
 	prev.Author = "contributor"
 	curr := prev
@@ -993,7 +953,6 @@ func TestDetector_WithViewer_IgnoresSelfReview(t *testing.T) {
 		},
 	}
 
-	notes, err := d.DetectChanges(context.Background(), obs(prev), obs(curr))
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), obs(prev), obs(curr))
 	assert.Empty(t, notes, "reviews submitted by viewer must not trigger notifications")
 }

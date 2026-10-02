@@ -1,13 +1,13 @@
-package daemon_test
+package notify_test
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/kalverra/pronto/internal/daemon"
 	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
+	"github.com/kalverra/pronto/internal/notify"
 )
 
 func TestDiffEvents_DeterministicSortedOrder(t *testing.T) {
@@ -28,7 +28,7 @@ func TestDiffEvents_DeterministicSortedOrder(t *testing.T) {
 		},
 	}
 
-	evs := daemon.DiffEvents(prev, curr, nil)
+	evs := notify.DiffEvents(prev, curr, nil)
 	want := []events.Event{
 		{Type: events.TypePRRemoved, Repo: "repo/a", PR: 10},
 		{Type: events.TypePRAdded, Repo: "repo/a", PR: 30},
@@ -38,4 +38,15 @@ func TestDiffEvents_DeterministicSortedOrder(t *testing.T) {
 		{Type: events.TypePRRemoved, Repo: "repo/b", PR: 20},
 	}
 	assert.Equal(t, want, evs)
+}
+
+func TestDiffEvents_OmitsRemovedForMerged(t *testing.T) {
+	t.Parallel()
+
+	merged := model.PullRequest{RepoNameWithOwner: "repo/a", Number: 1}
+	closed := model.PullRequest{RepoNameWithOwner: "repo/a", Number: 2}
+	prev := model.Queue{Authored: []model.PullRequest{merged}, Inbox: []model.PullRequest{closed}}
+
+	evs := notify.DiffEvents(prev, model.Queue{}, map[model.PRKey]bool{merged.Key(): true})
+	assert.Equal(t, []events.Event{{Type: events.TypePRRemoved, Repo: "repo/a", PR: 2}}, evs)
 }

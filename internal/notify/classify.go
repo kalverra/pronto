@@ -1,11 +1,20 @@
-package config
+package notify
 
 import (
 	"time"
 
 	"github.com/kalverra/pronto/internal/model"
-	"github.com/kalverra/pronto/internal/notify"
 )
+
+// PriorityPartitioner partitions inbox PRs into priority and non-priority subsets.
+type PriorityPartitioner interface {
+	Partition(prs []model.PullRequest) (priority, remaining []model.PullRequest)
+}
+
+// FocusMatcher tests whether a PR matches automatic focus rules.
+type FocusMatcher interface {
+	Matches(pr model.PullRequest) bool
+}
 
 // FocusOverride reports a manual focus decision for a PR: focused is the
 // decision and ok is false when the user has not decided (rules then apply).
@@ -18,11 +27,11 @@ type FocusOverride func(model.PRKey) (focused, ok bool)
 // authored PRs then inbox PRs, each in input order.
 func Classify(
 	q model.Queue,
-	prio PriorityConfig,
-	focus RuleSet,
+	prio PriorityPartitioner,
+	focus FocusMatcher,
 	override FocusOverride,
 	now time.Time,
-) []notify.Observed {
+) []Observed {
 	all := make([]model.PullRequest, 0, len(q.Authored)+len(q.Inbox))
 	seen := make(map[model.PRKey]bool, cap(all))
 	for _, pr := range q.Authored {
@@ -40,43 +49,46 @@ func Classify(
 
 	sections := model.EffectiveSections(all, q.IsAuthored, now)
 
-	priority, _ := prio.Partition(q.Inbox)
+	var priority []model.PullRequest
+	if prio != nil {
+		priority, _ = prio.Partition(q.Inbox)
+	}
 	isPriority := make(map[model.PRKey]bool, len(priority))
 	for _, pr := range priority {
 		isPriority[pr.Key()] = true
 	}
 
-	out := make([]notify.Observed, 0, len(all))
+	out := make([]Observed, 0, len(all))
 	for _, pr := range all {
 		key := pr.Key()
 		section := sections[key]
 
-		var tab notify.Tab
+		var tab Tab
 		switch {
 		case q.IsAuthored(pr):
-			tab = notify.TabMine
+			tab = TabMine
 		case isPriority[key]:
-			tab = notify.TabPriority
+			tab = TabPriority
 		default:
-			tab = notify.TabInbox
+			tab = TabInbox
 		}
-		scopes := []notify.Scope{{Tab: tab}, {Tab: tab, Section: section}}
+		scopes := []Scope{{Tab: tab}, {Tab: tab, Section: section}}
 
 		focused, decided := false, false
 		if override != nil {
 			focused, decided = override(key)
 		}
-		if !decided {
+		if !decided && focus != nil {
 			focused = focus.Matches(pr)
 		}
 		if focused {
 			scopes = append(
 				scopes,
-				notify.Scope{Tab: notify.TabFocus},
-				notify.Scope{Tab: notify.TabFocus, Section: section},
+				Scope{Tab: TabFocus},
+				Scope{Tab: TabFocus, Section: section},
 			)
 		}
-		out = append(out, notify.Observed{PR: pr, Scopes: scopes})
+		out = append(out, Observed{PR: pr, Scopes: scopes})
 	}
 	return out
 }

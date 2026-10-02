@@ -10,11 +10,46 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kalverra/pronto/internal/events"
 	"github.com/kalverra/pronto/internal/model"
 )
 
 // defaultCheckerTimeout bounds one batched vanished-PR state lookup.
 const defaultCheckerTimeout = 10 * time.Second
+
+// Delta is everything one poll changed between two queue snapshots.
+type Delta struct {
+	// Events lists every trigger (Notify set only when the policy selected
+	// it), then pr_added/pr_removed sorted by (repo, PR, type).
+	Events []events.Event
+	// Notifications are the policy-selected triggers, ready to deliver.
+	Notifications []Notification
+	// Boosted holds the PRs in the Focus or Priority tab: the ones the user
+	// watches most closely, which the source refreshes a tier sooner.
+	Boosted map[model.PRKey]bool
+}
+
+// DetectOption configures a single call to Detect or Seed.
+type DetectOption func(*detectConfig)
+
+type detectConfig struct {
+	focusOverride FocusOverride
+	now           time.Time
+}
+
+// WithFocusOverride supplies a manual focus override lookup for a detection run.
+func WithFocusOverride(fo FocusOverride) DetectOption {
+	return func(c *detectConfig) {
+		c.focusOverride = fo
+	}
+}
+
+// WithNow overrides the current timestamp for classification in a detection run.
+func WithNow(now time.Time) DetectOption {
+	return func(c *detectConfig) {
+		c.now = now
+	}
+}
 
 // Detector identifies notification-worthy transitions between pull request states.
 type Detector struct {
@@ -28,12 +63,44 @@ type Detector struct {
 	seenKeys       map[string]bool
 	pendingChecks  map[model.PRKey]Observed
 	mu             sync.Mutex
+
+	policy Policy
+	prio   PriorityPartitioner
+	focus  FocusMatcher
+}
+
+// WithPolicy sets the notification policy used by Detect. Without one, no
+// trigger notifies (a nil Policy subscribes no scope).
+func WithPolicy(p Policy) DetectorOption {
+	return func(d *Detector) {
+		d.policy = p
+	}
+}
+
+// WithPriority sets the priority tab partitioner used for queue classification.
+func WithPriority(p PriorityPartitioner) DetectorOption {
+	return func(d *Detector) {
+		d.prio = p
+	}
+}
+
+// WithFocus sets the auto-focus matcher used for queue classification.
+func WithFocus(f FocusMatcher) DetectorOption {
+	return func(d *Detector) {
+		d.focus = f
+	}
+}
+
+// WithStatusChecker configures the batched vanished PR checker.
+func WithStatusChecker(c PRStatusChecker) DetectorOption {
+	return func(d *Detector) {
+		d.checker = c
+	}
 }
 
 // NewDetector creates a new Detector with options.
-func NewDetector(checker PRStatusChecker, opts ...DetectorOption) *Detector {
+func NewDetector(opts ...DetectorOption) *Detector {
 	d := &Detector{
-		checker:        checker,
 		checkerTimeout: defaultCheckerTimeout,
 		seenKeys:       make(map[string]bool),
 		pendingChecks:  make(map[model.PRKey]Observed),
@@ -55,8 +122,79 @@ func (d *Detector) SeenKeysCount() int {
 	return len(d.seenKeys)
 }
 
-// Seed records initial baseline pull requests so startup does not notify.
-func (d *Detector) Seed(obs []Observed) {
+func (d *Detector) resolveDetectOptions(opts []DetectOption) detectConfig {
+	var cfg detectConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
+// Seed records q as the baseline so its current state does not notify, and
+// returns q's boosted PRs (see Delta.Boosted).
+func (d *Detector) Seed(q model.Queue, opts ...DetectOption) map[model.PRKey]bool {
+	obs := d.classify(q, d.resolveDetectOptions(opts))
+	d.seedObserved(obs)
+	return boostedOf(obs)
+}
+
+// Detect classifies both snapshots, reports every transition between them,
+// marks the ones the policy selects, and diffs queue membership.
+func (d *Detector) Detect(ctx context.Context, prev, curr model.Queue, opts ...DetectOption) Delta {
+	cfg := d.resolveDetectOptions(opts)
+	currObs := d.classify(curr, cfg)
+	notes := d.detectChanges(ctx, d.classify(prev, cfg), currObs)
+
+	selected := d.policy.Select(notes)
+	wanted := make(map[noteKey]bool, len(selected))
+	for _, n := range selected {
+		wanted[keyOf(n)] = true
+	}
+
+	merged := make(map[model.PRKey]bool)
+	evs := make([]events.Event, 0, len(notes))
+	for _, n := range notes {
+		if n.Trigger == TriggerPRMerged {
+			merged[model.PRKey{Repo: n.Repo, Number: n.PRNumber}] = true
+		}
+		evs = append(evs, notificationEvent(n, wanted[keyOf(n)]))
+	}
+	evs = append(evs, diffEvents(prev, curr, merged)...)
+
+	return Delta{
+		Events:        evs,
+		Notifications: selected,
+		Boosted:       boostedOf(currObs),
+	}
+}
+
+// classify places q's PRs into scopes using the detector's priority and
+// focus rules, cfg's manual overrides, and cfg's clock (detector clock when
+// unset).
+func (d *Detector) classify(q model.Queue, cfg detectConfig) []Observed {
+	now := cfg.now
+	if now.IsZero() {
+		now = d.clock()
+	}
+	return Classify(q, d.prio, d.focus, cfg.focusOverride, now)
+}
+
+// boostedOf returns the observed PRs in the Focus or Priority tab.
+func boostedOf(obs []Observed) map[model.PRKey]bool {
+	boosted := make(map[model.PRKey]bool)
+	for _, o := range obs {
+		for _, sc := range o.Scopes {
+			if sc.Tab == TabFocus || sc.Tab == TabPriority {
+				boosted[o.PR.Key()] = true
+				break
+			}
+		}
+	}
+	return boosted
+}
+
+// seedObserved marks every trigger obs already satisfies as seen.
+func (d *Detector) seedObserved(obs []Observed) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -82,6 +220,22 @@ func (d *Detector) Seed(obs []Observed) {
 			d.seenKeys[reviewKey(pr.RepoNameWithOwner, pr.Number, r.Author, r.State, r.SubmittedAt)] = true
 		}
 	}
+}
+
+// noteKey identifies one notification within a poll.
+type noteKey struct {
+	trigger Trigger
+	repo    string
+	pr      int
+	entered Scope
+}
+
+func keyOf(n Notification) noteKey {
+	k := noteKey{trigger: n.Trigger, repo: n.Repo, pr: n.PRNumber}
+	if n.Entered != nil {
+		k.entered = *n.Entered
+	}
+	return k
 }
 
 func (d *Detector) tryMarkSeen(key string) bool {
@@ -116,10 +270,10 @@ func (d *Detector) applyAssets(n *Notification) {
 	d.assets.Apply(n)
 }
 
-// DetectChanges inspects changes to pull requests and returns every
-// notification-worthy transition, unfiltered by policy. Each notification
-// carries the scopes a Policy evaluates it against.
-func (d *Detector) DetectChanges(ctx context.Context, prev, curr []Observed) ([]Notification, error) {
+// detectChanges returns every notification-worthy transition between prev
+// and curr, unfiltered by policy. Each notification carries the scopes a
+// Policy evaluates it against.
+func (d *Detector) detectChanges(ctx context.Context, prev, curr []Observed) []Notification {
 	now := d.clock()
 	d.mu.Lock()
 	lastDetect := d.lastDetect
@@ -182,7 +336,7 @@ func (d *Detector) DetectChanges(ctx context.Context, prev, curr []Observed) ([]
 	d.mu.Unlock()
 	d.pruneSeenKeys(active)
 
-	return results, nil
+	return results
 }
 
 // detectPR reports every transition between prev and curr for one PR that is

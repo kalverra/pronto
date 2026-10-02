@@ -3,12 +3,10 @@
 package daemon
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +82,6 @@ type Daemon struct {
 	opts     Options
 	bus      *events.Bus
 	detector *notify.Detector
-	policy   notify.Policy
 	kickCh   chan struct{}
 	ready    chan struct{}
 
@@ -109,7 +106,15 @@ func New(opts Options) *Daemon {
 	if opts.LeakChecker == nil {
 		opts.LeakChecker = profiling.RuntimeLeakChecker{}
 	}
-	detectorOpts := []notify.DetectorOption{notify.WithBotFilter(true)}
+	detectorOpts := []notify.DetectorOption{
+		notify.WithBotFilter(true),
+		notify.WithPolicy(opts.NotificationConfig.Policy()),
+		notify.WithPriority(opts.PriorityConfig),
+		notify.WithFocus(opts.FocusConfig),
+	}
+	if opts.Checker != nil {
+		detectorOpts = append(detectorOpts, notify.WithStatusChecker(opts.Checker))
+	}
 	if len(opts.NotificationConfig.Images) > 0 || len(opts.NotificationConfig.Sounds) > 0 {
 		assets := notify.Assets{}
 		if len(opts.NotificationConfig.Images) > 0 {
@@ -130,8 +135,7 @@ func New(opts Options) *Daemon {
 	return &Daemon{
 		opts:     opts,
 		bus:      opts.Bus,
-		detector: notify.NewDetector(opts.Checker, detectorOpts...),
-		policy:   opts.NotificationConfig.Policy(),
+		detector: notify.NewDetector(detectorOpts...),
 		kickCh:   make(chan struct{}, 1),
 		ready:    make(chan struct{}),
 	}
@@ -376,24 +380,28 @@ func (d *Daemon) warmStart(ctx context.Context) {
 	d.mu.Unlock()
 
 	if fresh {
-		d.detector.Seed(d.observe(ctx, q))
+		// Boost from the warm snapshot so the first fetch already refreshes
+		// Focus/Priority PRs a tier sooner, instead of waiting a poll.
+		boosted := d.detector.Seed(q, notify.WithFocusOverride(d.focusOverride(ctx)))
+		d.mu.Lock()
+		d.boosted = boosted
+		d.mu.Unlock()
 	}
 }
 
-// observe places every PR in q into its notification scopes. Manual focus
-// comes from the cached focus store; rules apply to the rest.
-func (d *Daemon) observe(ctx context.Context, q model.Queue) []notify.Observed {
-	var override config.FocusOverride
-	if d.opts.Store != nil {
-		if keys, _, ok := d.opts.Store.Focus(ctx); ok {
-			cached := make(map[model.PRKey]bool, len(keys))
-			for _, k := range keys {
-				cached[k] = true
-			}
-			override = func(k model.PRKey) (bool, bool) { return true, cached[k] }
-		}
+// focusOverride loads manual focus decisions from the cache store.
+func (d *Daemon) focusOverride(ctx context.Context) notify.FocusOverride {
+	if d.opts.Store == nil {
+		return nil
 	}
-	return config.Classify(q, d.opts.PriorityConfig, d.opts.FocusConfig, override, time.Now())
+	if keys, _, ok := d.opts.Store.Focus(ctx); ok {
+		cached := make(map[model.PRKey]bool, len(keys))
+		for _, k := range keys {
+			cached[k] = true
+		}
+		return func(k model.PRKey) (bool, bool) { return true, cached[k] }
+	}
+	return nil
 }
 
 func (d *Daemon) refresh(ctx context.Context) {
@@ -444,36 +452,22 @@ func (d *Daemon) refresh(ctx context.Context) {
 	d.seeded = true
 	d.mu.Unlock()
 
-	currObs := d.observe(ctx, q)
-	d.mu.Lock()
-	d.boosted = boostedKeys(currObs)
-	d.mu.Unlock()
+	override := notify.WithFocusOverride(d.focusOverride(ctx))
+	var nextBoosted map[model.PRKey]bool
 	if !hadBaseline {
 		// First observed state is the baseline: seed the detector and
 		// emit no per-PR events.
-		d.detector.Seed(currObs)
+		nextBoosted = d.detector.Seed(q, override)
 	} else {
-		prevObs := d.observe(ctx, prevQueue)
-		merged := make(map[model.PRKey]bool)
-		if notes, derr := d.detector.DetectChanges(ctx, prevObs, currObs); derr != nil {
-			d.opts.Logger.Error().Err(derr).Msg("change detection failed")
-		} else {
-			// Every transition is emitted; only policy-selected ones carry Notify.
-			wanted := make(map[noteKey]bool)
-			for _, n := range d.policy.Select(notes) {
-				wanted[keyOf(n)] = true
-			}
-			for _, n := range notes {
-				if n.Trigger == notify.TriggerPRMerged {
-					merged[model.PRKey{Repo: n.Repo, Number: n.PRNumber}] = true
-				}
-				d.bus.Emit(notificationEvent(n, wanted[keyOf(n)]))
-			}
-		}
-		for _, ev := range DiffEvents(prevQueue, q, merged) {
+		delta := d.detector.Detect(ctx, prevQueue, q, override)
+		for _, ev := range delta.Events {
 			d.bus.Emit(ev)
 		}
+		nextBoosted = delta.Boosted
 	}
+	d.mu.Lock()
+	d.boosted = nextBoosted
+	d.mu.Unlock()
 
 	if d.opts.Store != nil {
 		if err := d.opts.Store.SaveQueue(ctx, q); err != nil {
@@ -489,124 +483,4 @@ func (d *Daemon) refresh(ctx context.Context) {
 			Inbox:    len(q.Inbox),
 		},
 	})
-}
-
-// boostedKeys returns the PRs in the Focus or Priority tab: the ones the
-// user watches most closely, which the source refreshes a tier sooner.
-func boostedKeys(obs []notify.Observed) map[model.PRKey]bool {
-	keys := make(map[model.PRKey]bool)
-	for _, o := range obs {
-		for _, sc := range o.Scopes {
-			if sc.Tab == notify.TabFocus || sc.Tab == notify.TabPriority {
-				keys[o.PR.Key()] = true
-				break
-			}
-		}
-	}
-	return keys
-}
-
-// noteKey identifies one notification within a poll.
-type noteKey struct {
-	trigger notify.Trigger
-	repo    string
-	pr      int
-	entered notify.Scope
-}
-
-func keyOf(n notify.Notification) noteKey {
-	k := noteKey{trigger: n.Trigger, repo: n.Repo, pr: n.PRNumber}
-	if n.Entered != nil {
-		k.entered = *n.Entered
-	}
-	return k
-}
-
-// notificationEvent converts a detector notification into an event. Notify is
-// populated only when the notification policy selected it for delivery.
-func notificationEvent(n notify.Notification, deliver bool) events.Event {
-	ev := events.Event{
-		Type:  events.Type(string(n.Trigger)),
-		Repo:  n.Repo,
-		PR:    n.PRNumber,
-		Title: n.PRTitle,
-	}
-	switch n.Trigger {
-	case notify.TriggerReviewReceived:
-		ev.Payload = events.ReviewPayload{
-			Author:      n.Author,
-			State:       n.ReviewState,
-			SubmittedAt: n.SubmittedAt,
-		}
-	case notify.TriggerEntered:
-		if n.Entered != nil {
-			ev.Payload = events.EnteredPayload{Tab: string(n.Entered.Tab), Section: string(n.Entered.Section)}
-		}
-	}
-	if deliver {
-		ev.Notify = &events.NotificationPayload{
-			Title:   n.Title,
-			Message: n.Message,
-			URL:     n.URL,
-			Image:   n.ImagePath,
-			Sound:   n.Sound,
-		}
-	}
-	return ev
-}
-
-// DiffEvents reports PRs entering or leaving the queue between two fetches,
-// covering both authored and inbox lists. It omits pr_removed for PRs that were merged.
-// Output is sorted deterministically by (Repo, PR, Type).
-func DiffEvents(prev, curr model.Queue, merged map[model.PRKey]bool) []events.Event {
-	prevAll := make(map[model.PRKey]model.PullRequest, len(prev.Authored)+len(prev.Inbox))
-	for _, pr := range prev.Authored {
-		prevAll[pr.Key()] = pr
-	}
-	for _, pr := range prev.Inbox {
-		prevAll[pr.Key()] = pr
-	}
-	currAll := make(map[model.PRKey]model.PullRequest, len(curr.Authored)+len(curr.Inbox))
-	for _, pr := range curr.Authored {
-		currAll[pr.Key()] = pr
-	}
-	for _, pr := range curr.Inbox {
-		currAll[pr.Key()] = pr
-	}
-
-	var out []events.Event
-	for key, pr := range currAll {
-		if _, ok := prevAll[key]; !ok {
-			out = append(out, events.Event{
-				Type:  events.TypePRAdded,
-				Repo:  pr.RepoNameWithOwner,
-				PR:    pr.Number,
-				Title: pr.Title,
-			})
-		}
-	}
-	for key, pr := range prevAll {
-		if _, ok := currAll[key]; !ok {
-			if merged != nil && merged[key] {
-				continue
-			}
-			out = append(out, events.Event{
-				Type:  events.TypePRRemoved,
-				Repo:  pr.RepoNameWithOwner,
-				PR:    pr.Number,
-				Title: pr.Title,
-			})
-		}
-	}
-
-	slices.SortFunc(out, func(a, b events.Event) int {
-		if c := strings.Compare(a.Repo, b.Repo); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(a.PR, b.PR); c != 0 {
-			return c
-		}
-		return strings.Compare(string(a.Type), string(b.Type))
-	})
-	return out
 }

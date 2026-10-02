@@ -159,3 +159,32 @@ func TestDaemon_PassesBoostedKeys(t *testing.T) {
 		assert.Equal(t, map[model.PRKey]bool{direct.Key(): true}, boosted[1])
 	})
 }
+
+// A fresh warm cache is classified at startup, so the very first fetch
+// already boosts Focus/Priority PRs instead of waiting a poll.
+//
+//nolint:paralleltest // synctest bubbles cannot run in parallel
+func TestDaemon_FreshWarmStartBoostsFirstFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		direct := pr(1, "Asked of me", "org/repo")
+		direct.Author = "alice"
+		direct.DirectRequest = true
+		q := model.Queue{Viewer: "kalverra", Inbox: []model.PullRequest{direct}}
+		src := &pacedSource{wait: time.Hour, queue: q}
+		store := &fakeStore{queue: q, savedAt: time.Now(), ok: true}
+		_, stop := runPaced(t, daemon.Options{
+			Source:         src,
+			Store:          store,
+			Interval:       time.Hour,
+			PriorityConfig: config.DefaultPriorityConfig(),
+		})
+
+		time.Sleep(time.Second)
+		synctest.Wait()
+		stop()
+
+		_, _, boosted := src.snapshot()
+		require.NotEmpty(t, boosted)
+		assert.Equal(t, map[model.PRKey]bool{direct.Key(): true}, boosted[0])
+	})
+}

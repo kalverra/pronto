@@ -12,6 +12,8 @@ import (
 	"github.com/kalverra/pronto/internal/notify"
 )
 
+// TestClassify exercises notify.Classify with the real config partitioner and
+// rule set (config imports notify, so these cases live here).
 func TestClassify(t *testing.T) {
 	t.Parallel()
 
@@ -45,7 +47,7 @@ func TestClassify(t *testing.T) {
 	t.Run("authored lands in mine with section", func(t *testing.T) {
 		t.Parallel()
 		q := model.Queue{Authored: []model.PullRequest{mk(1, "me", nil)}, Viewer: "me"}
-		got := config.Classify(q, prio, config.RuleSet{}, nil, now)
+		got := notify.Classify(q, prio, config.RuleSet{}, nil, now)
 		require.Len(t, got, 1)
 		assert.Equal(t, []notify.Scope{tab(notify.TabMine), sec(notify.TabMine, model.SectionInReview)}, got[0].Scopes)
 	})
@@ -59,7 +61,7 @@ func TestClassify(t *testing.T) {
 			},
 			Viewer: "me",
 		}
-		got := config.Classify(q, prio, config.RuleSet{}, nil, now)
+		got := notify.Classify(q, prio, config.RuleSet{}, nil, now)
 		assert.Equal(t,
 			[]notify.Scope{tab(notify.TabPriority), sec(notify.TabPriority, model.SectionAttention)}, scopesOf(got, 2))
 		assert.Equal(t,
@@ -82,7 +84,7 @@ func TestClassify(t *testing.T) {
 			}
 			return false, false
 		}
-		got := config.Classify(q, prio, config.RuleSet{Authors: []string{"ruled"}}, override, now)
+		got := notify.Classify(q, prio, config.RuleSet{Authors: []string{"ruled"}}, override, now)
 		assert.Contains(t, scopesOf(got, 2), tab(notify.TabFocus))
 		assert.Contains(t, scopesOf(got, 3), tab(notify.TabFocus))
 		assert.Contains(t, scopesOf(got, 3), sec(notify.TabFocus, model.SectionAttention))
@@ -102,7 +104,7 @@ func TestClassify(t *testing.T) {
 			},
 			Viewer: "me",
 		}
-		got := config.Classify(q, prio, config.RuleSet{}, nil, now)
+		got := notify.Classify(q, prio, config.RuleSet{}, nil, now)
 		want := []notify.Scope{tab(notify.TabPriority), sec(notify.TabPriority, model.SectionAttention)}
 		assert.Equal(t, want, scopesOf(got, 5))
 		assert.Equal(t, want, scopesOf(got, 6))
@@ -118,7 +120,7 @@ func TestClassify(t *testing.T) {
 			Viewer: "me",
 		}
 		want := model.EffectiveSections(append(q.Authored, q.Inbox...), q.IsAuthored, now)
-		for _, o := range config.Classify(q, prio, config.RuleSet{}, nil, now) {
+		for _, o := range notify.Classify(q, prio, config.RuleSet{}, nil, now) {
 			assert.Contains(t, o.Scopes, notify.Scope{Tab: o.Scopes[0].Tab, Section: want[o.PR.Key()]})
 		}
 	})
@@ -128,7 +130,7 @@ func TestClassify(t *testing.T) {
 		bot := mk(7, "dependabot[bot]", func(p *model.PullRequest) { p.DirectRequest = true; p.AuthorIsBot = true })
 		q := model.Queue{Inbox: []model.PullRequest{bot}, Viewer: "me"}
 		focus := config.RuleSet{Authors: []string{"dependabot[bot]"}, ExcludeBots: true}
-		got := config.Classify(q, prio, focus, nil, now)
+		got := notify.Classify(q, prio, focus, nil, now)
 		assert.Equal(t, tab(notify.TabInbox), scopesOf(got, 7)[0])
 		assert.NotContains(t, scopesOf(got, 7), tab(notify.TabFocus))
 	})
@@ -141,7 +143,7 @@ func TestClassify(t *testing.T) {
 			Viewer:   "me",
 		}
 		var nums []int
-		for _, o := range config.Classify(q, prio, config.RuleSet{}, nil, now) {
+		for _, o := range notify.Classify(q, prio, config.RuleSet{}, nil, now) {
 			nums = append(nums, o.PR.Number)
 		}
 		assert.Equal(t, []int{9, 8, 7}, nums)

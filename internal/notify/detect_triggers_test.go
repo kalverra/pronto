@@ -18,8 +18,7 @@ func obsIn(pr model.PullRequest, scopes ...notify.Scope) []notify.Observed {
 
 func detect(t *testing.T, d *notify.Detector, prev, curr []notify.Observed) []notify.Notification {
 	t.Helper()
-	notes, err := d.DetectChanges(context.Background(), prev, curr)
-	require.NoError(t, err)
+	notes := d.DetectChanges(context.Background(), prev, curr)
 	return notes
 }
 
@@ -34,7 +33,7 @@ func triggersOf(notes []notify.Notification) []notify.Trigger {
 func TestDetector_MergeQueueTransitions(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	mine := scope(notify.TabMine, "")
 	base := makeBasePR(1, "Queued")
 	queued := base
@@ -59,7 +58,7 @@ func TestDetector_MergeQueueLeft_NotFiredWhenVanishes(t *testing.T) {
 	t.Parallel()
 
 	checker := func(context.Context, string, int) (notify.PRState, error) { return notify.PRStateOpen, nil }
-	d := notify.NewDetector(perPR(checker))
+	d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 	queued := makeBasePR(1, "Queued")
 	queued.IsInMergeQueue = true
 
@@ -81,7 +80,7 @@ func TestDetector_Vanished_ByState(t *testing.T) {
 		t.Run(string(tc.state), func(t *testing.T) {
 			t.Parallel()
 			checker := func(context.Context, string, int) (notify.PRState, error) { return tc.state, nil }
-			d := notify.NewDetector(perPR(checker))
+			d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 			mine := scope(notify.TabMine, model.SectionInReview)
 
 			notes := detect(t, d, obsIn(makeBasePR(1, "Gone"), mine), nil)
@@ -104,7 +103,7 @@ func TestDetector_NewCommits(t *testing.T) {
 
 	t.Run("fires once on new head", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil, notify.WithViewer("me"))
+		d := notify.NewDetector(notify.WithViewer("me"))
 		notes := detect(t, d, obs(prev), obs(curr))
 		require.Len(t, notes, 1)
 		assert.Equal(t, notify.TriggerNewCommits, notes[0].Trigger)
@@ -114,13 +113,13 @@ func TestDetector_NewCommits(t *testing.T) {
 
 	t.Run("suppressed for viewer's own pushes", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil, notify.WithViewer("someone"))
+		d := notify.NewDetector(notify.WithViewer("someone"))
 		assert.Empty(t, detect(t, d, obs(prev), obs(curr)))
 	})
 
 	t.Run("not fired when prev head unknown", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil)
+		d := notify.NewDetector()
 		blank := prev
 		blank.HeadRefOID = ""
 		assert.Empty(t, detect(t, d, obs(blank), obs(curr)))
@@ -137,7 +136,7 @@ func TestDetector_Entered(t *testing.T) {
 
 	t.Run("fires on scope gain and carries the scope", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil)
+		d := notify.NewDetector()
 		notes := detect(t, d, obsIn(pr, prio, blocked), obsIn(pr, prio, attn))
 		require.Len(t, notes, 1)
 		assert.Equal(t, notify.TriggerEntered, notes[0].Trigger)
@@ -149,7 +148,7 @@ func TestDetector_Entered(t *testing.T) {
 
 	t.Run("new PR enters all its scopes", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil)
+		d := notify.NewDetector()
 		notes := detect(t, d, nil, obsIn(pr, prio, attn))
 		require.Len(t, notes, 2)
 		assert.Equal(t, "🔥 Priority (#1)", notes[0].Title)
@@ -157,15 +156,15 @@ func TestDetector_Entered(t *testing.T) {
 
 	t.Run("not on seeded baseline", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil)
+		d := notify.NewDetector()
 		base := obsIn(pr, prio, attn)
-		d.Seed(base)
+		d.SeedObserved(base)
 		assert.Empty(t, detect(t, d, nil, base))
 	})
 
 	t.Run("no refire when flapping on same commit; refires after push", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil)
+		d := notify.NewDetector()
 		assert.Len(t, detect(t, d, obsIn(pr, prio, blocked), obsIn(pr, prio, attn)), 1)
 		// First visit to blocked on this commit fires; going back to attention does not repeat.
 		assert.Len(t, detect(t, d, obsIn(pr, prio, attn), obsIn(pr, prio, blocked)), 1)
@@ -182,7 +181,7 @@ func TestDetector_Entered(t *testing.T) {
 
 	t.Run("text for other scopes", func(t *testing.T) {
 		t.Parallel()
-		d := notify.NewDetector(nil)
+		d := notify.NewDetector()
 		rtm := scope(notify.TabMine, model.SectionReadyToMerge)
 		notes := detect(t, d, obsIn(pr), obsIn(pr, rtm))
 		require.Len(t, notes, 1)
@@ -200,8 +199,8 @@ func TestDetector_PROpened_RespectsClock(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	d := notify.NewDetector(nil, notify.WithClock(func() time.Time { return now }))
-	d.Seed(nil)
+	d := notify.NewDetector(notify.WithClock(func() time.Time { return now }))
+	d.SeedObserved(nil)
 
 	fresh := makeBasePR(1, "Fresh")
 	fresh.CreatedAt = now.Add(time.Minute)
@@ -222,7 +221,7 @@ func TestDetector_PROpened_RespectsClock(t *testing.T) {
 func TestDetector_ScopesUnionPrevAndCurr(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	a := scope(notify.TabMine, model.SectionInReview)
 	b := scope(notify.TabMine, model.SectionActionRequired)
 	prev := makeBasePR(1, "Feature")
@@ -243,7 +242,7 @@ func TestDetector_ScopesUnionPrevAndCurr(t *testing.T) {
 func TestDetector_MergeQueueKickedOut_FailingChecks(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	mine := scope(notify.TabMine, "")
 	queued := makeBasePR(1, "Queued PR")
 	queued.IsInMergeQueue = true
@@ -271,7 +270,7 @@ func TestDetector_MergeQueueKickedOut_FailingChecks(t *testing.T) {
 func TestDetector_MergeQueueKickedOut_Conflict(t *testing.T) {
 	t.Parallel()
 
-	d := notify.NewDetector(nil)
+	d := notify.NewDetector()
 	mine := scope(notify.TabMine, "")
 	queued := makeBasePR(1, "Queued PR")
 	queued.IsInMergeQueue = true
@@ -297,7 +296,7 @@ func TestDetector_Vanished_DefaultBranchFiltering(t *testing.T) {
 	checker := func(context.Context, string, int) (notify.PRState, error) {
 		return notify.PRStateMerged, nil
 	}
-	d := notify.NewDetector(perPR(checker))
+	d := notify.NewDetector(notify.WithStatusChecker(perPR(checker)))
 	mine := scope(notify.TabMine, model.SectionReadyToMerge)
 
 	// Merged into non-default feature branch: must be skipped.

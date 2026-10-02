@@ -45,7 +45,7 @@ func TestModel_InitialLoad_SeedsDetectorWithoutNotifying(t *testing.T) {
 	t.Parallel()
 
 	notifier := &mockNotifier{}
-	detector := notify.NewDetector(nil)
+	detector := notify.NewDetector(notify.WithPolicy(config.DefaultNotificationConfig().Policy()))
 
 	// StartupModel with loading=true
 	m := tui.StartupModel(
@@ -89,7 +89,7 @@ func TestModel_Refresh_TriggersNotifierAndBanner(t *testing.T) {
 	t.Parallel()
 
 	notifier := &mockNotifier{}
-	detector := notify.NewDetector(nil)
+	detector := notify.NewDetector(notify.WithPolicy(config.DefaultNotificationConfig().Policy()))
 
 	initialQ := model.Queue{
 		Authored: []model.PullRequest{
