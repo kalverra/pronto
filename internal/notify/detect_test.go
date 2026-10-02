@@ -155,6 +155,62 @@ func TestDetector_CIFailed_FromPassed(t *testing.T) {
 	assert.Equal(t, notify.TriggerCIFailed, notes[0].Trigger)
 }
 
+func TestDetector_CIFailed_OptionalCheckFailed_NoNotification(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil)
+	prevPR := makeBasePR(1, "Feature A")
+	prevPR.Checks = model.ChecksSummary{
+		Total:             2,
+		Done:              2,
+		ReqTotal:          2,
+		ReqDone:           2,
+		HasRequiredChecks: true,
+	}
+
+	currPR := prevPR
+	currPR.Checks = model.ChecksSummary{
+		Total:             3,
+		Done:              3,
+		Failed:            1, // optional check failed
+		ReqTotal:          2,
+		ReqDone:           2,
+		ReqFailed:         0, // required checks all passed
+		HasRequiredChecks: true,
+	}
+
+	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
+	require.NoError(t, err)
+	for _, n := range notes {
+		assert.NotEqual(t, notify.TriggerCIFailed, n.Trigger)
+	}
+}
+
+func TestDetector_CIFailed_NoRequiredChecks_AnyFailureNotifies(t *testing.T) {
+	t.Parallel()
+
+	d := notify.NewDetector(nil)
+	prevPR := makeBasePR(1, "Feature A")
+	prevPR.Checks = model.ChecksSummary{
+		Total:             2,
+		Done:              2,
+		HasRequiredChecks: false,
+	}
+
+	currPR := prevPR
+	currPR.Checks = model.ChecksSummary{
+		Total:             2,
+		Done:              2,
+		Failed:            1,
+		HasRequiredChecks: false,
+	}
+
+	notes, err := d.DetectChanges(context.Background(), obs(prevPR), obs(currPR))
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Equal(t, notify.TriggerCIFailed, notes[0].Trigger)
+}
+
 func TestDetector_CIUnchanged_NoNotification(t *testing.T) {
 	t.Parallel()
 

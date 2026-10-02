@@ -306,6 +306,32 @@ func TestModel_DetailModal_CIDuration(t *testing.T) {
 		assert.NotContains(t, view, "Elapsed:")
 		assert.NotContains(t, view, "Duration:")
 	})
+
+	t.Run("required checks metrics in details", func(t *testing.T) {
+		t.Parallel()
+
+		pr := model.PullRequest{
+			Number:            104,
+			Title:             "Required Checks PR",
+			RepoNameWithOwner: "org/repo",
+			Checks: model.ChecksSummary{
+				HasRequiredChecks: true,
+				ReqTotal:          2,
+				ReqDone:           2,
+				ReqFailed:         0,
+				ReqRunning:        0,
+			},
+		}
+		q := model.Queue{Inbox: []model.PullRequest{pr}}
+		m := tui.New(q, tui.WithNow(now), tui.WithActiveTab(tui.TabInbox))
+
+		mOpened, _ := sendKey(m, tea.KeyEnter)
+		view := mOpened.View()
+
+		assert.Contains(t, view, "CI Checks:")
+		assert.Contains(t, view, "✓ 2/2")
+		assert.Contains(t, view, "Required: 2 | Done: 2 | Failed: 0 | Running: 0")
+	})
 }
 
 func TestFormatCIDuration(t *testing.T) {

@@ -4,6 +4,7 @@ package model
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -93,8 +94,15 @@ func failedCheckURL(requiredContexts []string, checks []ContextCheck) string {
 		if c.URL == "" {
 			continue
 		}
-		if len(requiredContexts) > 0 && !slices.Contains(requiredContexts, c.Name) {
-			continue
+		if len(requiredContexts) > 0 {
+			cName := strings.TrimSpace(c.Name)
+			matched := slices.ContainsFunc(requiredContexts, func(req string) bool {
+				reqTrimmed := strings.TrimSpace(req)
+				return cName == reqTrimmed || strings.EqualFold(cName, reqTrimmed)
+			})
+			if !matched {
+				continue
+			}
 		}
 		if _, failed, _ := classifyCheck(c); failed {
 			return c.URL
@@ -112,13 +120,20 @@ func computeRequiredChecksSummary(requiredContexts []string, checks []ContextChe
 
 	relevantChecks := make([]ContextCheck, 0, len(requiredContexts))
 	for _, req := range requiredContexts {
-		idx := slices.IndexFunc(checks, func(c ContextCheck) bool {
-			return c.Name == req
-		})
-		if idx == -1 {
+		reqTrimmed := strings.TrimSpace(req)
+		var match *ContextCheck
+		for i := len(checks) - 1; i >= 0; i-- {
+			c := &checks[i]
+			cName := strings.TrimSpace(c.Name)
+			if cName == reqTrimmed || strings.EqualFold(cName, reqTrimmed) {
+				match = c
+				break
+			}
+		}
+		if match == nil {
 			continue
 		}
-		c := checks[idx]
+		c := *match
 		relevantChecks = append(relevantChecks, c)
 		done, failed, running := classifyCheck(c)
 		if done {

@@ -517,3 +517,211 @@ func TestConvertPR_LinkURLs(t *testing.T) {
 	assert.Equal(t, "https://github.com/acme/repo/pull/1#pullrequestreview-42", pr.LatestReviews[0].URL)
 	assert.Equal(t, "https://ci.example/legacy/9", pr.Checks.FailedURL)
 }
+
+func TestConvertPR_RulesetsAndRequiredChecks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ruleset required checks active with optional failure", func(t *testing.T) {
+		t.Parallel()
+		freshJSON := `{
+			"reviewDecision": "APPROVED",
+			"baseRef": {
+				"branchProtectionRule": null,
+				"rules": {
+					"nodes": [
+						{
+							"type": "REQUIRED_STATUS_CHECKS",
+							"repositoryRuleset": {
+								"enforcement": "ACTIVE"
+							},
+							"parameters": {
+								"requiredStatusChecks": [
+									{"context": "required-build"}
+								]
+							}
+						},
+						{
+							"type": "REQUIRED_STATUS_CHECKS",
+							"repositoryRuleset": {
+								"enforcement": "EVALUATE"
+							},
+							"parameters": {
+								"requiredStatusChecks": [
+									{"context": "eval-check"}
+								]
+							}
+						}
+					]
+				}
+			},
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "FAILURE",
+								"contexts": {
+									"nodes": [
+										{
+											"__typename": "CheckRun",
+											"name": "required-build",
+											"status": "COMPLETED",
+											"conclusion": "SUCCESS"
+										},
+										{
+											"__typename": "CheckRun",
+											"name": "eval-check",
+											"status": "COMPLETED",
+											"conclusion": "FAILURE"
+										},
+										{
+											"__typename": "CheckRun",
+											"name": "optional-linter",
+											"status": "COMPLETED",
+											"conclusion": "FAILURE"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			}
+		}`
+
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 42}, stableFields{}, fresh, false, convertOpts{})
+		assert.True(t, pr.Checks.HasRequiredChecks)
+		assert.Equal(t, 1, pr.Checks.ReqTotal)
+		assert.Equal(t, 1, pr.Checks.ReqDone)
+		assert.Equal(t, 0, pr.Checks.ReqFailed)
+		assert.True(t, pr.Checks.IsPassing())
+		assert.False(t, pr.Checks.IsFailing())
+		assert.NotEqual(t, model.ActionStatusFailingCI, pr.ActionStatus())
+	})
+
+	t.Run("ruleset required checks active with required failure", func(t *testing.T) {
+		t.Parallel()
+		freshJSON := `{
+			"baseRef": {
+				"rules": {
+					"nodes": [
+						{
+							"type": "REQUIRED_STATUS_CHECKS",
+							"repositoryRuleset": {
+								"enforcement": "ACTIVE"
+							},
+							"parameters": {
+								"requiredStatusChecks": [
+									{"context": "required-build"}
+								]
+							}
+						}
+					]
+				}
+			},
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "FAILURE",
+								"contexts": {
+									"nodes": [
+										{
+											"__typename": "CheckRun",
+											"name": "required-build",
+											"status": "COMPLETED",
+											"conclusion": "FAILURE"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			}
+		}`
+
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 42}, stableFields{}, fresh, false, convertOpts{})
+		assert.True(t, pr.Checks.HasRequiredChecks)
+		assert.Equal(t, 1, pr.Checks.ReqFailed)
+		assert.True(t, pr.Checks.IsFailing())
+		assert.Equal(t, model.ActionStatusFailingCI, pr.ActionStatus())
+	})
+
+	t.Run("union with branch protection rule and deduplication", func(t *testing.T) {
+		t.Parallel()
+		freshJSON := `{
+			"baseRef": {
+				"branchProtectionRule": {
+					"requiredStatusCheckContexts": ["ci/lint", "ci/test"]
+				},
+				"rules": {
+					"nodes": [
+						{
+							"type": "REQUIRED_STATUS_CHECKS",
+							"repositoryRuleset": {
+								"enforcement": "ACTIVE"
+							},
+							"parameters": {
+								"requiredStatusChecks": [
+									{"context": "ci/test"},
+									{"context": "ci/build"}
+								]
+							}
+						}
+					]
+				}
+			}
+		}`
+
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 42}, stableFields{}, fresh, false, convertOpts{})
+		assert.True(t, pr.Checks.HasRequiredChecks)
+		assert.Equal(t, 3, pr.Checks.ReqTotal) // ci/lint, ci/test, ci/build (ci/test deduplicated)
+	})
+
+	t.Run("no required checks fallback marks failure on any check failure", func(t *testing.T) {
+		t.Parallel()
+		freshJSON := `{
+			"baseRef": null,
+			"commits": {
+				"nodes": [
+					{
+						"commit": {
+							"statusCheckRollup": {
+								"state": "FAILURE",
+								"contexts": {
+									"nodes": [
+										{
+											"__typename": "CheckRun",
+											"name": "optional-linter",
+											"status": "COMPLETED",
+											"conclusion": "FAILURE"
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			}
+		}`
+
+		var fresh rawFresh
+		require.NoError(t, json.Unmarshal([]byte(freshJSON), &fresh))
+
+		pr := convertPR(rawIdentity{Number: 42}, stableFields{}, fresh, false, convertOpts{})
+		assert.False(t, pr.Checks.HasRequiredChecks)
+		assert.True(t, pr.Checks.IsFailing())
+		assert.Equal(t, model.ActionStatusFailingCI, pr.ActionStatus())
+	})
+}

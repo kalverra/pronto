@@ -2048,8 +2048,20 @@ func (m Model) renderDetailsModal() string {
 				durationSuffix = " | Duration: " + FormatCIDuration(d)
 			}
 		}
-		fmt.Fprintf(&b, "  Total: %d | Done: %d | Failed: %d | Running: %d%s\n",
-			displayChecks.Total, displayChecks.Done, displayChecks.Failed, displayChecks.Running, durationSuffix)
+		if displayChecks.HasRequiredChecks {
+			fmt.Fprintf(
+				&b,
+				"  Required: %d | Done: %d | Failed: %d | Running: %d%s\n",
+				displayChecks.ReqTotal,
+				displayChecks.ReqDone,
+				displayChecks.ReqFailed,
+				displayChecks.ReqRunning,
+				durationSuffix,
+			)
+		} else {
+			fmt.Fprintf(&b, "  Total: %d | Done: %d | Failed: %d | Running: %d%s\n",
+				displayChecks.Total, displayChecks.Done, displayChecks.Failed, displayChecks.Running, durationSuffix)
+		}
 	}
 
 	// Changed Files & Diffstat

@@ -27,6 +27,21 @@ fragment FreshFields on PullRequest {
     branchProtectionRule {
       requiredStatusCheckContexts
     }
+    rules(first: 100) {
+      nodes {
+        type
+        repositoryRuleset {
+          enforcement
+        }
+        parameters {
+          ... on RequiredStatusChecksParameters {
+            requiredStatusChecks {
+              context
+            }
+          }
+        }
+      }
+    }
   }
   commits(last: 1) {
     nodes {

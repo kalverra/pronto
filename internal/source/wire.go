@@ -2,6 +2,7 @@
 package source
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -161,6 +162,19 @@ type rawBaseRef struct {
 	BranchProtectionRule *struct {
 		RequiredStatusCheckContexts []string `json:"requiredStatusCheckContexts"`
 	} `json:"branchProtectionRule"`
+	Rules *struct {
+		Nodes []struct {
+			Type              string `json:"type"`
+			RepositoryRuleset *struct {
+				Enforcement string `json:"enforcement"`
+			} `json:"repositoryRuleset"`
+			Parameters *struct {
+				RequiredStatusChecks []struct {
+					Context string `json:"context"`
+				} `json:"requiredStatusChecks"`
+			} `json:"parameters"`
+		} `json:"nodes"`
+	} `json:"rules"`
 }
 
 // rawStatusCheckRollup mirrors the StatusCheckRollupFields fragment, shared by
@@ -265,6 +279,35 @@ func convertStack(rawS *rawStack, rawE *rawStackEntry) *model.PRStack {
 		Position:    pos,
 		BaseRefName: rawS.BaseRefName,
 	}
+}
+
+func convertRequiredContexts(baseRef *rawBaseRef) []string {
+	if baseRef == nil {
+		return nil
+	}
+	var requiredContexts []string
+	if baseRef.BranchProtectionRule != nil {
+		for _, ctx := range baseRef.BranchProtectionRule.RequiredStatusCheckContexts {
+			if ctx != "" && !slices.Contains(requiredContexts, ctx) {
+				requiredContexts = append(requiredContexts, ctx)
+			}
+		}
+	}
+	if baseRef.Rules != nil {
+		for _, node := range baseRef.Rules.Nodes {
+			if node.RepositoryRuleset != nil && node.RepositoryRuleset.Enforcement != "ACTIVE" {
+				continue
+			}
+			if node.Parameters != nil {
+				for _, sc := range node.Parameters.RequiredStatusChecks {
+					if sc.Context != "" && !slices.Contains(requiredContexts, sc.Context) {
+						requiredContexts = append(requiredContexts, sc.Context)
+					}
+				}
+			}
+		}
+	}
+	return requiredContexts
 }
 
 func convertChecks(commits rawCommits) (model.CheckRollup, []model.ContextCheck) {
@@ -405,10 +448,7 @@ func convertPR(
 		}
 	}
 
-	var requiredContexts []string
-	if fresh.BaseRef != nil && fresh.BaseRef.BranchProtectionRule != nil {
-		requiredContexts = fresh.BaseRef.BranchProtectionRule.RequiredStatusCheckContexts
-	}
+	requiredContexts := convertRequiredContexts(fresh.BaseRef)
 
 	rollup, checks := convertChecks(fresh.Commits)
 

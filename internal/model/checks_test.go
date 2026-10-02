@@ -857,3 +857,53 @@ func TestComputeChecksSummary_FailedURL(t *testing.T) {
 		})
 	}
 }
+
+func TestComputeChecksSummary_RetryAndMatching(t *testing.T) {
+	t.Parallel()
+
+	t.Run("retry succeeded after earlier failure", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE"},
+			{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		}
+		summary := model.ComputeChecksSummary([]string{"test"}, checks)
+		assert.True(t, summary.HasRequiredChecks)
+		assert.Equal(t, 1, summary.ReqTotal)
+		assert.Equal(t, 1, summary.ReqDone)
+		assert.Equal(t, 0, summary.ReqFailed)
+		assert.True(t, summary.IsPassing())
+		assert.False(t, summary.IsFailing())
+	})
+
+	t.Run("retry in progress after earlier failure", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE"},
+			{Name: "test", Status: "IN_PROGRESS"},
+		}
+		summary := model.ComputeChecksSummary([]string{"test"}, checks)
+		assert.True(t, summary.HasRequiredChecks)
+		assert.Equal(t, 1, summary.ReqTotal)
+		assert.Equal(t, 0, summary.ReqDone)
+		assert.Equal(t, 0, summary.ReqFailed)
+		assert.Equal(t, 1, summary.ReqRunning)
+		assert.False(t, summary.IsPassing())
+		assert.False(t, summary.IsFailing())
+		assert.True(t, summary.IsRunning())
+	})
+
+	t.Run("case insensitive and trimmed context matching", func(t *testing.T) {
+		t.Parallel()
+		checks := []model.ContextCheck{
+			{Name: "Build-Check ", Status: "COMPLETED", Conclusion: "SUCCESS", URL: "https://ci/build"},
+		}
+		summary := model.ComputeChecksSummary([]string{" build-check"}, checks)
+		assert.True(t, summary.HasRequiredChecks)
+		assert.Equal(t, 1, summary.ReqTotal)
+		assert.Equal(t, 1, summary.ReqDone)
+		assert.Equal(t, 0, summary.ReqFailed)
+		assert.True(t, summary.IsPassing())
+		assert.False(t, summary.IsFailing())
+	})
+}
