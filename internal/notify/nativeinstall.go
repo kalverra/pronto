@@ -265,18 +265,7 @@ func InstallNativeHelper(appPath string, opts ...InstallOption) (string, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), swiftCompileTimeout)
 	defer cancel()
 
-	// If appPath already exists, unregister from LaunchServices and cleanly remove it
-	// so no stale signatures, old Info.plist, or legacy bundle IDs remain.
-	if _, err := os.Stat(appPath); err == nil {
-		if installer.register {
-			_ = installer.run(ctx, installer.lsregisterPath(), "-u", appPath)
-		}
-		if err := os.RemoveAll(appPath); err != nil {
-			return "", fmt.Errorf("clean previous helper bundle: %w", err)
-		}
-	}
-
-	// Materialize the embedded sources for swiftc.
+	// Materialize the embedded sources for swiftc and stage the bundle build.
 	tmp, err := os.MkdirTemp("", "pronto-notify-build")
 	if err != nil {
 		return "", fmt.Errorf("create build dir: %w", err)
@@ -287,7 +276,8 @@ func InstallNativeHelper(appPath string, opts ...InstallOption) (string, error) 
 		return "", fmt.Errorf("write helper source: %w", err)
 	}
 
-	binDir := filepath.Join(appPath, "Contents", "MacOS")
+	stagingApp := filepath.Join(tmp, filepath.Base(appPath))
+	binDir := filepath.Join(stagingApp, "Contents", "MacOS")
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		return "", fmt.Errorf("create bundle layout: %w", err)
 	}
@@ -300,14 +290,14 @@ func InstallNativeHelper(appPath string, opts ...InstallOption) (string, error) 
 	plist = bytes.ReplaceAll(plist, []byte(helperBundleIDPlaceholder), []byte(installer.bundleID))
 	plist = bytes.ReplaceAll(plist, []byte(helperDisplayNamePlaceholder), []byte(helperDisplayName(installer.bundleID)))
 	// #nosec G306 -- user-local app bundle; no secrets, but gosec prefers 0600.
-	if err := os.WriteFile(filepath.Join(appPath, "Contents", "Info.plist"), plist, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stagingApp, "Contents", "Info.plist"), plist, 0o600); err != nil {
 		return "", fmt.Errorf("write Info.plist: %w", err)
 	}
 
 	if err := writeIconset(filepath.Join(tmp, "AppIcon.iconset")); err != nil {
 		return "", fmt.Errorf("materialize icon set: %w", err)
 	}
-	resDir := filepath.Join(appPath, "Contents", "Resources")
+	resDir := filepath.Join(stagingApp, "Contents", "Resources")
 	if err := os.MkdirAll(resDir, 0o750); err != nil {
 		return "", fmt.Errorf("create bundle resources: %w", err)
 	}
@@ -320,8 +310,30 @@ func InstallNativeHelper(appPath string, opts ...InstallOption) (string, error) 
 	if installer.codesign == "" {
 		installer.codesign = "codesign"
 	}
-	if err := installer.run(ctx, installer.codesign, "--force", "--sign", "-", appPath); err != nil {
+	if err := installer.run(ctx, installer.codesign, "--force", "--sign", "-", stagingApp); err != nil {
 		return "", fmt.Errorf("ad-hoc sign helper: %w", err)
+	}
+
+	// Replacement bundle compiled and signed successfully. If appPath already exists,
+	// unregister from LaunchServices and remove it cleanly before placing the new bundle.
+	if _, err := os.Stat(appPath); err == nil {
+		if installer.register {
+			_ = installer.run(ctx, installer.lsregisterPath(), "-u", appPath)
+		}
+		if err := os.RemoveAll(appPath); err != nil {
+			return "", fmt.Errorf("clean previous helper bundle: %w", err)
+		}
+	}
+
+	// #nosec G301 -- user-local app directory.
+	if err := os.MkdirAll(filepath.Dir(appPath), 0o750); err != nil {
+		return "", fmt.Errorf("create app destination dir: %w", err)
+	}
+
+	if err := os.Rename(stagingApp, appPath); err != nil {
+		if err := os.CopyFS(appPath, os.DirFS(stagingApp)); err != nil {
+			return "", fmt.Errorf("install helper bundle: %w", err)
+		}
 	}
 
 	if installer.register {
@@ -372,6 +384,11 @@ func PurgeStaleHelpers(ctx context.Context, appPath string, opts ...InstallOptio
 // HelperBundleID or legacy bundle IDs besides appPath (dev builds with
 // DevHelperBundleID never collide and are not considered stale).
 func StaleHelperInstalls(appPath string) []string {
+	cleanApp := filepath.Clean(appPath)
+	if abs, err := filepath.Abs(cleanApp); err == nil {
+		cleanApp = abs
+	}
+
 	var candidates []string
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, filepath.Join(cwd, "build", HelperAppName))
@@ -386,7 +403,11 @@ func StaleHelperInstalls(appPath string) []string {
 	seen := make(map[string]bool)
 	out := candidates[:0]
 	for _, c := range candidates {
-		if c == appPath || seen[c] {
+		c = filepath.Clean(c)
+		if abs, err := filepath.Abs(c); err == nil {
+			c = abs
+		}
+		if c == cleanApp || seen[c] {
 			continue
 		}
 		seen[c] = true

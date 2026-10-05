@@ -310,9 +310,12 @@ func runNotifySetup(ctx context.Context, out io.Writer, opts setupOptions) error
 		installOpts = append(installOpts, notify.WithoutRegister())
 	}
 
-	// Purge stale or legacy helper installs, deleting them from disk and
-	// unregistering from LaunchServices so old builds never collide.
-	staleInstalls, _ := purgeStaleHelpersFn(ctx, dest, installOpts...)
+	// Purge stale or legacy helper installs only for a registered production setup;
+	// --no-register is used for dev builds and must not remove the installed helper.
+	var staleInstalls []string
+	if !opts.noRegister {
+		staleInstalls, _ = purgeStaleHelpersFn(ctx, dest, installOpts...)
+	}
 
 	installedVersion, _ := notify.InstalledHelperVersion(dest)
 	installedID, _ := notify.InstalledHelperBundleID(dest)
@@ -362,7 +365,9 @@ func runNotifySetup(ctx context.Context, out io.Writer, opts setupOptions) error
 
 	// Migrate legacy notification config in pronto.toml so old terminal mode
 	// or disabled popups do not keep the user on the old delivery path.
-	if migRes, err := migrateNotificationConfigFn(config.Path()); err == nil {
+	if migRes, err := migrateNotificationConfigFn(config.Path()); err != nil {
+		step(out, "x  could not migrate legacy config: %v", err)
+	} else {
 		if migRes.ModeChanged {
 			step(out, "+  migrated %s: replaced mode = %q with mode = %q",
 				config.Path(), config.NotifyTerminal, config.NotifyNative)

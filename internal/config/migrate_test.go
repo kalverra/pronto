@@ -92,3 +92,25 @@ popups = true
 	require.NoError(t, err)
 	assert.Equal(t, content, string(data))
 }
+
+func TestMigrateNotificationConfig_PreservesExplicitPopupsFalseWhenAlreadyNative(t *testing.T) {
+	t.Parallel()
+
+	content := `[notifications]
+mode = "native"
+popups = false
+sound = true
+`
+	file := filepath.Join(t.TempDir(), "pronto.toml")
+	require.NoError(t, os.WriteFile(file, []byte(content), 0o600))
+
+	res, err := config.MigrateNotificationConfig(file)
+	require.NoError(t, err)
+	assert.False(t, res.ModeChanged)
+	assert.False(t, res.PopupsEnabled)
+
+	// #nosec G304 -- test file path.
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+}

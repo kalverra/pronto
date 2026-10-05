@@ -2,6 +2,7 @@ package notify_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,7 +106,7 @@ func TestInstallNativeHelper_BundleLayout(t *testing.T) {
 	marker, err := os.ReadFile(filepath.Join(dir, "codesign-args"))
 	require.NoError(t, err)
 	assert.Contains(t, string(marker), "--sign", "bundle must be ad-hoc signed")
-	assert.Contains(t, string(marker), appPath)
+	assert.Contains(t, string(marker), notify.HelperAppName)
 }
 
 func TestInstallNativeHelper_WithBundleID(t *testing.T) {
@@ -297,6 +298,14 @@ func TestStaleHelperInstalls(t *testing.T) {
 	// Legacy bundle ID from older versions must also be recognized as stale
 	writeBundleFixture(t, staleApp, "com.kalverra.pronto.notify")
 	assert.Equal(t, []string{staleApp}, notify.StaleHelperInstalls(appPath))
+
+	// Relative appPath must match its absolute counterpart so it is never treated as stale
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	buildApp := filepath.Join(cwd, "build", notify.HelperAppName)
+	writeBundleFixture(t, buildApp, notify.HelperBundleID)
+	t.Cleanup(func() { _ = os.RemoveAll(buildApp) })
+	assert.NotContains(t, notify.StaleHelperInstalls(filepath.Join("build", notify.HelperAppName)), buildApp)
 }
 
 func TestPurgeStaleHelpers_UnregistersAndDeletes(t *testing.T) {
@@ -375,6 +384,31 @@ func TestInstallNativeHelper_CleansExistingBundle(t *testing.T) {
 		}
 	}
 	assert.True(t, unregBeforeReg, "must unregister existing bundle before compiling fresh")
+}
+
+func TestInstallNativeHelper_PreservesExistingBundleOnBuildFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	swiftc, codesign := stubCompiler(t, dir)
+	appPath := filepath.Join(dir, "ProntoNotify.app")
+
+	writeBundleFixture(t, appPath, notify.HelperBundleID)
+	existingArtifact := filepath.Join(appPath, "Contents", "existing.txt")
+	require.NoError(t, os.WriteFile(existingArtifact, []byte("keep-me"), 0o600))
+
+	_, err := notify.InstallNativeHelper(appPath,
+		notify.WithSwiftCompiler(swiftc),
+		notify.WithCodeSignPath(codesign),
+		notify.WithInstallRunner(func(ctx context.Context, name string, args ...string) error {
+			if name == swiftc {
+				return errors.New("compiler explosion")
+			}
+			return fakeIconutilRunner(t, swiftc, codesign)(ctx, name, args...)
+		}),
+	)
+	require.Error(t, err)
+	assert.FileExists(t, existingArtifact, "existing bundle must not be destroyed if compilation fails")
 }
 
 // writeBundleFixture writes a minimal app bundle whose Info.plist declares id.

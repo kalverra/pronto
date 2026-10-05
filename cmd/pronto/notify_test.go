@@ -341,6 +341,11 @@ func TestRun_NotifySetup_NoRegisterSkipsAuthorizeAndTest(t *testing.T) {
 	t.Setenv("PRONTO_CONFIG_DIR", dir)
 	dest := filepath.Join(dir, "ProntoNotify.app")
 
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	staleApp := filepath.Join(xdg, "pronto", notify.HelperAppName)
+	require.NoError(t, os.MkdirAll(staleApp, 0o750))
+
 	stubSetupSeams(t, "authorized", nil, nil, nil)
 
 	var stdout, stderr syncBuffer
@@ -351,6 +356,7 @@ func TestRun_NotifySetup_NoRegisterSkipsAuthorizeAndTest(t *testing.T) {
 	assert.Contains(t, out, "registration skipped")
 	assert.NotContains(t, out, "registered with LaunchServices")
 	assert.NotContains(t, out, "authorized")
+	assert.DirExists(t, staleApp, "dev build (--no-register) must not purge existing helper installs")
 }
 
 // Right after install, usernoted may reject a helper process before its

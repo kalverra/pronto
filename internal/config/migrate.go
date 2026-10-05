@@ -47,7 +47,9 @@ func MigrateNotificationConfig(path string) (MigrationResult, error) {
 		res.ModeChanged = true
 	}
 
-	if popupsFalseRE.Match(updated) {
+	// Only enable popups when migrating away from legacy terminal mode;
+	// an existing native user with popups = false chose that intentionally.
+	if res.ModeChanged && popupsFalseRE.Match(updated) {
 		updated = popupsFalseRE.ReplaceAll(updated, []byte(`${1}true`))
 		res.PopupsEnabled = true
 	}
