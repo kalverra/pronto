@@ -2,6 +2,7 @@ package notify_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,7 +106,7 @@ func TestInstallNativeHelper_BundleLayout(t *testing.T) {
 	marker, err := os.ReadFile(filepath.Join(dir, "codesign-args"))
 	require.NoError(t, err)
 	assert.Contains(t, string(marker), "--sign", "bundle must be ad-hoc signed")
-	assert.Contains(t, string(marker), appPath)
+	assert.Contains(t, string(marker), notify.HelperAppName)
 }
 
 func TestInstallNativeHelper_WithBundleID(t *testing.T) {
@@ -274,6 +275,7 @@ func TestInstallNativeHelper_RegistersAndPurgesStalePaths(t *testing.T) {
 		}
 	}
 	assert.True(t, purged, "must unregister the stale install at the data dir")
+	assert.NoFileExists(t, staleApp, "must delete the stale install from disk")
 }
 
 func TestStaleHelperInstalls(t *testing.T) {
@@ -292,6 +294,121 @@ func TestStaleHelperInstalls(t *testing.T) {
 
 	writeBundleFixture(t, staleApp, notify.HelperBundleID)
 	assert.Equal(t, []string{staleApp}, notify.StaleHelperInstalls(appPath))
+
+	// Legacy bundle ID from older versions must also be recognized as stale
+	writeBundleFixture(t, staleApp, "com.kalverra.pronto.notify")
+	assert.Equal(t, []string{staleApp}, notify.StaleHelperInstalls(appPath))
+
+	// Relative appPath must match its absolute counterpart so it is never treated as stale
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	buildApp := filepath.Join(cwd, "build", notify.HelperAppName)
+	writeBundleFixture(t, buildApp, notify.HelperBundleID)
+	t.Cleanup(func() { _ = os.RemoveAll(buildApp) })
+	assert.NotContains(t, notify.StaleHelperInstalls(filepath.Join("build", notify.HelperAppName)), buildApp)
+}
+
+func TestPurgeStaleHelpers_UnregistersAndDeletes(t *testing.T) {
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "ProntoNotify.app")
+
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	staleApp := filepath.Join(xdg, "pronto", "ProntoNotify.app")
+	writeBundleFixture(t, staleApp, "com.kalverra.pronto.notify")
+
+	var lsregisterArgs [][]string
+	lsregister := filepath.Join(dir, "lsregister")
+	require.NoError(t, os.WriteFile(lsregister, []byte("#!/bin/sh\nexit 0\n"), 0o600))
+	// #nosec G302 -- discovery requires the executable bit; test-only stub.
+	require.NoError(t, os.Chmod(lsregister, 0o700))
+
+	purged, err := notify.PurgeStaleHelpers(context.Background(), appPath,
+		notify.WithLSRegisterPath(lsregister),
+		notify.WithInstallRunner(func(_ context.Context, name string, args ...string) error {
+			if name == lsregister {
+				lsregisterArgs = append(lsregisterArgs, append([]string(nil), args...))
+			}
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{staleApp}, purged)
+	assert.NoFileExists(t, staleApp, "stale helper must be deleted from disk")
+	require.NotEmpty(t, lsregisterArgs)
+	assert.Equal(t, []string{"-u", staleApp}, lsregisterArgs[0])
+}
+
+func TestInstallNativeHelper_CleansExistingBundle(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	swiftc, codesign := stubCompiler(t, dir)
+	appPath := filepath.Join(dir, "ProntoNotify.app")
+
+	// Pre-create a legacy bundle with an obsolete leftover file
+	writeBundleFixture(t, appPath, "com.kalverra.pronto.notify")
+	oldArtifact := filepath.Join(appPath, "Contents", "old_file.txt")
+	require.NoError(t, os.WriteFile(oldArtifact, []byte("obsolete"), 0o600))
+
+	lsregister := filepath.Join(dir, "lsregister")
+	require.NoError(t, os.WriteFile(lsregister, []byte("#!/bin/sh\nexit 0\n"), 0o600))
+	// #nosec G302 -- discovery requires the executable bit; test-only stub.
+	require.NoError(t, os.Chmod(lsregister, 0o700))
+
+	var lsregisterArgs [][]string
+	_, err := notify.InstallNativeHelper(appPath,
+		notify.WithSwiftCompiler(swiftc),
+		notify.WithCodeSignPath(codesign),
+		notify.WithLSRegisterPath(lsregister),
+		notify.WithInstallRunner(func(ctx context.Context, name string, args ...string) error {
+			switch name {
+			case lsregister:
+				lsregisterArgs = append(lsregisterArgs, append([]string(nil), args...))
+				return nil
+			case "touch":
+				return nil
+			default:
+				return fakeIconutilRunner(t, swiftc, codesign)(ctx, name, args...)
+			}
+		}),
+	)
+	require.NoError(t, err)
+	assert.NoFileExists(t, oldArtifact, "old artifact must be wiped during reinstall")
+
+	// Check that unregister was called on the previous bundle before registering fresh
+	var unregBeforeReg bool
+	for _, args := range lsregisterArgs {
+		if len(args) == 2 && args[0] == "-u" && args[1] == appPath {
+			unregBeforeReg = true
+		}
+	}
+	assert.True(t, unregBeforeReg, "must unregister existing bundle before compiling fresh")
+}
+
+func TestInstallNativeHelper_PreservesExistingBundleOnBuildFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	swiftc, codesign := stubCompiler(t, dir)
+	appPath := filepath.Join(dir, "ProntoNotify.app")
+
+	writeBundleFixture(t, appPath, notify.HelperBundleID)
+	existingArtifact := filepath.Join(appPath, "Contents", "existing.txt")
+	require.NoError(t, os.WriteFile(existingArtifact, []byte("keep-me"), 0o600))
+
+	_, err := notify.InstallNativeHelper(appPath,
+		notify.WithSwiftCompiler(swiftc),
+		notify.WithCodeSignPath(codesign),
+		notify.WithInstallRunner(func(ctx context.Context, name string, args ...string) error {
+			if name == swiftc {
+				return errors.New("compiler explosion")
+			}
+			return fakeIconutilRunner(t, swiftc, codesign)(ctx, name, args...)
+		}),
+	)
+	require.Error(t, err)
+	assert.FileExists(t, existingArtifact, "existing bundle must not be destroyed if compilation fails")
 }
 
 // writeBundleFixture writes a minimal app bundle whose Info.plist declares id.

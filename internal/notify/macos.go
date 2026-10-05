@@ -118,7 +118,11 @@ func (m *MacNotifier) Notify(ctx context.Context, n Notification) error {
 		errs = append(errs, fmt.Errorf("terminal-notifier: %w", err))
 	}
 
-	// Fallback to osascript
+	// Fallback to osascript. Note: macOS attributes AppleScript notifications to
+	// Script Editor (/System/Applications/Utilities/Script Editor.app) and does
+	// not support click URLs; clicking the banner activates Script Editor, which
+	// may be blocked in managed environments (e.g. by Santa). The native helper
+	// (via `pronto notify setup`) avoids this by routing clicks through ProntoNotify.app.
 	script := fmt.Sprintf(
 		"display notification %s with title %s",
 		appleScriptString(message),

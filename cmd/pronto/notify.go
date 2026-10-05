@@ -30,9 +30,12 @@ var notifierFactory = tui.DefaultNotifierFactory
 // `notify setup`; tests stub them out so no real Swift compile, codesign, or
 // LaunchServices call happens.
 var (
-	installNativeHelperFn = notify.InstallNativeHelper
-	registerHelperFn      = notify.RegisterHelper
-	helperModeFn          = runHelperMode
+	installNativeHelperFn       = notify.InstallNativeHelper
+	registerHelperFn            = notify.RegisterHelper
+	helperModeFn                = runHelperMode
+	purgeStaleHelpersFn         = notify.PurgeStaleHelpers
+	refreshSubsystemFn          = notify.RefreshNotificationSubsystem
+	migrateNotificationConfigFn = config.MigrateNotificationConfig
 )
 
 // ErrNoNotificationChannels is returned when every notification channel is disabled.
@@ -307,9 +310,12 @@ func runNotifySetup(ctx context.Context, out io.Writer, opts setupOptions) error
 		installOpts = append(installOpts, notify.WithoutRegister())
 	}
 
-	// Check before registering: registration purges these, so this is the
-	// only chance to see what was there.
-	staleInstalls := notify.StaleHelperInstalls(dest)
+	// Purge stale or legacy helper installs only for a registered production setup;
+	// --no-register is used for dev builds and must not remove the installed helper.
+	var staleInstalls []string
+	if !opts.noRegister {
+		staleInstalls, _ = purgeStaleHelpersFn(ctx, dest, installOpts...)
+	}
 
 	installedVersion, _ := notify.InstalledHelperVersion(dest)
 	installedID, _ := notify.InstalledHelperBundleID(dest)
@@ -334,9 +340,11 @@ func runNotifySetup(ctx context.Context, out io.Writer, opts setupOptions) error
 	}
 	step(out, "+  registered with LaunchServices")
 	if len(staleInstalls) > 0 {
-		step(out, "+  unregistered other installs of the helper (%s); if the app icon "+
-			"still looks wrong, run once: killall usernoted NotificationCenter (safe, both respawn)",
+		step(out, "+  deleted and unregistered old installs of the helper (%s)",
 			strings.Join(staleInstalls, ", "))
+		if err := refreshSubsystemFn(ctx, nil); err == nil {
+			step(out, "+  refreshed notification subsystem (killall usernoted NotificationCenter)")
+		}
 	}
 
 	helperBinary := filepath.Join(dest, "Contents", "MacOS", notify.HelperBinaryName)
@@ -353,6 +361,20 @@ func runNotifySetup(ctx context.Context, out io.Writer, opts setupOptions) error
 		step(out, "     open x-apple.systempreferences:com.apple.Notifications-Settings.extension")
 	default:
 		step(out, "-  notification authorization: %s", status.Status)
+	}
+
+	// Migrate legacy notification config in pronto.toml so old terminal mode
+	// or disabled popups do not keep the user on the old delivery path.
+	if migRes, err := migrateNotificationConfigFn(config.Path()); err != nil {
+		step(out, "x  could not migrate legacy config: %v", err)
+	} else {
+		if migRes.ModeChanged {
+			step(out, "+  migrated %s: replaced mode = %q with mode = %q",
+				config.Path(), config.NotifyTerminal, config.NotifyNative)
+		}
+		if migRes.PopupsEnabled {
+			step(out, "+  migrated %s: enabled notifications.popups", config.Path())
+		}
 	}
 
 	cfg, err := config.Load()
