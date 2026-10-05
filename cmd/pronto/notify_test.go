@@ -57,6 +57,7 @@ func stubSetupSeams(t *testing.T, status string, installErr, registerErr, status
 	stubNotifierFactory(t, &recordingNotifier{})
 
 	oldInstall, oldRegister, oldMode := installNativeHelperFn, registerHelperFn, helperModeFn
+	oldPurge, oldRefresh, oldMigrate := purgeStaleHelpersFn, refreshSubsystemFn, migrateNotificationConfigFn
 	installNativeHelperFn = func(appPath string, _ ...notify.InstallOption) (string, error) {
 		if installErr != nil {
 			return "", installErr
@@ -82,8 +83,19 @@ func stubSetupSeams(t *testing.T, status string, installErr, registerErr, status
 		}
 		return helperStatus{Status: status}, nil
 	}
+	purgeStaleHelpersFn = func(_ context.Context, appPath string, _ ...notify.InstallOption) ([]string, error) {
+		stale := notify.StaleHelperInstalls(appPath)
+		for _, p := range stale {
+			_ = os.RemoveAll(p)
+		}
+		return stale, nil
+	}
+	refreshSubsystemFn = func(context.Context, notify.CommandRunner) error {
+		return nil
+	}
 	t.Cleanup(func() {
 		installNativeHelperFn, registerHelperFn, helperModeFn = oldInstall, oldRegister, oldMode
+		purgeStaleHelpersFn, refreshSubsystemFn, migrateNotificationConfigFn = oldPurge, oldRefresh, oldMigrate
 	})
 	return &registered
 }
@@ -289,6 +301,39 @@ func TestRun_NotifySetup_WarnsAboutStaleInstalls(t *testing.T) {
 	out := stdout.String()
 	assert.Contains(t, out, "killall usernoted NotificationCenter")
 	assert.Contains(t, out, staleApp)
+	assert.NoFileExists(t, staleApp, "stale helper install must be deleted from disk")
+}
+
+func TestRun_NotifySetup_MigratesLegacyConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRONTO_CONFIG_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dest := filepath.Join(dir, "ProntoNotify.app")
+
+	configPath := filepath.Join(dir, "pronto.toml")
+	legacyConfig := `[notifications]
+mode = "terminal"
+popups = false
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(legacyConfig), 0o600))
+
+	stubSetupSeams(t, "authorized", nil, nil, nil)
+	stubNotifierFactory(t, &recordingNotifier{})
+
+	var stdout, stderr syncBuffer
+	require.NoError(t, Run(context.Background(),
+		[]string{"notify", "setup", "--output", dest}, nil, &stdout, &stderr))
+
+	out := stdout.String()
+	assert.Contains(t, out, "migrated")
+	assert.Contains(t, out, "mode = \"native\"")
+
+	// #nosec G304 -- test file path.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	updated := string(data)
+	assert.Contains(t, updated, `mode = "native"`)
+	assert.Contains(t, updated, `popups = true`)
 }
 
 func TestRun_NotifySetup_NoRegisterSkipsAuthorizeAndTest(t *testing.T) {

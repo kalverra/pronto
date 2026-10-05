@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/kalverra/pronto/assets"
@@ -65,6 +66,16 @@ func helperDisplayName(bundleID string) string {
 // (com.kalverra.pronto.notify) was stuck with a blank one, so changing the id
 // is the reliable reset.
 const HelperBundleID = "com.kalverra.pronto.notifier"
+
+// LegacyHelperBundleIDs lists bundle identifiers from earlier Pronto versions
+// that must be purged when upgrading.
+var LegacyHelperBundleIDs = []string{
+	"com.kalverra.pronto.notify",
+}
+
+func isLegacyBundleID(id string) bool {
+	return slices.Contains(LegacyHelperBundleIDs, id)
+}
 
 // DevHelperBundleID is the bundle identifier for throwaway dev builds
 // (`mise run bundle`). It must differ from HelperBundleID: usernoted resolves
@@ -254,6 +265,17 @@ func InstallNativeHelper(appPath string, opts ...InstallOption) (string, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), swiftCompileTimeout)
 	defer cancel()
 
+	// If appPath already exists, unregister from LaunchServices and cleanly remove it
+	// so no stale signatures, old Info.plist, or legacy bundle IDs remain.
+	if _, err := os.Stat(appPath); err == nil {
+		if installer.register {
+			_ = installer.run(ctx, installer.lsregisterPath(), "-u", appPath)
+		}
+		if err := os.RemoveAll(appPath); err != nil {
+			return "", fmt.Errorf("clean previous helper bundle: %w", err)
+		}
+	}
+
 	// Materialize the embedded sources for swiftc.
 	tmp, err := os.MkdirTemp("", "pronto-notify-build")
 	if err != nil {
@@ -327,13 +349,28 @@ func RegisterHelper(ctx context.Context, appPath string, opts ...InstallOption) 
 	return installer.registerWithLaunchServices(ctx, appPath)
 }
 
+// PurgeStaleHelpers finds other on-disk helper installs declaring HelperBundleID
+// or legacy bundle IDs, unregisters them from LaunchServices, and deletes them
+// from disk. It returns the paths of all purged bundles.
+func PurgeStaleHelpers(ctx context.Context, appPath string, opts ...InstallOption) ([]string, error) {
+	installer := &helperInstaller{runner: runCommand, register: true}
+	for _, opt := range opts {
+		opt(installer)
+	}
+	stale := StaleHelperInstalls(appPath)
+	lsregister := installer.lsregisterPath()
+	for _, p := range stale {
+		if installer.register {
+			_ = installer.run(ctx, lsregister, "-u", p)
+		}
+		_ = os.RemoveAll(p)
+	}
+	return stale, nil
+}
+
 // StaleHelperInstalls reports other on-disk locations of a bundle declaring
-// HelperBundleID besides appPath (bundles with another id, such as dev
-// builds, never collide). Even after LaunchServices registration is fixed,
-// usernoted (macOS's notification icon cache) can keep serving an icon it
-// already resolved for this session; `pronto notify setup` uses this to warn
-// the user that a one-time `killall usernoted NotificationCenter` (safe: both
-// respawn) may still be needed.
+// HelperBundleID or legacy bundle IDs besides appPath (dev builds with
+// DevHelperBundleID never collide and are not considered stale).
 func StaleHelperInstalls(appPath string) []string {
 	var candidates []string
 	if cwd, err := os.Getwd(); err == nil {
@@ -342,39 +379,61 @@ func StaleHelperInstalls(appPath string) []string {
 	if dir := dataDir(); dir != "" {
 		candidates = append(candidates, filepath.Join(dir, HelperAppName))
 	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, "Applications", HelperAppName))
+	}
+
+	seen := make(map[string]bool)
 	out := candidates[:0]
 	for _, c := range candidates {
-		if c == appPath {
+		if c == appPath || seen[c] {
 			continue
 		}
-		if id, err := InstalledHelperBundleID(c); err == nil && id == HelperBundleID {
+		seen[c] = true
+		id, err := InstalledHelperBundleID(c)
+		if err == nil && (id == HelperBundleID || isLegacyBundleID(id)) {
 			out = append(out, c)
 		}
 	}
 	return out
 }
 
-// registerWithLaunchServices registers appPath, purges any other known
-// registration for the same bundle so LaunchServices adopts the fresh
-// icon/version instead of keeping a stale cached one, and touches the bundle
-// so Finder/usernoted notice the change.
-func (i *helperInstaller) registerWithLaunchServices(ctx context.Context, appPath string) error {
-	lsregister := i.lsregister
-	if lsregister == "" {
-		lsregister = defaultLSRegisterPath
+func (i *helperInstaller) lsregisterPath() string {
+	if i.lsregister != "" {
+		return i.lsregister
 	}
+	return defaultLSRegisterPath
+}
+
+// registerWithLaunchServices registers appPath, purges any other known
+// registration for the same bundle (and legacy bundles) so LaunchServices adopts
+// the fresh icon/version instead of keeping a stale cached one, deletes stale
+// bundles from disk, and touches the bundle so Finder/usernoted notice the change.
+func (i *helperInstaller) registerWithLaunchServices(ctx context.Context, appPath string) error {
+	lsregister := i.lsregisterPath()
 	if err := i.run(ctx, lsregister, "-f", appPath); err != nil {
 		return fmt.Errorf("register with LaunchServices (lsregister): %w", err)
 	}
 	for _, stale := range StaleHelperInstalls(appPath) {
-		// Best-effort: an old registration that fails to unregister is not
-		// fatal, it just leaves usernoted with a stale icon a bit longer.
+		// Best-effort: unregister from LaunchServices and delete from disk so old
+		// bundles cannot be re-indexed or conflict with the active helper.
 		_ = i.run(ctx, lsregister, "-u", stale)
+		_ = os.RemoveAll(stale)
 	}
 	if err := i.run(ctx, "touch", appPath); err != nil {
 		return fmt.Errorf("touch bundle: %w", err)
 	}
 	return nil
+}
+
+// RefreshNotificationSubsystem restarts macOS notification daemons (usernoted
+// and NotificationCenter) so cached icons, bundle IDs, and authorization states
+// are flushed. Safe: launchd respawns both immediately.
+func RefreshNotificationSubsystem(ctx context.Context, runner CommandRunner) error {
+	if runner == nil {
+		runner = runCommand
+	}
+	return runner(ctx, "killall", "usernoted", "NotificationCenter")
 }
 
 // defaultLSRegisterPath is lsregister's fixed location inside the

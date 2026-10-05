@@ -383,7 +383,10 @@ Two delivery backends, selected by `notifications.mode` (default `native`):
   fallback. Dev bundles display as "Pronto (dev)" in System Settings.
 - **terminal** — `MacNotifier` shells out to `terminal-notifier` with an
   `osascript` fallback. Zero setup; banners are attributed to the helper
-  binary rather than pronto.
+  binary rather than pronto. Note that `osascript` banners are attributed by
+  macOS to Script Editor (`/System/Applications/Utilities/Script Editor.app`)
+  and lack URL action handlers; clicking them attempts to launch Script Editor,
+  which corporate endpoint security tools (such as Santa) frequently block.
 
 Both backends sanitize notification text (it originates from GitHub), group
 per PR (`pronto-<owner>_<repo>-<number>`), and bound each delivery attempt
@@ -397,14 +400,19 @@ sounds plus any under `~/Library/Sounds`); `config.Validate` rejects unknown
 names at load time.
 
 `pronto notify setup` is the guided, idempotent path to native notifications:
-it checks for `swiftc`, builds/installs the helper only if missing or stale
-(comparing `notify.HelperVersion()` against the installed bundle's
-`CFBundleVersion`), registers it with LaunchServices, requests notification
-authorization, and sends a real test banner — each step prints its own
-result so a failure is easy to place. `pronto notify` (no subcommand) prints
-a passive status report: configured backends, the native helper's
-installed/stale/missing state, and (bounded by a short timeout, since it
-runs on every invocation) its current authorization status.
+it purges and deletes any stale or legacy helper installs on disk (including
+earlier bundle IDs like `com.kalverra.pronto.notify`), flushes macOS notification
+caches (`usernoted`, `NotificationCenter`), wipes existing target bundle
+directories clean before rebuilds, checks for `swiftc`, builds/installs the
+helper only if missing or stale (comparing `notify.HelperVersion()` against the
+installed bundle's `CFBundleVersion`), registers it with LaunchServices,
+migrates any legacy `pronto.toml` configuration (updating `mode = "terminal"` to
+`"native"` and ensuring `popups = true`), requests notification authorization,
+and sends a real test banner — each step prints its own result so a failure is
+easy to place. `pronto notify` (no subcommand) prints a passive status report:
+configured backends, the native helper's installed/stale/missing state, and
+(bounded by a short timeout, since it runs on every invocation) its current
+authorization status.
 
 ### Update checks
 
